@@ -1,0 +1,46 @@
+<Project>
+
+  <!--
+    The root of this tree's property chain, and a SEAM that must stay a seam.
+
+    MSBuild stops walking upward at the first Directory.Build.props it finds. This tree currently lives
+    inside the agriculture repository (Agriculture.AgriPad/tmp/G9SyncData), whose root props inject
+    Agriculture-specific global usings and a host coding standard. A redistributable library must not
+    inherit either, so nothing here imports a parent file. See AiGuides/10-Decisions.md ADR-0002.
+  -->
+
+  <!-- ############### Compiler + analysis, shared by every project ############### -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+
+    <!--
+      Documented suppressions (ADR-0008):
+        CS1591 - missing XML comment on a public member. Public entry points ARE documented; the
+                 suppression stops every record property and enum member from becoming a build break.
+        NU1507 - several package sources; nuget.config clears to exactly one, but a consuming solution
+                 that drives restore from its own root sees its own sources.
+    -->
+    <NoWarn>$(NoWarn);CS1591;NU1507</NoWarn>
+  </PropertyGroup>
+
+  <!-- ############### Shared package metadata ############### -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Iman Kari</Authors>
+    <Company>G9</Company>
+    <Product>G9SyncData</Product>
+    <Copyright>Copyright (c) Iman Kari</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>sync;offline-first;postgresql;sqlite;signalr;maui;nativeaot</PackageTags>
+    <PackageOutputPath>$(MSBuildThisFileDirectory)artifacts/pack</PackageOutputPath>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

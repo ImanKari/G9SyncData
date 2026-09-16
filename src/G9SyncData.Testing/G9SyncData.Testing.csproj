@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData.Testing</RootNamespace>
+    <Description>G9SyncData test kit: an in-memory transport that drives a real G9CSyncServerEngine in-process, with wire-faithful JSON round trips and fault injection (fail before or after the server, break streams mid-way, latency). For app and library tests.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Server\G9SyncData.Server.csproj" />
+    <ProjectReference Include="..\G9SyncData.Client\G9SyncData.Client.csproj" />
+  </ItemGroup>
+
+</Project>

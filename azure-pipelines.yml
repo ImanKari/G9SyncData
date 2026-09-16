@@ -1,0 +1,76 @@
+# G9SyncData CI — build, unit tests, end-to-end tests against a PostgreSQL service container, then pack.
+#
+# NOT YET RUN: this pipeline has never executed in Azure DevOps. Create it (Pipelines → New → Azure Repos Git → existing
+# YAML), run it once and fix what the agent environment disagrees with, then delete this note.
+# The integration tests create and drop their own databases, so the container's superuser is what they need.
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  configuration: Release
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+resources:
+  containers:
+    - container: postgres
+      image: postgres:18-alpine
+      ports:
+        - 5432:5432
+      env:
+        POSTGRES_PASSWORD: g9sync-tests
+        POSTGRES_DB: postgres
+      options: >-
+        --health-cmd="pg_isready -U postgres" --health-interval=5s --health-timeout=5s --health-retries=30
+
+jobs:
+  - job: build_and_test
+    displayName: Build and test
+    pool:
+      vmImage: ubuntu-latest
+    services:
+      postgres: postgres
+    steps:
+      - task: UseDotNet@2
+        displayName: .NET SDK
+        inputs:
+          packageType: sdk
+          version: 10.0.x
+
+      - script: dotnet build G9SyncData.slnx -c $(configuration)
+        displayName: Build (warnings are errors)
+
+      - script: >-
+          dotnet test tests/G9SyncData.Tests/G9SyncData.Tests.csproj -c $(configuration) --no-build
+          --logger trx --results-directory $(Agent.TempDirectory)/testresults
+        displayName: Unit tests
+
+      - script: >-
+          dotnet test tests/G9SyncData.IntegrationTests/G9SyncData.IntegrationTests.csproj -c $(configuration) --no-build
+          --logger trx --results-directory $(Agent.TempDirectory)/testresults
+        displayName: Integration tests (PostgreSQL)
+        env:
+          G9SYNC_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=g9sync-tests;Database=postgres
+
+      - task: PublishTestResults@2
+        displayName: Publish test results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: VSTest
+          testResultsFiles: $(Agent.TempDirectory)/testresults/*.trx
+          failTaskOnFailedTests: true
+
+      - script: dotnet pack G9SyncData.slnx -c $(configuration) --no-build
+        displayName: Pack
+
+      - publish: artifacts/pack
+        displayName: Publish packages
+        artifact: packages

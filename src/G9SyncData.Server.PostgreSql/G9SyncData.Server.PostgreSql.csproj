@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData.Server.PostgreSql</RootNamespace>
+    <Description>G9SyncData PostgreSQL provider: statement-level change capture with xid8 transaction ids, snapshot-exact stateless cursors, COPY-staged uploads with write authorisation, conflict policies and bisection-isolated rejections, hash-bucket reconciliation, LISTEN/NOTIFY change notifications and tombstone retention. PostgreSQL 14+.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Server\G9SyncData.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="G9SyncData.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

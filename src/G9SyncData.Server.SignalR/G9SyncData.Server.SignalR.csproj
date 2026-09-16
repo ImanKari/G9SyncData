@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData.Server.SignalR</RootNamespace>
+    <Description>G9SyncData SignalR server transport on G9SignalRSuperNetCore: the G9SyncHub (source-generated JSON protocol, streamed pulls and pushes, stable error codes through HubException) and coalesced change pokes to the connections holding a table.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="G9SignalRSuperNetCore.Server" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Server\G9SyncData.Server.csproj" />
+  </ItemGroup>
+
+</Project>

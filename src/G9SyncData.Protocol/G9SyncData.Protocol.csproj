@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData.Protocol</RootNamespace>
+    <Description>G9SyncData wire protocol: transport-neutral DTOs with a source-generated JSON context, and the G9RowBatch binary row codec (Brotli-compressed frames).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Abstractions\G9SyncData.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="G9SyncData.Tests" />
+  </ItemGroup>
+
+</Project>

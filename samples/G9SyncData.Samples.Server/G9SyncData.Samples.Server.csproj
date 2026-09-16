@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>G9SyncData.Samples.Server</RootNamespace>
+    <!-- Sample app code: no ConfigureAwait (CA2007), public top-level types (CA1515), fixed sample SQL (CA2100). -->
+    <NoWarn>$(NoWarn);CA2007;CA1515;CA2100;CA1849</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\G9SyncData.Server.PostgreSql\G9SyncData.Server.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Server.SignalR\G9SyncData.Server.SignalR.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Plan §12 spikes that a development machine can measure (S1 capture overhead, S2 server reads, S4 wire, S5 reconcile,
+    and a desktop proxy for S3). Device numbers (DOOGEE S99) still need the app on the device.
+      dotnet run -c Release project benchmarks/G9SyncData.Benchmarks, optionally passing the rows argument (default 144316)
+    Needs a disposable PostgreSQL (G9SYNC_BENCH_PG, default localhost:15433); it creates and drops its own database.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>G9SyncData.Benchmarks</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>$(NoWarn);CA2007;CA1515;CA2100;CA1849;CA1303</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\G9SyncData.Server.PostgreSql\G9SyncData.Server.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Testing\G9SyncData.Testing.csproj" />
+  </ItemGroup>
+
+</Project>

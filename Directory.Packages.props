@@ -1,0 +1,51 @@
+<Project>
+
+  <!--
+    Central Package Management for this tree. It also STOPS the upward walk to any host repository's
+    Directory.Packages.props (ADR-0002).
+
+    Adding a package is a decision with weight: every reference of a src/ project becomes a dependency of
+    a published package and lands in every consuming app. Record the reason in AiGuides/10-Decisions.md.
+
+    Versions are minimums. Transitive pinning stays OFF because, for a library, it promotes transitive
+    packages into direct dependencies of the published .nuspec.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Hosting abstractions used by server and client engines -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+
+    <!-- Providers -->
+    <PackageVersion Include="Npgsql" Version="10.0.2" />
+    <!-- The library takes .Core only: the app owns the native SQLite choice (ADR-0009). -->
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.7" />
+
+    <!-- Transport -->
+    <PackageVersion Include="G9SignalRSuperNetCore.Server" Version="2.5.3" />
+    <PackageVersion Include="G9SignalRSuperNetCore.Client" Version="2.5.3" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
+
+    <!-- Source generator (targets netstandard2.0, runs inside the compiler) -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+
+    <!-- Tests and samples only -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <!-- Native SQLite for tests/samples. 2.1.13: past CVE-2025-6965 (<= 2.1.11) and on the same 2.x managed layer
+         Microsoft.Data.Sqlite.Core 10.0.x is built against; 3.x moves SQLitePCLRaw.core (AgriPad's iOS trap). -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData</RootNamespace>
+    <Description>G9SyncData shared primitives: portable column types, canonical keys, reconciliation digests, subscription parameters, error codes and the attributes the client model generator reads.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="G9SyncData.Tests" />
+  </ItemGroup>
+
+</Project>

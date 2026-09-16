@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData.Server</RootNamespace>
+    <Description>G9SyncData server engine: sync model and subscription builders, parameter/authorisation resolution, the push pipeline hooks (validators, transformers, delete handlers, conflict resolvers, post-commit handlers), signed pull tokens and the transport-neutral protocol engine. Provider-agnostic.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Abstractions\G9SyncData.Abstractions.csproj" />
+    <ProjectReference Include="..\G9SyncData.Protocol\G9SyncData.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

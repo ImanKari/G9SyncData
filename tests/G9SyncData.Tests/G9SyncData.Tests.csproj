@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>G9SyncData.Tests</RootNamespace>
+    <!-- Test naming uses underscores (CA1707); tests do not run under a synchronization context (CA2007). -->
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1515;CA1861;CA2100;CA1849</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <!-- The app-side native SQLite choice the library leaves open (ADR-0009). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\G9SyncData.Abstractions\G9SyncData.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Protocol\G9SyncData.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.SourceGenerators\G9SyncData.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

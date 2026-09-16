@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData.Client.Sqlite</RootNamespace>
+    <Description>G9SyncData SQLite client store: model-driven DDL with declared indexes, trigger capture with a monotonic local sequence and dirty-column masks, subscription membership, resumable staged pulls applied atomically, reconciliation digests and the local change feed. NativeAOT-compatible.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- No native bundle: the consuming app references one (AiGuides/08-Client-Sqlite.md, ADR-0009). -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Client\G9SyncData.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

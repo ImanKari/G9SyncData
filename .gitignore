@@ -1,0 +1,30 @@
+# Build output
+bin/
+obj/
+artifacts/
+[Dd]ebug/
+[Rr]elease/
+*.dll
+*.pdb
+*.exe
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+# Tests and local runs
+TestResults/
+*.trx
+*.coverage
+*.db
+*.db-wal
+*.db-shm
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/

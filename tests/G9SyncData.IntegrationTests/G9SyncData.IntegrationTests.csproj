@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    End-to-end tests: a real PostgreSQL server store and real SQLite client stores, connected by the in-memory
+    transport or by real SignalR over Kestrel on a loopback port. Needs a disposable PostgreSQL 13+ server (each test
+    creates and drops its own database):
+      G9SYNC_TEST_PG = "Host=...;Port=...;Username=...;Password=...;Database=postgres"
+    Default: Host=localhost;Port=15433;Username=postgres. Tests are SKIPPED, not failed, when no server answers.
+    Never point this at a shared or production server.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>G9SyncData.IntegrationTests</RootNamespace>
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1515;CA1861;CA2100;CA1849</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\G9SyncData.Server.PostgreSql\G9SyncData.Server.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Server.SignalR\G9SyncData.Server.SignalR.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Client.SignalR\G9SyncData.Client.SignalR.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Testing\G9SyncData.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Xunit.Abstractions" />
+  </ItemGroup>
+
+</Project>

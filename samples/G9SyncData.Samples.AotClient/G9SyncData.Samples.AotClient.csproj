@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The NativeAOT proof: PublishAot turns the trim and AOT analyzers on at BUILD time, and warnings are errors,
+    so any reflection-dependent path in the client stack fails this project's build.
+      dotnet publish samples/G9SyncData.Samples.AotClient -c Release -r win-x64
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>G9SyncData.Samples.AotClient</RootNamespace>
+    <!-- Sample app code: no ConfigureAwait (CA2007), public top-level types (CA1515). -->
+    <NoWarn>$(NoWarn);CA2007;CA1515;CA1849;CA2100</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Client.SignalR\G9SyncData.Client.SignalR.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.SourceGenerators\G9SyncData.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

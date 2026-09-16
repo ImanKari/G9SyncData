@@ -1,0 +1,15 @@
+# Normalise line endings: LF in the repository, native in the working tree.
+* text=auto
+
+*.cs text diff=csharp
+*.csproj text
+*.props text
+*.slnx text
+*.md text
+*.json text
+*.yml text
+*.sql text
+
+*.png binary
+*.jpg binary
+*.ico binary

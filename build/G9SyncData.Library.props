@@ -1,0 +1,21 @@
+<Project>
+
+  <!--
+    Imported by every redistributable library under src/ (not by the source generator, tests or samples).
+
+    AOT is a first-class requirement (ADR-0003). IsAotCompatible implies IsTrimmable and turns on the trim,
+    single-file and AOT analyzers; with TreatWarningsAsErrors every IL2xxx / IL3xxx finding is a build
+    break. A library that cannot honestly claim compatibility must NOT import this file — it sets
+    EnableTrimAnalyzer on its own and says why in its csproj.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+
+</Project>

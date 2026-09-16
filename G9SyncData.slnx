@@ -1,0 +1,32 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="build/G9SyncData.Library.props" />
+    <File Path="global.json" />
+    <File Path="nuget.config" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/G9SyncData.Abstractions/G9SyncData.Abstractions.csproj" />
+    <Project Path="src/G9SyncData.Protocol/G9SyncData.Protocol.csproj" />
+    <Project Path="src/G9SyncData.Server/G9SyncData.Server.csproj" />
+    <Project Path="src/G9SyncData.Server.PostgreSql/G9SyncData.Server.PostgreSql.csproj" />
+    <Project Path="src/G9SyncData.Server.SignalR/G9SyncData.Server.SignalR.csproj" />
+    <Project Path="src/G9SyncData.Client/G9SyncData.Client.csproj" />
+    <Project Path="src/G9SyncData.Client.Sqlite/G9SyncData.Client.Sqlite.csproj" />
+    <Project Path="src/G9SyncData.Client.SignalR/G9SyncData.Client.SignalR.csproj" />
+    <Project Path="src/G9SyncData.Testing/G9SyncData.Testing.csproj" />
+    <Project Path="src/G9SyncData.SourceGenerators/G9SyncData.SourceGenerators.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/G9SyncData.Samples.Server/G9SyncData.Samples.Server.csproj" />
+    <Project Path="samples/G9SyncData.Samples.AotClient/G9SyncData.Samples.AotClient.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/G9SyncData.Benchmarks/G9SyncData.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/G9SyncData.Tests/G9SyncData.Tests.csproj" />
+    <Project Path="tests/G9SyncData.IntegrationTests/G9SyncData.IntegrationTests.csproj" />
+  </Folder>
+</Solution>
