@@ -132,7 +132,12 @@ Details: [AiGuides/03-Build-Test-Release.md](AiGuides/03-Build-Test-Release.md) 
 ## Documentation
 
 Start at [AiGuides/00-AiGuide.md](AiGuides/00-AiGuide.md). The research and design plan this implementation follows is
-`G9SyncData.md` in the agriculture repository root.
+`G9SyncData.md` in the agriculture repository root (not part of this repository).
+
+## Repository
+
+`https://dev.azure.com/G9TM/G9SyncData/_git/G9SyncData` (private). CI lives in [azure-pipelines.yml](azure-pipelines.yml)
+and has not been run yet — create the pipeline in Azure DevOps and fix whatever the hosted agent disagrees with.
 
 ## License
 
