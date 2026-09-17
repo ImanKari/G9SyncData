@@ -73,8 +73,13 @@ public interface IG9SyncClientStore : IAsyncDisposable
     /// <summary>The last safe resume point of a staged run; chunks staged after it are discarded.</summary>
     Task<G9CResumePoint> GetResumePointAsync(string runId, CancellationToken cancellationToken);
 
-    /// <summary>Applies every staged chunk of a completed run atomically and stores the new cursors.</summary>
-    Task<G9CApplyReport> ApplyStagedPullAsync(string runId, IProgress<long>? rowsApplied, CancellationToken cancellationToken);
+    /// <summary>
+    ///     Applies a staged pull. With <c>ApplySliceRows</c> set the apply commits in slices and reports each one through
+    ///     <paramref name="slices" /> as it lands, so the application can show rows while the rest are still arriving (ADR-0053);
+    ///     otherwise the whole pull lands in one transaction and one slice is reported at the end.
+    /// </summary>
+    Task<G9CApplyReport> ApplyStagedPullAsync(string runId, IProgress<long>? rowsApplied, IProgress<G9CApplySlice>? slices,
+        CancellationToken cancellationToken);
 
     Task DiscardStagedPullAsync(string runId, CancellationToken cancellationToken);
 
@@ -265,6 +270,17 @@ public sealed class G9CStagedPull
     /// </summary>
     public long StageSequence { get; init; }
 }
+
+/// <summary>
+///     One committed slice of a staged pull. The rows it names are in the database and readable now; the pull as a whole may still
+///     have slices to come, and its cursors do not move until the last one lands.
+/// </summary>
+/// <param name="Report">What this slice changed, including the keys, so a projection can refresh only those rows.</param>
+/// <param name="RowsApplied">Rows applied by this slice.</param>
+/// <param name="RowsAppliedTotal">Rows applied by this run so far, this slice included.</param>
+/// <param name="RowsPlanned">Rows the plan expects in total, for a progress fraction.</param>
+/// <param name="IsFinal">Whether this was the last slice: cursors have advanced and the stage is gone.</param>
+public sealed record G9CApplySlice(G9CApplyReport Report, long RowsApplied, long RowsAppliedTotal, long RowsPlanned, bool IsFinal);
 
 public sealed record G9CResumePoint(G9DtPullContinuation? Continuation, long StagedRows, long StagedBytes, bool Complete);
 

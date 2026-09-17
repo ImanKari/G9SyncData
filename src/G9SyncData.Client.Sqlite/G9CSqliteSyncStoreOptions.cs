@@ -64,6 +64,22 @@ public sealed class G9CSqliteSyncStoreOptions
     public int RebuildIndexesAfterRows { get; set; } = 20_000;
 
     /// <summary>
+    ///     Rows per committed slice of a staged pull, or 0 to apply the whole pull in one transaction (the default).
+    /// </summary>
+    /// <remarks>
+    ///     <para>A staged pull normally lands in a single transaction: nothing is visible until every row is in, which on a large
+    ///     site means a long wait and then everything at once. Set this and the apply commits every <c>n</c> rows instead, announcing
+    ///     each slice, so the application can show rows as they arrive (ADR-0053).</para>
+    ///     <para>What this does NOT give up: subscription cursors still advance only when the last slice has landed, so a run
+    ///     interrupted halfway has applied real rows but not moved its cursor - the next run pulls the same range again and the
+    ///     upserts are idempotent. A partially applied pull converges; it does not corrupt.</para>
+    ///     <para>What it costs: <see cref="RebuildIndexesAfterRows" /> is ignored while slicing, because dropping an index for the
+    ///     load would leave it missing between commits, exactly when the application is reading the rows it was shown. Large first
+    ///     syncs are therefore somewhat slower than the atomic path; deltas are unaffected.</para>
+    /// </remarks>
+    public int ApplySliceRows { get; set; }
+
+    /// <summary>
     ///     In WAL mode, transactions that write only server-derived data (staged download pages and applying them) commit with
     ///     <c>synchronous=NORMAL</c> (ADR-0034). A power loss can undo the last such commits but never corrupts the database, and an undone
     ///     commit is downloaded or applied again - its cursor is in the same transaction. Local writes (edits, commands) keep the

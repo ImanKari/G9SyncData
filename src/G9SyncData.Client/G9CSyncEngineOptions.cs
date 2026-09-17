@@ -65,10 +65,17 @@ public sealed class G9CSyncHealth
     public required IReadOnlyList<G9CSyncRunReport> RecentRuns { get; init; }
 }
 
-public sealed class G9CRowsAppliedEventArgs(G9CApplyReport report, G9ESyncPhase source) : EventArgs
+public sealed class G9CRowsAppliedEventArgs(G9CApplyReport report, G9ESyncPhase source, G9CApplySlice? slice = null) : EventArgs
 {
     public G9CApplyReport Report { get; } = report;
     public G9ESyncPhase Source { get; } = source;
+
+    /// <summary>
+    ///     Set when this came from a staged pull applied in slices (ADR-0053): the rows named in <see cref="Report" /> are committed
+    ///     and readable now, and <see cref="G9CApplySlice.IsFinal" /> says whether the pull is finished. Null for a reconcile or a
+    ///     push acknowledgement, which are single transactions.
+    /// </summary>
+    public G9CApplySlice? Slice { get; } = slice;
 }
 
 public sealed class G9CSyncRunCompletedEventArgs(G9CSyncRunResult result) : EventArgs

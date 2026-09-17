@@ -496,11 +496,11 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
         });
     }
 
-    private void RaiseRowsApplied(G9CApplyReport report, G9ESyncPhase source)
+    private void RaiseRowsApplied(G9CApplyReport report, G9ESyncPhase source, G9CApplySlice? slice = null)
     {
         try
         {
-            RowsApplied?.Invoke(this, new G9CRowsAppliedEventArgs(report, source));
+            RowsApplied?.Invoke(this, new G9CRowsAppliedEventArgs(report, source, slice));
         }
         catch (Exception exception)
         {

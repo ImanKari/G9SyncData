@@ -16,7 +16,8 @@ namespace G9SyncData.Client.Sqlite;
 /// </summary>
 public sealed partial class G9CSqliteSyncStore
 {
-    public async Task<G9CApplyReport> ApplyStagedPullAsync(string runId, IProgress<long>? rowsApplied, CancellationToken cancellationToken)
+    public async Task<G9CApplyReport> ApplyStagedPullAsync(string runId, IProgress<long>? rowsApplied, IProgress<G9CApplySlice>? slices,
+        CancellationToken cancellationToken)
     {
         EnsureInitialized();
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -33,58 +34,147 @@ public sealed partial class G9CSqliteSyncStore
                 while (reader.Read()) sequences.Add(reader.GetInt64(0));
             }
 
-            using var transaction = connection.BeginTransaction(deferred: false);
-            using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, rowsApplied, staged.Backfills, SnapshotRowsByTable(staged.Plan),
-                changedAfterSequence: staged.StageSequence);
-            using (var payloadCommand = Command(connection, transaction, "SELECT payload, subscription_key FROM g9_stage WHERE run_id = $r AND seq = $s"))
+            // Slicing only pays for itself when someone is listening for the slices (ADR-0053).
+            var sliceRows = slices is null ? 0 : _options.ApplySliceRows;
+            var progressive = sliceRows > 0 && sequences.Count > 1;
+
+            // Read ONCE, before any slice commits. A row an earlier slice applied carries a local_seq past the stage sequence, so
+            // recomputing this per slice would make the run protect its own work from itself and silently drop later frames for
+            // that row (ADR-0046 + ADR-0053).
+            var protectedRows = progressive ? ReadProtectedRows(connection, staged.StageSequence) : null;
+
+            var total = new G9CApplyReport();
+            long appliedTotal = 0;
+            var index = 0;
+
+            // do/while, not while: a pull can carry no payload chunks at all (an empty delta, or one whose only chunk is the final
+            // marker), and that run still has to write its cursors and clear its stage - exactly once.
+            do
             {
-                payloadCommand.Parameters.AddWithValue("$r", runId);
-                var seqParameter = payloadCommand.Parameters.Add("$s", SqliteType.Integer);
-                foreach (var sequence in sequences)
+                cancellationToken.ThrowIfCancellationRequested();
+                var slice = new List<long>();
+                var final = true;
+                for (; index < sequences.Count; index++)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    seqParameter.Value = sequence;
-                    byte[] payload;
-                    string? subscriptionKey;
-                    using (var reader = payloadCommand.ExecuteReader())
+                    slice.Add(sequences[index]);
+                    if (!progressive) continue;
+
+                    // A chunk is the unit: rows are only counted once the slice is read, so this closes the slice at the first
+                    // chunk boundary past the budget rather than splitting a frame.
+                    if (StagedRowCount(connection, runId, slice) >= sliceRows && index + 1 < sequences.Count)
                     {
-                        if (!reader.Read()) continue;
-                        payload = (byte[])reader.GetValue(0);
-                        subscriptionKey = reader.IsDBNull(1) ? null : reader.GetString(1);
+                        index++;
+                        final = false;
+                        break;
+                    }
+                }
+
+                using var transaction = connection.BeginTransaction(deferred: false);
+
+                // Index deferral drops indexes for the load and rebuilds them at the end. Across committed slices that would leave
+                // them missing exactly while the application is reading the rows it was just shown, so slicing does without it.
+                using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, rowsApplied, staged.Backfills,
+                    progressive ? null : SnapshotRowsByTable(staged.Plan), changedAfterSequence: staged.StageSequence,
+                    protectedRows: protectedRows);
+
+                using (var payloadCommand = Command(connection, transaction, "SELECT payload, subscription_key FROM g9_stage WHERE run_id = $r AND seq = $s"))
+                {
+                    payloadCommand.Parameters.AddWithValue("$r", runId);
+                    var seqParameter = payloadCommand.Parameters.Add("$s", SqliteType.Integer);
+                    foreach (var sequence in slice)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        seqParameter.Value = sequence;
+                        byte[] payload;
+                        string? subscriptionKey;
+                        using (var reader = payloadCommand.ExecuteReader())
+                        {
+                            if (!reader.Read()) continue;
+                            payload = (byte[])reader.GetValue(0);
+                            subscriptionKey = reader.IsDBNull(1) ? null : reader.GetString(1);
+                        }
+
+                        ApplyFrame(context, payload, subscriptionKey);
+                    }
+                }
+
+                var syncedUpdates = new List<(LocalTable Table, List<string> Synced)>();
+                if (final)
+                {
+                    // Cursors move only here. That is what makes an interrupted progressive pull safe: the rows it did apply are
+                    // real and readable, the cursor still points before them, and the next run pulls the same range and upserts
+                    // over them. A partial pull converges; it never leaves the device believing it is further ahead than it is.
+                    foreach (var cursor in staged.Plan.Cursors)
+                    {
+                        Exec(connection, transaction,
+                            "UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, last_success_utc = $now WHERE key = $k",
+                            ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key));
                     }
 
-                    ApplyFrame(context, payload, subscriptionKey);
+                    foreach (var backfill in staged.Backfills)
+                    {
+                        if (!_byServerId.TryGetValue(backfill.TableId, out var table)) continue;
+                        var synced = table.SyncedColumns.Union(backfill.Columns, StringComparer.OrdinalIgnoreCase).ToList();
+                        Exec(connection, transaction, "UPDATE g9_tables SET synced_columns = $c WHERE tid = $t",
+                            ("$c", JsonSerializer.Serialize(synced, G9SyncClientJsonContext.Default.ListString)), ("$t", table.Tid));
+                        syncedUpdates.Add((table, synced));
+                    }
                 }
-            }
 
-            foreach (var cursor in staged.Plan.Cursors)
-            {
-                Exec(connection, transaction,
-                    "UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, last_success_utc = $now WHERE key = $k",
-                    ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key));
-            }
+                EndApply(context);
 
-            var syncedUpdates = new List<(LocalTable Table, List<string> Synced)>();
-            foreach (var backfill in staged.Backfills)
-            {
-                if (!_byServerId.TryGetValue(backfill.TableId, out var table)) continue;
-                var synced = table.SyncedColumns.Union(backfill.Columns, StringComparer.OrdinalIgnoreCase).ToList();
-                Exec(connection, transaction, "UPDATE g9_tables SET synced_columns = $c WHERE tid = $t",
-                    ("$c", JsonSerializer.Serialize(synced, G9SyncClientJsonContext.Default.ListString)), ("$t", table.Tid));
-                syncedUpdates.Add((table, synced));
-            }
+                // The staged chunks this slice consumed go with it, so a resumed run never applies them twice.
+                if (slice.Count > 0)
+                {
+                    Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r AND seq IN (" + string.Join(",", slice) + ")", ("$r", runId));
+                }
+                if (final) Exec(connection, transaction, "DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
+                transaction.Commit();
 
-            EndApply(context);
-            Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
-            transaction.Commit();
-            foreach (var (table, synced) in syncedUpdates) table.SyncedColumns = synced;
-            rowsApplied?.Report(context.Rows);
-            return context.Report;
+                foreach (var (table, synced) in syncedUpdates) table.SyncedColumns = synced;
+                appliedTotal += context.Rows;
+                total.Merge(context.Report);
+                rowsApplied?.Report(appliedTotal);
+                slices?.Report(new G9CApplySlice(context.Report, context.Rows, appliedTotal, staged.Plan.TotalRows, final));
+            }
+            while (index < sequences.Count);
+
+            return total;
         }
         finally
         {
             _writeLock.Release();
         }
+    }
+
+    /// <summary>Rows carried by the staged chunks of a slice, for the slice budget.</summary>
+    private static long StagedRowCount(SqliteConnection connection, string runId, List<long> slice) =>
+        Convert.ToInt64(Scalar(connection, null,
+            "SELECT coalesce(sum(row_count), 0) FROM g9_stage WHERE run_id = $r AND seq IN (" + string.Join(",", slice) + ")",
+            ("$r", runId)), CultureInfo.InvariantCulture);
+
+    /// <summary>
+    ///     The rows an apply must not touch, read before the first slice commits: pending local changes, rows a command is holding,
+    ///     and rows changed since the given sequence.
+    /// </summary>
+    private static List<(long Tid, string Key)> ReadProtectedRows(SqliteConnection connection, long changedAfterSequence)
+    {
+        var rows = new List<(long Tid, string Key)>();
+        using (var command = Command(connection, null, "SELECT tid, pk FROM g9_rows WHERE dirty <> 0 OR local_seq > $c"))
+        {
+            command.Parameters.AddWithValue("$c", changedAfterSequence);
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1)));
+        }
+
+        using (var command = Command(connection, null,
+                   "SELECT r.tid, r.pk FROM g9_command_rows r JOIN g9_commands c ON c.command_id = r.command_id WHERE c.state = 0"))
+        {
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1)));
+        }
+
+        return rows;
     }
 
     public async Task<G9CApplyReport> ApplyReconcileAsync(string subscriptionKey, G9DtNegotiatedTable table, IReadOnlyList<byte[]> fetchedFrames,
@@ -135,7 +225,8 @@ public sealed partial class G9CSqliteSyncStore
     ///     newer server frame - is newer than the stage and the stage does not get to roll it back.
     /// </summary>
     private ApplyContext BeginApply(SqliteConnection connection, SqliteTransaction transaction, long? dirtyAfterSequence, IProgress<long>? progress,
-        IReadOnlyList<G9DtBackfillRequest> backfills, IReadOnlyDictionary<int, long>? snapshotRows = null, long? changedAfterSequence = null)
+        IReadOnlyList<G9DtBackfillRequest> backfills, IReadOnlyDictionary<int, long>? snapshotRows = null, long? changedAfterSequence = null,
+        IReadOnlyList<(long Tid, string Key)>? protectedRows = null)
     {
         // applying = 1 stays the rule that keeps library writes out of change capture. Skipping triggers below only saves evaluating
         // them: correctness never depends on it, so a connection where SQLite does not confirm the switch simply applies with triggers.
@@ -145,30 +236,38 @@ public sealed partial class G9CSqliteSyncStore
             Clock = (long)Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1")!
         };
 
-        using (var command = Command(connection, transaction,
-                   dirtyAfterSequence is null
-                       ? "SELECT tid, pk FROM g9_rows WHERE dirty <> 0"
-                       : "SELECT tid, pk FROM g9_rows WHERE dirty <> 0 AND local_seq > $m"))
+        if (protectedRows is not null)
         {
-            if (dirtyAfterSequence is not null) command.Parameters.AddWithValue("$m", dirtyAfterSequence.Value);
-            using var reader = command.ExecuteReader();
-            while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
+            // Already read, before the first slice of this run committed.
+            foreach (var (tid, key) in protectedRows) context.AddDirty(tid, key);
         }
-
-        if (changedAfterSequence is not null)
+        else
         {
-            using var command = Command(connection, transaction, "SELECT tid, pk FROM g9_rows WHERE local_seq > $c");
-            command.Parameters.AddWithValue("$c", changedAfterSequence.Value);
-            using var reader = command.ExecuteReader();
-            while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
-        }
+            using (var command = Command(connection, transaction,
+                       dirtyAfterSequence is null
+                           ? "SELECT tid, pk FROM g9_rows WHERE dirty <> 0"
+                           : "SELECT tid, pk FROM g9_rows WHERE dirty <> 0 AND local_seq > $m"))
+            {
+                if (dirtyAfterSequence is not null) command.Parameters.AddWithValue("$m", dirtyAfterSequence.Value);
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
+            }
 
-        // Rows touched by a command the server has not executed yet keep their optimistic state until its result settles them.
-        using (var command = Command(connection, transaction,
-                   "SELECT r.tid, r.pk FROM g9_command_rows r JOIN g9_commands c ON c.command_id = r.command_id WHERE c.state = 0"))
-        {
-            using var reader = command.ExecuteReader();
-            while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
+            if (changedAfterSequence is not null)
+            {
+                using var command = Command(connection, transaction, "SELECT tid, pk FROM g9_rows WHERE local_seq > $c");
+                command.Parameters.AddWithValue("$c", changedAfterSequence.Value);
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
+            }
+
+            // Rows touched by a command the server has not executed yet keep their optimistic state until its result settles them.
+            using (var command = Command(connection, transaction,
+                       "SELECT r.tid, r.pk FROM g9_command_rows r JOIN g9_commands c ON c.command_id = r.command_id WHERE c.state = 0"))
+            {
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
+            }
         }
 
         // Only when something is marked revoked do upserts pay a statement to clear the mark of a row that became visible again.

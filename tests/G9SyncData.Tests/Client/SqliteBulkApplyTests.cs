@@ -99,7 +99,7 @@ public sealed class SqliteBulkApplyTests : IAsyncLifetime
         var before = await IndexesAsync();
         var runId = await StageAsync(Rows, corruptLastChunk: true);
 
-        await Assert.ThrowsAnyAsync<Exception>(() => _store.ApplyStagedPullAsync(runId, null, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<Exception>(() => _store.ApplyStagedPullAsync(runId, null, null, CancellationToken.None));
 
         Assert.Equal(before, await IndexesAsync());
         Assert.Equal(0L, await ScalarAsync("SELECT count(*) FROM Pot"));
@@ -108,7 +108,7 @@ public sealed class SqliteBulkApplyTests : IAsyncLifetime
 
         // The staged pages survive the failed apply; replacing the bad page makes the same run apply completely.
         await _store.StageChunkAsync(runId, Chunk(3, Frame(200, Rows - 200, "pot")), CancellationToken.None);
-        var report = await _store.ApplyStagedPullAsync(runId, null, CancellationToken.None);
+        var report = await _store.ApplyStagedPullAsync(runId, null, null, CancellationToken.None);
         Assert.Equal(Rows, report.Upserts);
         Assert.Equal(before, await IndexesAsync());
     }
@@ -118,7 +118,7 @@ public sealed class SqliteBulkApplyTests : IAsyncLifetime
     {
         var runId = await StageAsync(Rows, duplicateCodeAt: 150);
 
-        var failure = await Assert.ThrowsAnyAsync<Exception>(() => _store.ApplyStagedPullAsync(runId, null, CancellationToken.None));
+        var failure = await Assert.ThrowsAnyAsync<Exception>(() => _store.ApplyStagedPullAsync(runId, null, null, CancellationToken.None));
 
         Assert.Contains("UNIQUE", failure.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0L, await ScalarAsync("SELECT count(*) FROM Pot"));
@@ -205,7 +205,7 @@ public sealed class SqliteBulkApplyTests : IAsyncLifetime
     }
 
     private async Task<G9CApplyReport> DownloadAsync(int rows, string prefix = "pot") =>
-        await _store.ApplyStagedPullAsync(await StageAsync(rows, prefix: prefix), null, CancellationToken.None);
+        await _store.ApplyStagedPullAsync(await StageAsync(rows, prefix: prefix), null, null, CancellationToken.None);
 
     /// <summary>Stages <paramref name="rows" /> rows as a snapshot of three pages, the way a pull does.</summary>
     private async Task<string> StageAsync(int rows, string prefix = "pot", bool corruptLastChunk = false, int? duplicateCodeAt = null)

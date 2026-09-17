@@ -212,11 +212,17 @@ public sealed partial class G9CSyncEngine
                 tracker.Enter(G9ESyncPhase.Downloading, plan.TotalRows, plan.EstimatedBytes);
                 (downloaded, downloadedBytes) = await DownloadAsync(runId, plan, tracker, ct).ConfigureAwait(false);
 
-                // ------------------------------------------------------------ 7. apply (atomic)
+                // ------------------------------------------------------------ 7. apply (atomic, or in committed slices)
                 tracker.Enter(G9ESyncPhase.Applying, downloaded);
-                var applied = await _store.ApplyStagedPullAsync(runId, new G9CInlineProgress<long>(rows => tracker.Report(rows)), ct).ConfigureAwait(false);
+
+                // Each slice is committed and readable when it is announced, so the application can draw those rows immediately
+                // instead of waiting for the whole pull (ADR-0053). Without slicing configured, exactly one slice arrives at the end.
+                var applied = await _store.ApplyStagedPullAsync(runId, new G9CInlineProgress<long>(rows => tracker.Report(rows)),
+                    new G9CInlineProgress<G9CApplySlice>(slice =>
+                    {
+                        if (slice.Report.Total > 0) RaiseRowsApplied(slice.Report, G9ESyncPhase.Applying, slice);
+                    }), ct).ConfigureAwait(false);
                 changes.Merge(applied);
-                if (applied.Total > 0) RaiseRowsApplied(applied, G9ESyncPhase.Applying);
             }
 
             // ---------------------------------------------------------------- 8. post steps

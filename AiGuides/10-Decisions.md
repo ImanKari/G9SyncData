@@ -1249,3 +1249,38 @@ documented as the best-effort notification it always was.
 **Consequences.** A replayed push no longer skips the work, because the record, not the call, is what makes it owed. Claiming uses
 `FOR UPDATE SKIP LOCKED` and moves the next attempt forward, so several nodes share one queue and a crashed worker's claims return on
 their own. Nothing is recorded when no effect handler applies to the table, so deployments that do not use it pay nothing.
+
+## ADR-0053 — A staged pull can land in committed slices, so rows appear while the rest are still arriving
+
+**Status:** accepted (2026-09-17).
+
+**Context.** A staged pull downloads every chunk to disk and then applies all of them in one transaction. That is what makes it
+atomic, and it is also why a device shows nothing at all for the length of a large sync and then everything at once: on a
+500,000-row site, ten seconds of a spinner followed by a map that fills in a single frame. The application cannot show progress it
+can read, because until the final commit there is nothing to read. AgriPad wants pots and trees to appear as they arrive.
+
+Applying each chunk as it downloads would give that, and would also give up the property the staging exists for. The question is
+what the atomic unit actually has to be.
+
+**Decision.** `ApplySliceRows` on the SQLite store turns the single transaction into a sequence of committed **slices**, each a
+whole number of staged chunks holding about that many rows. Every slice commits, is announced through `IProgress<G9CApplySlice>`
+— and so through the engine's `RowsApplied` event, carrying that slice's changed keys — and the chunks it consumed are deleted
+with it, so a resumed run never applies them twice. Zero, the default, keeps the single transaction and reports one slice at the
+end; existing callers see no change.
+
+The atomic unit becomes the slice rather than the pull, and three things keep that safe:
+
+- **Cursors move only when the last slice lands.** A run interrupted halfway has applied real, readable rows while its cursor still
+  points before them, so the next run pulls the same range and upserts over them. A partial pull converges; it never leaves the
+  device believing it is further ahead than it is.
+- **The protected set is read once, before the first slice commits.** Rows an earlier slice applied carry a `local_seq` past the
+  stage sequence, so re-reading it per slice would make the run protect its own work from itself (ADR-0046) and silently drop later
+  frames for those rows.
+- **Index deferral is off while slicing.** Dropping an index for the load and rebuilding it at the end would leave it missing
+  between commits — exactly while the application is querying the rows it was just shown.
+
+**Consequences.** The application can draw each slice as it lands, which is what a progressive map needs, and gets the keys to draw
+rather than a count. It costs the index-deferral optimisation on large first syncs, so slicing is a choice per deployment rather
+than the default: deltas are unaffected either way. `ProgressiveApplyTests` pins that rows become visible before the pull finishes,
+that a sliced apply lands byte-for-byte what the atomic one lands, that an interrupted run keeps what landed and completes next
+time, that a pending local edit still survives, and that every changed key is announced across the slices.

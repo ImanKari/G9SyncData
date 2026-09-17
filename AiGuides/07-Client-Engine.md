@@ -18,7 +18,7 @@ an `IG9SyncClientStore` and an `IG9SyncTransport`, and publishes progress, event
 | `ReadChangeFeedAsync(table, afterSequence)` | local change feed (downloaded and local edits) for UI/cache refresh |
 | `AdoptExistingRowsAsync()`, `MarkDirtyAsync(table, keys)` | migration helpers ([16](16-AgriPad-Integration.md)) |
 | `GetHealthAsync()` | connection, queue, epoch, pending, subscriptions, recent runs |
-| events `RowsApplied`, `RunCompleted` | table + keys changed; final result |
+| events `RowsApplied`, `RunCompleted` | table + keys changed; final result. With `ApplySliceRows` set, `RowsApplied` fires once per COMMITTED slice of a staged pull and carries `Slice` — the rows it names are readable now, and `Slice.IsFinal` says whether the pull is done (ADR-0053) |
 
 ## Commands (ADR-0025)
 
