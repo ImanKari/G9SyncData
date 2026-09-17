@@ -35,6 +35,8 @@ the agriculture repository root.
 | Progress bar behaviour | [09-Progress-Model.md](09-Progress-Model.md) |
 | Why something is the way it is | [10-Decisions.md](10-Decisions.md) |
 | Tests, fixtures, fault injection | [12-Testing.md](12-Testing.md) |
+| Run or measure on Android (emulator or device) | [12-Testing.md](12-Testing.md) → Android device tests, then [19-Performance.md](19-Performance.md) |
+| Retire Dotmim on a device | [08-Client-Sqlite.md](08-Client-Sqlite.md) → Retiring Dotmim.Sync, [16-AgriPad-Integration.md](16-AgriPad-Integration.md) |
 | Entity attributes, generated model | [13-Source-Generator.md](13-Source-Generator.md) |
 | Anything touching reflection, JSON, trimming | [14-AOT-And-Trimming.md](14-AOT-And-Trimming.md) |
 | Error handling | [15-Error-Codes.md](15-Error-Codes.md) |
@@ -50,15 +52,15 @@ the agriculture repository root.
 | 01 | [01-Project-Rules.md](01-Project-Rules.md) | Naming, AOT, errors, logging, SQL safety, packages, tests, docs, git |
 | 02 | [02-Architecture.md](02-Architecture.md) | Packages, dependencies, run flow, provider contracts, observability, change feed, adding a database |
 | 03 | [03-Build-Test-Release.md](03-Build-Test-Release.md) | Prerequisites, commands, packing, versioning, restore errors seen |
-| 04 | [04-Protocol.md](04-Protocol.md) | Operations, DTOs, G9RowBatch frame format, cursor and token formats |
-| 05 | [05-Server-Model.md](05-Server-Model.md) | Model builder, SQL templates, subscriptions, auth context, pipeline, options |
-| 06 | [06-Server-PostgreSql.md](06-Server-PostgreSql.md) | Capture objects, snapshot cursor, reads, push apply and bisection, reconcile, change feed, maintenance |
+| 04 | [04-Protocol.md](04-Protocol.md) | Operations, DTOs, G9RowBatch frame format and its two body layouts, cursor and token formats |
+| 05 | [05-Server-Model.md](05-Server-Model.md) | Model builder, SQL templates, scope providers (EF Core queries), subscriptions, auth context, pipeline, options |
+| 06 | [06-Server-PostgreSql.md](06-Server-PostgreSql.md) | Capture objects, snapshot cursor, reads, scopes and key sets, push apply and bisection, reconcile, change feed, maintenance |
 | 07 | [07-Client-Engine.md](07-Client-Engine.md) | Engine API, queue and priorities, run steps, retry and resume, reconcile, pokes |
 | 08 | [08-Client-Sqlite.md](08-Client-Sqlite.md) | `g9_*` objects, triggers, apply rules, push batching, schema evolution, storage types |
 | 09 | [09-Progress-Model.md](09-Progress-Model.md) | Phases, planned spans, learned weights, throttling, ordering |
-| 10 | [10-Decisions.md](10-Decisions.md) | ADR-0001 … ADR-0020 |
-| 11 | [11-Transport-SignalR.md](11-Transport-SignalR.md) | Hub, auth, error envelope, pokes, client transport |
-| 12 | [12-Testing.md](12-Testing.md) | Suites, harness, PostgreSQL fixture, fault injection, requirement map |
+| 10 | [10-Decisions.md](10-Decisions.md) | ADR-0001 … ADR-0045 |
+| 11 | [11-Transport-SignalR.md](11-Transport-SignalR.md) | Hub protocols (MessagePack, JSON), hub, auth, error envelope, pokes, client transport |
+| 12 | [12-Testing.md](12-Testing.md) | Suites, **Android device tests (opt-in)**, harness, PostgreSQL fixture, fault injection, requirement map |
 | 13 | [13-Source-Generator.md](13-Source-Generator.md) | Attributes, inference, sqlite-net support, diagnostics |
 | 14 | [14-AOT-And-Trimming.md](14-AOT-And-Trimming.md) | Rules, verification, native SQLite, SignalR notes |
 | 15 | [15-Error-Codes.md](15-Error-Codes.md) | Every code, retryability, how codes travel |
@@ -66,6 +68,7 @@ the agriculture repository root.
 | 17 | [17-Known-Limitations.md](17-Known-Limitations.md) | Hard limits and open work |
 | 18 | [18-Engineering-Log.md](18-Engineering-Log.md) | Dated root causes and surprises |
 | 19 | [19-Performance.md](19-Performance.md) | Benchmark method, results, what they do and do not prove |
+| 20 | [20-Infrastructure-PostgreSQL.md](20-Infrastructure-PostgreSQL.md) | **Logical replication: what was changed and why, required settings, roles, monitoring, operational risks, the Ops checklist and the runbook.** Read before enabling WAL capture in any environment |
 
 ## Source map
 

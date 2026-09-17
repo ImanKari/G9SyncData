@@ -2,8 +2,10 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using G9SyncData.Protocol.RowBatch;
+using G9SyncData.Server.Auth;
 using G9SyncData.Server.Model;
 using G9SyncData.Server.PostgreSql.Internal;
+using Microsoft.Extensions.DependencyInjection;
 using G9SyncData.Server.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -23,14 +25,20 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
     private readonly ILogger<G9CPostgresSyncStore> _logger;
     private readonly string _schema;
 
+    /// <summary>Handed to scope providers (e.g. to resolve an EF Core DbContext). Empty when the host supplies none.</summary>
+    private readonly IServiceProvider _services;
+
     private Dictionary<G9CSyncServerTable, PgTable> _tables = [];
     private Dictionary<int, PgTable> _byId = [];
     private Dictionary<string, PgTable> _byLogical = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Lock _epochLock = new();
     private Guid _epoch;
     private volatile bool _initialized;
 
-    public G9CPostgresSyncStore(NpgsqlDataSource dataSource, G9CSyncServerModel model, G9CPostgresSyncOptions options, ILogger<G9CPostgresSyncStore> logger)
+    public G9CPostgresSyncStore(NpgsqlDataSource dataSource, G9CSyncServerModel model, G9CPostgresSyncOptions options, ILogger<G9CPostgresSyncStore> logger,
+        IServiceProvider? services = null)
     {
+        _services = services ?? EmptyServiceProvider.Instance;
         ArgumentNullException.ThrowIfNull(dataSource);
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(options);
@@ -47,7 +55,23 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
         get
         {
             EnsureInitialized();
-            return _epoch;
+            return CurrentEpoch;
+        }
+    }
+
+    /// <summary>
+    ///     The capture epoch. Written at startup, re-read with every snapshot, and rotated by the WAL consumer after a lost
+    ///     slot - so every server instance notices a rotation on its next pull, not only the one running the consumer.
+    /// </summary>
+    private Guid CurrentEpoch
+    {
+        get
+        {
+            lock (_epochLock) return _epoch;
+        }
+        set
+        {
+            lock (_epochLock) _epoch = value;
         }
     }
 
@@ -78,7 +102,7 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
                     $"G9SyncData capture is not installed in schema {_schema}. Apply the script from GenerateInstallScriptAsync, or enable AutoInstall.");
             }
 
-            _epoch = await ScalarAsync<Guid>(connection, transaction, $"SELECT epoch FROM {_schema}.install WHERE id = 1", cancellationToken).ConfigureAwait(false);
+            CurrentEpoch = await VerifyDatabaseIdentityAsync(connection, transaction, tables, cancellationToken).ConfigureAwait(false);
 
             foreach (var table in tables)
             {
@@ -92,6 +116,17 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
         _byId = tables.ToDictionary(t => t.TableId);
         _byLogical = tables.ToDictionary(t => t.Model.LogicalName, StringComparer.OrdinalIgnoreCase);
         _initialized = true;
+
+        try
+        {
+            if (IsWalMode) await InitializeWalAsync(connection, cancellationToken).ConfigureAwait(false);
+            else if (_options.AutoInstall) await DisableWalArtifactsAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            _initialized = false;
+            throw;
+        }
 
         var errors = await ValidateSqlAsync(connection, cancellationToken).ConfigureAwait(false);
         if (errors.Count > 0)
@@ -257,16 +292,16 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
             };
         }
 
+        // Columns an uploaded INSERT cannot fill. Reported at validation, once the row writers are known: a table whose uploads an
+        // application writer performs gets its values from that writer (EF defaults, interceptors), not from the device.
+        var requiredUnwritable = new List<string>();
         if (table.AcceptsUploads)
         {
             foreach (var db in columns.Values)
             {
                 if (!db.NotNull || db.HasDefault || string.Equals(db.DbName, key.DbName, StringComparison.Ordinal)) continue;
                 var modelColumn = table.FindColumn(db.DbName);
-                if (modelColumn is null || modelColumn.IsComputed || !modelColumn.IsWritable)
-                {
-                    errors.Add($"{table.LogicalName}.{db.DbName} is NOT NULL without a default, so uploaded inserts need it: add it as a writable column or make the table DownloadOnly.");
-                }
+                if (modelColumn is null || modelColumn.IsComputed || !modelColumn.IsWritable) requiredUnwritable.Add(db.DbName);
             }
         }
 
@@ -288,10 +323,12 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
             BaseName = baseName,
             TrackingName = _schema + "." + PgNames.Quote(bare),
             TrackingBare = bare,
+            KeySetName = _schema + "." + PgNames.Quote(bare + "_keys"),
             Key = key,
             KeyStagingType = keyStaging.Sql,
             KeyStagingDbType = keyStaging.DbType,
             Columns = bound,
+            RequiredUnwritableColumns = requiredUnwritable,
             ExtraUniqueIndexes = uniqueIndexes,
             AverageRowBytes = averageRowBytes
         };
@@ -328,15 +365,113 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
                 $"SELECT t.{table.Key.Quoted}{reads} FROM {table.BaseName} AS t{where}", null).ConfigureAwait(false);
         }
 
+        // Row writers (ADR-0025) are validated for every table they claim, in a scope like a push's.
+        var writtenByApplication = new HashSet<PgTable>();
+        if (_services.GetService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>() is { } scopes)
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            var writers = new List<G9SyncData.Server.Pipeline.IG9RowWriter>();
+            foreach (var writer in scope.ServiceProvider.GetServices<G9SyncData.Server.Pipeline.IG9RowWriter>())
+            {
+                try
+                {
+                    await writer.PrepareAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+                    writers.Add(writer);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    errors.Add($"row writer {writer.GetType().Name} failed to prepare: {exception.Message}");
+                }
+            }
+
+            foreach (var writer in writers.Where(w => !_tables.Values.Any(t => w.AppliesTo(t.Model))))
+            {
+                // A writer that claims no table is almost certainly misconfigured, and would otherwise do nothing, silently.
+                errors.Add($"row writer {writer.GetType().Name} applies to no synced table");
+            }
+
+            foreach (var table in _tables.Values)
+            {
+                foreach (var writer in writers.Where(w => w.AppliesTo(table.Model)))
+                {
+                    writtenByApplication.Add(table);
+                    try
+                    {
+                        foreach (var problem in await writer.ValidateAsync(table.Model, scope.ServiceProvider, cancellationToken).ConfigureAwait(false))
+                        {
+                            errors.Add($"{table.Model.LogicalName} row writer {writer.GetType().Name}: {problem}");
+                        }
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        errors.Add($"{table.Model.LogicalName} row writer {writer.GetType().Name} failed to validate: {exception.Message}");
+                    }
+                }
+            }
+        }
+
+        foreach (var table in _tables.Values.Where(t => t.RequiredUnwritableColumns.Count > 0 && !writtenByApplication.Contains(t)))
+        {
+            foreach (var column in table.RequiredUnwritableColumns)
+            {
+                errors.Add($"{table.Model.LogicalName}.{column} is NOT NULL without a default, so uploaded inserts need it: add it as a writable column, " +
+                           "make the table DownloadOnly, or write its uploads through a row writer that supplies it.");
+            }
+        }
+
         foreach (var subscription in _model.Subscriptions)
         {
             foreach (var include in subscription.Tables)
             {
                 var table = Get(include.Table);
                 var when = include.WhenSql is null ? "true" : Bind(include.WhenSql, "t", subscription);
-                await CheckAsync($"subscription '{subscription.Name}' / {include.Table.LogicalName}",
-                    $"SELECT 1 FROM {table.BaseName} AS t WHERE ({Bind(include.ScopeSql, "t", subscription)}) AND ({when})",
-                    parameters => BindNulls(parameters, subscription, "p_")).ConfigureAwait(false);
+                var label = $"subscription '{subscription.Name}' / {include.Table.LogicalName}";
+
+                if (include.ScopeProvider is null || !_options.ValidateScopeProviders)
+                {
+                    var template = include.ScopeProvider is null ? include.ScopeSql : "true";
+                    await CheckAsync(label, $"SELECT 1 FROM {table.BaseName} AS t WHERE ({Bind(template, "t", subscription)}) AND ({when})",
+                        parameters => BindNulls(parameters, subscription, "p_")).ConfigureAwait(false);
+                    continue;
+                }
+
+                // A provider's key query exists per request, so it is PROBED: built for sample callers, then EXPLAINed like a model
+                // scope. A wrong entity, an untranslatable query, a missing table or a key-type mismatch then stops the deployment
+                // instead of failing every device's sync. Two probes, because an ORM's SQL depends on parameter VALUES (EF Core
+                // turns `column == null` on a non-nullable column into FALSE and drops the whole predicate - and the table in it):
+                //   1. typed non-null samples, which produce the general shape of the query;
+                //   2. every value null and an anonymous caller - a missing server parameter binds null at run time too.
+                foreach (var (probe, values, auth) in ScopeProbes(subscription))
+                {
+                    PgScope scope;
+                    try
+                    {
+                        var fragment = await include.ScopeProvider.CreateAsync(new G9CSyncScopeContext
+                        {
+                            Subscription = subscription,
+                            Table = include.Table,
+                            Values = values,
+                            Auth = auth,
+                            Services = _services
+                        }, cancellationToken).ConfigureAwait(false);
+                        scope = new PgScope(fragment.KeysSql, fragment.Parameters, table.Key.Quoted, IsProvided: true);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        errors.Add($"{label} ({probe}): the scope provider failed to build its key query - {exception.GetType().Name}: {exception.Message}");
+                        break;
+                    }
+
+                    var before = errors.Count;
+                    await CheckAsync($"{label} ({probe})",
+                        $"SELECT 1 FROM {table.BaseName} AS t WHERE ({BindScope(scope, "t", subscription, "p_")}) AND ({when})",
+                        parameters =>
+                        {
+                            BindNulls(parameters, subscription, "p_");
+                            BindScopeParameters(parameters, scope, "p_");
+                        }).ConfigureAwait(false);
+                    if (errors.Count > before) break;
+                }
             }
         }
 
@@ -348,7 +483,102 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
     public async Task<string> GetCurrentSnapshotAsync(CancellationToken cancellationToken)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        return await ScalarAsync<string>(connection, null, "SELECT pg_current_snapshot()::text", cancellationToken).ConfigureAwait(false);
+        await using var command = Command(connection, null, $"SELECT pg_current_snapshot()::text, (SELECT epoch FROM {_schema}.install WHERE id = 1)");
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = reader.GetString(0);
+        if (_initialized && !reader.IsDBNull(1)) CurrentEpoch = reader.GetGuid(1);
+        return snapshot;
+    }
+
+    /// <summary>
+    ///     The epoch, after making sure it still describes THIS database. The install row travels with the data: a restored backup, a
+    ///     <c>CREATE DATABASE … TEMPLATE</c> copy or a dump loaded elsewhere carries the epoch of the database it came from, and every
+    ///     device cursor issued by that database after the backup would be accepted as current — deltas would then silently skip
+    ///     whatever the restore rolled back or the device holds beyond it. A database's OID changes in all of those cases, so a
+    ///     different OID rotates the epoch: every device reconciles once, which is exact whatever the history was.
+    /// </summary>
+    /// <remarks>
+    ///     A point-in-time restore or a failover to a lagging standby keeps the OID; there the xid counter goes BACK, which
+    ///     <see cref="IsSnapshotAheadAsync" /> detects per cursor and per pull token.
+    /// </remarks>
+    private async Task<Guid> VerifyDatabaseIdentityAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, IReadOnlyList<PgTable> tables,
+        CancellationToken cancellationToken)
+    {
+        var tracked = await ScalarAsync<bool>(connection, transaction,
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = @g9_schema AND table_name = 'install' AND column_name = 'database_oid')",
+            cancellationToken, P("g9_schema", NpgsqlDbType.Text, _options.Schema)).ConfigureAwait(false);
+        if (!tracked)
+        {
+            // An install older than this check that nobody upgraded (AutoInstall off): it keeps working, without the protection.
+            LogIdentityNotTracked(_logger, _options.Schema);
+            return await ScalarAsync<Guid>(connection, transaction, $"SELECT epoch FROM {_schema}.install WHERE id = 1", cancellationToken).ConfigureAwait(false);
+        }
+
+        Guid epoch;
+        long? recorded;
+        long current;
+        await using (var command = Command(connection, transaction,
+                         $"SELECT epoch, database_oid, (SELECT oid::bigint FROM pg_database WHERE datname = current_database()) FROM {_schema}.install WHERE id = 1"))
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            epoch = reader.GetGuid(0);
+            recorded = reader.IsDBNull(1) ? null : reader.GetInt64(1);
+            current = reader.GetInt64(2);
+        }
+
+        if (recorded is null)
+        {
+            await ExecuteAsync(connection, transaction, $"UPDATE {_schema}.install SET database_oid = @g9_oid WHERE id = 1", cancellationToken,
+                P("g9_oid", NpgsqlDbType.Bigint, current)).ConfigureAwait(false);
+            return epoch;
+        }
+
+        if (recorded == current) return epoch;
+
+        var rotated = await ScalarAsync<Guid>(connection, transaction,
+            $"""
+             UPDATE {_schema}.install SET epoch = gen_random_uuid(), database_oid = @g9_oid, epoch_changed_at = now(),
+                    epoch_change_reason = 'database identity changed (restored backup or copy)', wal_rescan_pending = true
+             WHERE id = 1 RETURNING epoch
+             """,
+            cancellationToken, P("g9_oid", NpgsqlDbType.Bigint, current)).ConfigureAwait(false);
+
+        // Key sets were built by the database this data came from: never serve one to a device of this one.
+        await ExecuteAsync(connection, transaction, $"DELETE FROM {_schema}.key_sets", cancellationToken).ConfigureAwait(false);
+        foreach (var table in tables)
+        {
+            // A table added to the model since the backup has no key table yet (registration creates it right after this).
+            if (await ScalarAsync<bool>(connection, transaction, "SELECT to_regclass(@g9_name) IS NOT NULL", cancellationToken,
+                    P("g9_name", NpgsqlDbType.Text, table.KeySetName)).ConfigureAwait(false))
+            {
+                await ExecuteAsync(connection, transaction, $"DELETE FROM {table.KeySetName}", cancellationToken).ConfigureAwait(false);
+            }
+        }
+        LogEpochRotated(_logger, recorded.Value, current, epoch, rotated);
+        return rotated;
+    }
+
+    /// <summary>
+    ///     True when <paramref name="snapshot" /> is NEWER than this database: its xmax lies beyond the next xid the database will
+    ///     assign. Xids only move forward in a live cluster, so this happens only after the database went back in time — a
+    ///     point-in-time restore, or a failover to a standby that had not replayed as far as the device had read.
+    /// </summary>
+    public async Task<bool> IsSnapshotAheadAsync(string snapshot, CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ScalarAsync<bool>(connection, null,
+                "SELECT pg_snapshot_xmax(@g9_snapshot::pg_snapshot) > pg_snapshot_xmax(pg_current_snapshot())",
+                cancellationToken, P("g9_snapshot", NpgsqlDbType.Text, snapshot)).ConfigureAwait(false);
+        }
+        catch (PostgresException exception) when (exception.SqlState is PostgresErrorCodes.InvalidTextRepresentation or PostgresErrorCodes.InvalidParameterValue)
+        {
+            return true;
+        }
     }
 
     public async Task<bool> IsBeyondTombstoneHorizonAsync(string snapshot, IReadOnlyCollection<G9CSyncServerTable> tables, CancellationToken cancellationToken)
@@ -478,26 +708,26 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
         _ => P(name, NpgsqlDbType.Array | NpgsqlDbType.Text, keys.ToArray())
     };
 
-    /// <summary>Reads the key at ordinal 0, starts a value row, and returns the canonical key.</summary>
-    private static string BeginRow(G9CRowBatchWriter writer, NpgsqlDataReader reader, PgTable table, long version)
+    /// <summary>Reads the key at <paramref name="ordinal" />, starts a value row, and returns the canonical key.</summary>
+    private static string BeginRow(G9CRowBatchWriter writer, NpgsqlDataReader reader, PgTable table, long version, int ordinal = 0)
     {
         switch (table.Model.KeyType)
         {
             case G9ESyncColumnType.Guid:
             {
-                var key = reader.GetGuid(0);
+                var key = reader.GetGuid(ordinal);
                 writer.BeginRow(key, version);
                 return G9CSyncKey.FromGuid(key);
             }
             case G9ESyncColumnType.Int32 or G9ESyncColumnType.Int64:
             {
-                var key = reader.GetInt64(0);
+                var key = reader.GetInt64(ordinal);
                 writer.BeginRow(key, version);
                 return G9CSyncKey.FromInt64(key);
             }
             default:
             {
-                var key = reader.GetString(0);
+                var key = reader.GetString(ordinal);
                 writer.BeginRow(key, version);
                 return key;
             }
@@ -571,6 +801,14 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
         new(G9SyncErrorCodes.ModelInvalid,
             $"The G9SyncData model does not match the PostgreSQL database ({what}):" + Environment.NewLine +
             string.Join(Environment.NewLine, errors.Select(e => " - " + e)));
+
+    [LoggerMessage(EventId = 7350, Level = LogLevel.Warning,
+        Message = "G9SyncData: this database is not the one capture was installed on (database oid {Recorded} → {Current}: a restored backup or a copy). Epoch {OldEpoch} rotated to {NewEpoch}; every device reconciles once")]
+    private static partial void LogEpochRotated(ILogger logger, long recorded, long current, Guid oldEpoch, Guid newEpoch);
+
+    [LoggerMessage(EventId = 7351, Level = LogLevel.Warning,
+        Message = "G9SyncData: install in schema {Schema} predates database identity tracking and AutoInstall is off; a restored backup would not be detected until the install script is re-applied")]
+    private static partial void LogIdentityNotTracked(ILogger logger, string schema);
 
     [LoggerMessage(EventId = 22001, Level = LogLevel.Information, Message = "Installed change capture for {Table} (table id {TableId}, ordered apply {Ordered})")]
     private static partial void LogCaptureInstalled(ILogger logger, string table, int tableId, bool ordered);

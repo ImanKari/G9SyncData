@@ -1,9 +1,11 @@
+using System.Globalization;
 using System.Text.Json;
 using G9SyncData.Client.Sqlite.Internal;
 using G9SyncData.Client.Storage;
 using G9SyncData.Protocol;
 using G9SyncData.Protocol.RowBatch;
-using Microsoft.Data.Sqlite;
+using G9SyncData.Client.Sqlite.Native;
+using Microsoft.Extensions.Logging;
 
 namespace G9SyncData.Client.Sqlite;
 
@@ -21,6 +23,7 @@ public sealed partial class G9CSqliteSyncStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var durability = DownloadDurability(connection);
             var staged = ReadStagedRun(connection, runId) ?? throw new G9CSyncException(G9SyncErrorCodes.LocalStoreError, "The staged pull no longer exists.");
             var sequences = new List<long>();
             using (var command = Command(connection, null, "SELECT seq FROM g9_stage WHERE run_id = $r AND payload IS NOT NULL ORDER BY seq"))
@@ -31,7 +34,7 @@ public sealed partial class G9CSqliteSyncStore
             }
 
             using var transaction = connection.BeginTransaction(deferred: false);
-            using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, rowsApplied, staged.Backfills);
+            using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, rowsApplied, staged.Backfills, SnapshotRowsByTable(staged.Plan));
             using (var payloadCommand = Command(connection, transaction, "SELECT payload, subscription_key FROM g9_stage WHERE run_id = $r AND seq = $s"))
             {
                 payloadCommand.Parameters.AddWithValue("$r", runId);
@@ -93,6 +96,7 @@ public sealed partial class G9CSqliteSyncStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var durability = DownloadDurability(connection);
             using var transaction = connection.BeginTransaction(deferred: false);
             using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, progress: null, backfills: []);
             context.Policies[subscriptionKey] = policy;
@@ -123,8 +127,10 @@ public sealed partial class G9CSqliteSyncStore
     // ================================================================ engine
 
     private ApplyContext BeginApply(SqliteConnection connection, SqliteTransaction transaction, long? dirtyAfterSequence, IProgress<long>? progress,
-        IReadOnlyList<G9DtBackfillRequest> backfills)
+        IReadOnlyList<G9DtBackfillRequest> backfills, IReadOnlyDictionary<int, long>? snapshotRows = null)
     {
+        // applying = 1 stays the rule that keeps library writes out of change capture. Skipping triggers below only saves evaluating
+        // them: correctness never depends on it, so a connection where SQLite does not confirm the switch simply applies with triggers.
         Exec(connection, transaction, "UPDATE g9_ctx SET applying = 1 WHERE id = 1");
         var context = new ApplyContext(connection, transaction, progress, _options.MaxChangedKeysPerTable)
         {
@@ -138,8 +144,19 @@ public sealed partial class G9CSqliteSyncStore
         {
             if (dirtyAfterSequence is not null) command.Parameters.AddWithValue("$m", dirtyAfterSequence.Value);
             using var reader = command.ExecuteReader();
-            while (reader.Read()) context.Dirty.Add((reader.GetInt64(0), reader.GetString(1)));
+            while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
         }
+
+        // Rows touched by a command the server has not executed yet keep their optimistic state until its result settles them.
+        using (var command = Command(connection, transaction,
+                   "SELECT r.tid, r.pk FROM g9_command_rows r JOIN g9_commands c ON c.command_id = r.command_id WHERE c.state = 0"))
+        {
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
+        }
+
+        // Only when something is marked revoked do upserts pay a statement to clear the mark of a row that became visible again.
+        context.HasRevoked = Scalar(connection, transaction, "SELECT 1 FROM g9_revoked LIMIT 1") is not null;
 
         var definitions = Meta(connection, transaction, "definitions_json") is { } json
             ? JsonSerializer.Deserialize(json, G9SyncJsonContext.Default.ListG9DtSubscriptionDefinition) ?? []
@@ -152,12 +169,97 @@ public sealed partial class G9CSqliteSyncStore
         }
 
         foreach (var backfill in backfills) context.BackfillColumns[backfill.TableId] = backfill.Columns;
+        if (_options.SkipTriggersDuringApply && !HasForeignTriggers(connection, transaction)) context.TriggersSkipped = connection.TrySetTriggersEnabled(false);
+        if (snapshotRows is not null && _options.RebuildIndexesAfterRows > 0) DeferIndexes(context, snapshotRows);
         return context;
     }
 
     private static void EndApply(ApplyContext context)
     {
+        // The deferred indexes are rebuilt before anything commits: a failure here rolls back the whole apply, indexes included.
+        foreach (var index in context.DeferredIndexes) Exec(context.Connection, context.Transaction, index.Sql);
+        context.DeferredIndexes.Clear();
         Exec(context.Connection, context.Transaction, "UPDATE g9_clock SET seq = $s WHERE id = 1; UPDATE g9_ctx SET applying = 0 WHERE id = 1", ("$s", context.Clock));
+    }
+
+    /// <summary>Rows each table receives from snapshot parts of a plan, by server table id.</summary>
+    private static Dictionary<int, long> SnapshotRowsByTable(G9DtPullPlan plan) =>
+        plan.Parts.Where(p => p.Kind == G9EPullPartKind.Snapshot).GroupBy(p => p.TableId).ToDictionary(g => g.Key, g => g.Sum(p => p.Rows));
+
+    /// <summary>
+    ///     True when the database holds a trigger the library did not create. Trigger execution then stays on for the whole apply: the app's
+    ///     triggers (an FTS index, an audit table) must fire for synced rows exactly as before. The store's connections run with foreign
+    ///     keys off, so a library write fires only the triggers of the table it writes; any foreign trigger anywhere still keeps them on.
+    /// </summary>
+    private bool HasForeignTriggers(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        var foreign = ForeignTriggerNames(connection, transaction);
+        if (foreign.Count == 0) return false;
+        if (Interlocked.Exchange(ref _foreignTriggersLogged, 1) == 0) LogForeignTriggers(_logger, foreign.Count, string.Join(", ", foreign.Take(5)));
+        return true;
+    }
+
+    /// <summary><c>g9_{table}_{ai|au|ad|ci|cu|cd}</c> for a table of the model (SqliteSql.TriggerName).</summary>
+    private bool IsLibraryTrigger(string name)
+    {
+        var separator = name.LastIndexOf('_');
+        if (separator <= 3 || !name.StartsWith("g9_", StringComparison.OrdinalIgnoreCase)) return false;
+        var suffix = name[(separator + 1)..].ToLowerInvariant();
+        return suffix is "ai" or "au" or "ad" or "ci" or "cu" or "cd" && _byLocal.ContainsKey(name[3..separator]);
+    }
+
+    /// <summary>
+    ///     Drops the plain indexes of every table this apply fills from empty with at least
+    ///     <see cref="G9CSqliteSyncStoreOptions.RebuildIndexesAfterRows" /> rows; <see cref="EndApply" /> rebuilds them from their exact CREATE
+    ///     statements. Only indexes created by CREATE INDEX that are not UNIQUE: a unique index keeps rejecting a duplicate at the row that
+    ///     causes it, and constraint indexes cannot be dropped anyway. DDL is transactional in SQLite, so readers keep seeing the old schema
+    ///     until commit and a crash restores the indexes.
+    /// </summary>
+    private void DeferIndexes(ApplyContext context, IReadOnlyDictionary<int, long> snapshotRows)
+    {
+        foreach (var (serverTableId, rows) in snapshotRows)
+        {
+            if (rows < _options.RebuildIndexesAfterRows || !_byServerId.TryGetValue(serverTableId, out var table)) continue;
+            if (Scalar(context.Connection, context.Transaction, $"SELECT 1 FROM {table.Quoted} LIMIT 1") is not null) continue;
+
+            var indexes = new List<(string Name, string Sql)>();
+            using (var command = Command(context.Connection, context.Transaction,
+                       "SELECT m.name, m.sql FROM pragma_index_list($t) AS i JOIN sqlite_master AS m ON m.type = 'index' AND m.name = i.name " +
+                       "WHERE i.origin = 'c' AND i.\"unique\" = 0 AND m.sql IS NOT NULL"))
+            {
+                command.Parameters.AddWithValue("$t", table.Model.LocalName);
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) indexes.Add((reader.GetString(0), reader.GetString(1)));
+            }
+
+            foreach (var index in indexes)
+            {
+                Exec(context.Connection, context.Transaction, "DROP INDEX " + SqliteSql.Quote(index.Name));
+                context.DeferredIndexes.Add(index);
+            }
+
+            if (indexes.Count > 0) LogIndexesDeferred(_logger, table.Model.LocalName, rows, indexes.Count);
+        }
+    }
+
+    /// <summary>
+    ///     <c>synchronous=NORMAL</c> while a transaction writes only server-derived data (see
+    ///     <see cref="G9CSqliteSyncStoreOptions.SynchronousNormalForDownloads" />); restored before the handle goes back to the pool. Only in
+    ///     WAL mode, where NORMAL cannot corrupt the file.
+    /// </summary>
+    private DurabilityScope? DownloadDurability(SqliteConnection connection)
+    {
+        if (!_options.SynchronousNormalForDownloads) return null;
+        if (!string.Equals(Scalar(connection, null, "PRAGMA journal_mode") as string, "wal", StringComparison.OrdinalIgnoreCase)) return null;
+        var previous = Convert.ToInt64(Scalar(connection, null, "PRAGMA synchronous"), CultureInfo.InvariantCulture);
+        if (previous <= 1) return null;
+        Exec(connection, null, "PRAGMA synchronous = NORMAL");
+        return new DurabilityScope(connection, previous);
+    }
+
+    private sealed class DurabilityScope(SqliteConnection connection, long previous) : IDisposable
+    {
+        public void Dispose() => Exec(connection, null, "PRAGMA synchronous = " + previous.ToString(CultureInfo.InvariantCulture));
     }
 
     private void ApplyFrame(ApplyContext context, byte[] frame, string? subscriptionKey)
@@ -198,58 +300,146 @@ public sealed partial class G9CSqliteSyncStore
         }
     }
 
+    /// <summary>
+    ///     The row path of a download: one prepared upsert and one metadata upsert per row, bound by position straight from the frame -
+    ///     GUIDs and timestamps formatted into stack buffers, text passed as the frame's own UTF-8. A key string is only made when a row
+    ///     needs it (a pending local change on its table, the capped changed-key report, ephemeral or revoked bookkeeping).
+    /// </summary>
     private void ApplyUpserts(ApplyContext context, G9CRowBatchReader reader, LocalTable table, int slot, string? ephemeralKey)
     {
         var columns = table.Negotiated!.Columns;
         if (reader.ColumnCount != columns.Count) throw new FormatException($"{table.Model.LocalName}: the frame has {reader.ColumnCount} columns, {columns.Count} were negotiated.");
-        var localIndex = columns.Select(c => table.Model.IndexOf(c.Name)).ToArray();
+        var targets = columns.Select((c, i) => (Column: c, Frame: i, Local: table.Model.IndexOf(c.Name))).Where(t => t.Local >= 0).ToArray();
         var bit = slot >= 0 ? SqliteSql.Bit(slot) : 0L;
+        var integerKey = table.Model.KeyType is G9ESyncColumnType.Int32 or G9ESyncColumnType.Int64;
 
-        var upsert = context.GetCommand("upsert:" + table.Tid, () =>
+        var upsert = context.GetRowStatement("upsert:" + table.Tid, () =>
         {
-            var targets = columns.Where((_, i) => localIndex[i] >= 0).Select(c => SqliteSql.Quote(c.Name)).ToList();
-            var sql = $"INSERT INTO {table.Quoted} ({table.KeyQuoted}{string.Concat(targets.Select(t => ", " + t))}) VALUES ($k{string.Concat(targets.Select((_, i) => ", $p" + i))}) " +
-                      (targets.Count == 0
-                          ? $"ON CONFLICT({table.KeyQuoted}) DO NOTHING"
-                          : $"ON CONFLICT({table.KeyQuoted}) DO UPDATE SET {string.Join(", ", targets.Select(t => t + " = excluded." + t))}");
-            var command = Command(context.Connection, context.Transaction, sql);
-            command.Parameters.Add("$k", SqliteType.Text);
-            for (var i = 0; i < targets.Count; i++) command.Parameters.Add("$p" + i, SqliteType.Text);
-            return command;
+            var names = targets.Select(t => SqliteSql.Quote(t.Column.Name)).ToList();
+            return $"INSERT INTO {table.Quoted} ({table.KeyQuoted}{string.Concat(names.Select(n => ", " + n))}) VALUES (?1{string.Concat(names.Select((_, i) => ", ?" + (i + 2)))}) " +
+                   (names.Count == 0
+                       ? $"ON CONFLICT({table.KeyQuoted}) DO NOTHING"
+                       : $"ON CONFLICT({table.KeyQuoted}) DO UPDATE SET {string.Join(", ", names.Select(n => n + " = excluded." + n))}");
         });
-        var rowMeta = context.GetCommand("rowmeta", () => RowMetaCommand(context));
+        var rowMeta = context.GetRowStatement("rowmeta",
+            () => "INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0) " +
+                  "ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, " +
+                  "dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0");
+        var dirtyTable = context.HasDirty(table.Tid);
+        Span<byte> keyBuffer = stackalloc byte[40];
 
         while (reader.ReadRow())
         {
-            var key = reader.Key;
-            if (context.Dirty.Contains((table.Tid, key)))
+            scoped ReadOnlySpan<byte> keyText;
+            long keyInteger = 0;
+            switch (reader.KeyType)
             {
-                if (slot >= 0) AddMembership(context, table, key, slot, ephemeralKey);
+                case G9ESyncColumnType.Guid:
+                    reader.KeyGuid.TryFormat(keyBuffer, out var guidLength);
+                    keyText = keyBuffer[..guidLength];
+                    break;
+                case G9ESyncColumnType.Int32 or G9ESyncColumnType.Int64:
+                    keyInteger = reader.KeyInt64;
+                    keyInteger.TryFormat(keyBuffer, out var integerLength, default, CultureInfo.InvariantCulture);
+                    keyText = keyBuffer[..integerLength];
+                    break;
+                default:
+                    keyText = reader.KeyUtf8;
+                    break;
+            }
+
+            if (dirtyTable && context.Dirty.Contains((table.Tid, reader.Key)))
+            {
+                if (slot >= 0) AddMembership(context, table, reader.Key, slot, ephemeralKey);
                 context.Report.SkippedDirty++;
                 context.Tick();
                 continue;
             }
 
-            upsert.Parameters[0].Value = KeyValue(table, key);
-            var parameter = 1;
-            for (var i = 0; i < columns.Count; i++)
+            if (integerKey) upsert.BindInt64(1, keyInteger);
+            else upsert.BindText(1, keyText);
+            for (var i = 0; i < targets.Length; i++) BindValue(upsert, i + 2, reader, targets[i].Frame, targets[i].Column.Type);
+            upsert.Execute();
+
+            rowMeta.BindInt64(1, table.Tid);
+            rowMeta.BindText(2, keyText);
+            rowMeta.BindInt64(3, reader.Version);
+            rowMeta.BindInt64(4, ++context.Clock);
+            rowMeta.BindInt64(5, bit);
+            rowMeta.Execute();
+
+            if (ephemeralKey is not null) InsertEphemeral(context, table, reader.Key, ephemeralKey);
+            if (context.HasRevoked && slot >= 0)
             {
-                if (localIndex[i] < 0) continue;
-                upsert.Parameters[parameter++].Value = ToDbValue(reader, i, columns[i].Type);
+                Exec(context.Connection, context.Transaction,
+                    "DELETE FROM g9_revoked WHERE tid = $t AND pk = $pk; DELETE FROM g9_rejections WHERE tid = $t AND pk = $pk AND code = $code",
+                    ("$t", table.Tid), ("$pk", reader.Key), ("$code", RevokedRejectionCode));
             }
 
-            upsert.ExecuteNonQuery();
-            rowMeta.Parameters["$t"].Value = table.Tid;
-            rowMeta.Parameters["$pk"].Value = key;
-            rowMeta.Parameters["$v"].Value = reader.Version;
-            rowMeta.Parameters["$s"].Value = ++context.Clock;
-            rowMeta.Parameters["$b"].Value = bit;
-            rowMeta.ExecuteNonQuery();
-            if (ephemeralKey is not null) InsertEphemeral(context, table, key, ephemeralKey);
-
             context.Report.Upserts++;
-            context.AddChanged(table.Model.LocalName, key);
+            if (context.WantsChangedKey(table.Model.LocalName)) context.AddChanged(table.Model.LocalName, reader.Key);
             context.Tick();
+        }
+    }
+
+    private const string DateTimeOffsetFormat = "yyyy-MM-dd'T'HH:mm:ss.fffffffzzz";
+
+    /// <summary>Binds one frame value in its local storage form (the forms <see cref="ToDbValue" /> produces) without allocating.</summary>
+    private void BindValue(SqliteRowStatement statement, int index, G9CRowBatchReader reader, int column, G9ESyncColumnType type)
+    {
+        if (reader.IsNull(column))
+        {
+            statement.BindNull(index);
+            return;
+        }
+
+        Span<byte> buffer = stackalloc byte[64];
+        switch (type)
+        {
+            case G9ESyncColumnType.Boolean:
+                statement.BindInt64(index, reader.GetBoolean(column) ? 1 : 0);
+                break;
+            case G9ESyncColumnType.Int32:
+                statement.BindInt64(index, reader.GetInt32(column));
+                break;
+            case G9ESyncColumnType.Int64:
+                statement.BindInt64(index, reader.GetInt64(column));
+                break;
+            case G9ESyncColumnType.TimeSpan:
+                statement.BindInt64(index, reader.GetTimeSpan(column).Ticks);
+                break;
+            case G9ESyncColumnType.Double:
+                statement.BindDouble(index, reader.GetDouble(column));
+                break;
+            case G9ESyncColumnType.Decimal:
+                var number = reader.GetDecimal(column);
+                if (_options.DecimalStorage == G9ESqliteDecimalStorage.Real) statement.BindDouble(index, (double)number);
+                else if (number.TryFormat(buffer, out var decimalLength, default, CultureInfo.InvariantCulture)) statement.BindText(index, buffer[..decimalLength]);
+                else statement.BindText(index, number.ToString(CultureInfo.InvariantCulture));
+                break;
+            case G9ESyncColumnType.String:
+                statement.BindText(index, reader.GetUtf8(column));
+                break;
+            case G9ESyncColumnType.Guid:
+                reader.GetGuid(column).TryFormat(buffer, out var guidLength);
+                statement.BindText(index, buffer[..guidLength]);
+                break;
+            case G9ESyncColumnType.DateTime:
+                var moment = reader.GetDateTime(column);
+                if (_options.DateTimeStorage == G9ESqliteDateTimeStorage.Ticks) statement.BindInt64(index, moment.Ticks);
+                else if (moment.TryFormat(buffer, out var dateLength, _options.DateTimeFormat, CultureInfo.InvariantCulture)) statement.BindText(index, buffer[..dateLength]);
+                else statement.BindText(index, moment.ToString(_options.DateTimeFormat, CultureInfo.InvariantCulture));
+                break;
+            case G9ESyncColumnType.DateTimeOffset:
+                var offset = reader.GetDateTimeOffset(column);
+                if (offset.TryFormat(buffer, out var offsetLength, DateTimeOffsetFormat, CultureInfo.InvariantCulture)) statement.BindText(index, buffer[..offsetLength]);
+                else statement.BindText(index, offset.ToString(DateTimeOffsetFormat, CultureInfo.InvariantCulture));
+                break;
+            case G9ESyncColumnType.Bytes:
+                statement.BindBlob(index, reader.GetBytes(column));
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported column type {type}.");
         }
     }
 
@@ -352,23 +542,11 @@ public sealed partial class G9CSqliteSyncStore
         context.Report.MoveOuts++;
         if (policy != G9EMoveOutPolicy.Delete) return;
 
-        using var command = Command(context.Connection, context.Transaction, "SELECT subs, dirty FROM g9_rows WHERE tid = $t AND pk = $pk AND deleted = 0");
-        command.Parameters.AddWithValue("$t", table.Tid);
-        command.Parameters.AddWithValue("$pk", key);
-        long subs;
-        long dirty;
-        using (var reader = command.ExecuteReader())
+        // No subscription holds it any more? The revocation policy decides (ADR-0026): delete, quarantine, mark, retain or custom.
+        if (DisposeReleasedRow(context.Connection, context.Transaction, table, key, G9ERevocationReason.LeftScope, subscriptionKey, ++context.Clock, context.Report))
         {
-            if (!reader.Read()) return;
-            subs = reader.GetInt64(0);
-            dirty = reader.GetInt64(1);
+            context.AddChanged(table.Model.LocalName, key);
         }
-
-        if (subs != 0 || dirty != 0) return;
-        Exec(context.Connection, context.Transaction, $"DELETE FROM {table.Quoted} WHERE {table.KeyQuoted} = $k", ("$k", KeyValue(table, key)));
-        Exec(context.Connection, context.Transaction, "UPDATE g9_rows SET deleted = 1, local_seq = $s WHERE tid = $t AND pk = $pk",
-            ("$s", ++context.Clock), ("$t", table.Tid), ("$pk", key));
-        context.AddChanged(table.Model.LocalName, key);
     }
 
     private static void AddMembership(ApplyContext context, LocalTable table, string key, int slot, string? ephemeralKey)
@@ -404,19 +582,12 @@ public sealed partial class G9CSqliteSyncStore
         command.ExecuteNonQuery();
     }
 
-    private static SqliteCommand RowMetaCommand(ApplyContext context)
-    {
-        var command = Command(context.Connection, context.Transaction,
-            "INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) VALUES ($t, $pk, $v, $s, $b, 0, 0, 0, 0) " +
-            "ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, " +
-            "dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0");
-        command.Parameters.Add("$t", SqliteType.Integer);
-        command.Parameters.Add("$pk", SqliteType.Text);
-        command.Parameters.Add("$v", SqliteType.Integer);
-        command.Parameters.Add("$s", SqliteType.Integer);
-        command.Parameters.Add("$b", SqliteType.Integer);
-        return command;
-    }
+    [LoggerMessage(EventId = 20110, Level = LogLevel.Information,
+        Message = "G9SyncData applies downloads with triggers on: the database has {Count} trigger(s) the library did not create ({Names})")]
+    private static partial void LogForeignTriggers(ILogger logger, int count, string names);
+
+    [LoggerMessage(EventId = 20111, Level = LogLevel.Debug, Message = "G9SyncData fills empty {Table} with {Rows} row(s): {Count} index(es) rebuilt after the load")]
+    private static partial void LogIndexesDeferred(ILogger logger, string table, long rows, int count);
 
     private sealed class ApplyContext(SqliteConnection connection, SqliteTransaction transaction, IProgress<long>? progress, int maxChangedKeys) : IDisposable
     {
@@ -424,6 +595,9 @@ public sealed partial class G9CSqliteSyncStore
 
         public SqliteConnection Connection { get; } = connection;
         public SqliteTransaction Transaction { get; } = transaction;
+        private readonly Dictionary<string, SqliteRowStatement> _rowStatements = new(StringComparer.Ordinal);
+        private readonly HashSet<long> _dirtyTables = [];
+
         public HashSet<(long Tid, string Key)> Dirty { get; } = [];
         public Dictionary<string, (int Slot, bool Ephemeral)> Subscriptions { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, G9EMoveOutPolicy> Policies { get; } = new(StringComparer.Ordinal);
@@ -431,6 +605,31 @@ public sealed partial class G9CSqliteSyncStore
         public G9CApplyReport Report { get; } = new();
         public long Clock { get; set; }
         public long Rows { get; private set; }
+        public bool HasRevoked { get; set; }
+
+        /// <summary>Trigger execution is off on the connection until disposal.</summary>
+        public bool TriggersSkipped { get; set; }
+
+        /// <summary>Plain indexes dropped for the load, rebuilt by EndApply from these statements.</summary>
+        public List<(string Name, string Sql)> DeferredIndexes { get; } = [];
+
+        public void AddDirty(long tid, string key)
+        {
+            Dirty.Add((tid, key));
+            _dirtyTables.Add(tid);
+        }
+
+        public bool HasDirty(long tid) => _dirtyTables.Contains(tid);
+
+        public bool WantsChangedKey(string table) => !Report.ChangedKeys.TryGetValue(table, out var keys) || keys.Count < maxChangedKeys;
+
+        public SqliteRowStatement GetRowStatement(string key, Func<string> sql)
+        {
+            if (_rowStatements.TryGetValue(key, out var statement)) return statement;
+            statement = new SqliteRowStatement(Connection, sql());
+            _rowStatements[key] = statement;
+            return statement;
+        }
 
         public SqliteCommand GetCommand(string key, Func<SqliteCommand> factory)
         {
@@ -457,6 +656,12 @@ public sealed partial class G9CSqliteSyncStore
         {
             foreach (var command in _commands.Values) command.Dispose();
             _commands.Clear();
+            foreach (var statement in _rowStatements.Values) statement.Dispose();
+            _rowStatements.Clear();
+
+            // Back on before the handle can return to the pool (which also refuses a handle whose triggers are still off).
+            if (TriggersSkipped) Connection.TrySetTriggersEnabled(true);
+            TriggersSkipped = false;
         }
     }
 }

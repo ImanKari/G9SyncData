@@ -28,14 +28,25 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <!-- Test-only: inspects device files. The store itself uses SQLitePCL.raw (A-11). -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\G9SyncData.Server.PostgreSql\G9SyncData.Server.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Server.EfCore\G9SyncData.Server.EfCore.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Server.SignalR\G9SyncData.Server.SignalR.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Client.SignalR\G9SyncData.Client.SignalR.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Testing\G9SyncData.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Android device tests' workload, shared with tests/G9SyncData.DeviceTests.Android. -->
+    <Compile Include="..\Shared\DeviceSchema.Client.cs" Link="Android\Shared\DeviceSchema.Client.cs" />
+    <Compile Include="..\Shared\DeviceSchema.Server.cs" Link="Android\Shared\DeviceSchema.Server.cs" />
+    <Compile Include="..\Shared\DotmimDeviceSql.cs" Link="Shared\DotmimDeviceSql.cs" />
   </ItemGroup>
 
   <ItemGroup>

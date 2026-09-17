@@ -28,6 +28,12 @@ public interface IG9SyncServerStore
     /// <summary>True when deletes the snapshot has not seen were already purged, so a delta from it would miss tombstones.</summary>
     Task<bool> IsBeyondTombstoneHorizonAsync(string snapshot, IReadOnlyCollection<G9CSyncServerTable> tables, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     True when a snapshot a device holds is newer than the database itself (a point-in-time restore or a failover to a lagging
+    ///     standby): nothing read with it can be trusted, and the device must reconcile.
+    /// </summary>
+    Task<bool> IsSnapshotAheadAsync(string snapshot, CancellationToken cancellationToken);
+
     Task TouchClientAsync(Guid clientId, string? userId, string? appVersion, CancellationToken cancellationToken);
 
     Task<G9CStorePartEstimate> EstimatePartAsync(G9CStorePartRequest request, CancellationToken cancellationToken);
@@ -84,6 +90,32 @@ public sealed class G9CResolvedSubscription
 
     /// <summary>Hash of the server-injected parameter values (empty when there are none).</summary>
     public required string AuthHash { get; init; }
+
+    /// <summary>The caller's authorisation context the subscription was resolved with.</summary>
+    public G9CSyncAuthContext Auth { get; init; } = G9CSyncAuthContext.Anonymous;
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<G9CSyncSubscriptionTable, Task<G9CSyncScopeFragment>> _scopes = new();
+
+    /// <summary>
+    ///     The provider-built key query of an include, computed once per resolved subscription (i.e. once per request) however
+    ///     many statements of that request need it.
+    /// </summary>
+    public Task<G9CSyncScopeFragment> GetScopeAsync(G9CSyncSubscriptionTable include, IServiceProvider services, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(include);
+        ArgumentNullException.ThrowIfNull(services);
+        var provider = include.ScopeProvider
+                       ?? throw new InvalidOperationException($"{include.Table.LogicalName} in '{Definition.Name}' has no scope provider.");
+
+        return _scopes.GetOrAdd(include, _ => provider.CreateAsync(new G9CSyncScopeContext
+        {
+            Subscription = Definition,
+            Table = include.Table,
+            Values = Values,
+            Auth = Auth,
+            Services = services
+        }, cancellationToken).AsTask());
+    }
 }
 
 /// <summary>Cursor text: <c>v1:{epoch}:{provider snapshot}</c>.</summary>
@@ -126,6 +158,9 @@ public sealed class G9CStorePartRequest
     public required string NewSnapshot { get; init; }
     public string? AfterKey { get; init; }
     public required int PageRows { get; init; }
+
+    /// <summary>G9RowBatch body layout of the frames this request produces (<see cref="G9SyncData.Protocol.G9SyncProtocol.NegotiateFrameVersion" />).</summary>
+    public int FrameVersion { get; init; } = 1;
 }
 
 public sealed class G9CStoreFetchRequest
@@ -136,6 +171,9 @@ public sealed class G9CStoreFetchRequest
     public required G9CResolvedSubscription Subscription { get; init; }
     public required IReadOnlyList<string> Keys { get; init; }
     public required int PageRows { get; init; }
+
+    /// <summary>G9RowBatch body layout of the frames this request produces (<see cref="G9SyncData.Protocol.G9SyncProtocol.NegotiateFrameVersion" />).</summary>
+    public int FrameVersion { get; init; } = 1;
 }
 
 /// <summary>The column layout of one table inside the push frames.</summary>
@@ -151,9 +189,21 @@ public sealed class G9CStorePushRequest
     public required IReadOnlyDictionary<int, G9CPushTableShape> Tables { get; init; }
     public required IReadOnlyList<G9CResolvedSubscription> Subscriptions { get; init; }
     public required G9CSyncPipeline Pipeline { get; init; }
+
+    /// <summary>Commands to execute before the rows, in device order (ADR-0025).</summary>
+    public IReadOnlyList<G9SyncData.Protocol.G9DtCommand> Commands { get; init; } = [];
+
+    /// <summary>
+    ///     Tables the device holds, with its columns in the device's order: the shape of every canonical row the push returns
+    ///     (for the pushed tables always; for every table when the push carries commands).
+    /// </summary>
+    public IReadOnlyDictionary<int, G9CPushTableShape> HeldTables { get; init; } = new Dictionary<int, G9CPushTableShape>();
     public required IServiceProvider Services { get; init; }
     public required int MaxRejections { get; init; }
     public required int MaxRows { get; init; }
+
+    /// <summary>G9RowBatch body layout of the frames this request produces (<see cref="G9SyncData.Protocol.G9SyncProtocol.NegotiateFrameVersion" />).</summary>
+    public int FrameVersion { get; init; } = 1;
 }
 
 public sealed record G9CStoreReconcileTable(
@@ -167,6 +217,9 @@ public sealed class G9CStoreReconcileRequest
     public required G9CResolvedSubscription Subscription { get; init; }
     public required IReadOnlyList<G9CStoreReconcileTable> Tables { get; init; }
     public required int PageRows { get; init; }
+
+    /// <summary>G9RowBatch body layout of the frames this request produces (<see cref="G9SyncData.Protocol.G9SyncProtocol.NegotiateFrameVersion" />).</summary>
+    public int FrameVersion { get; init; } = 1;
 }
 
 /// <summary>Either a key/version page or the final item carrying the snapshot and the mismatched buckets.</summary>

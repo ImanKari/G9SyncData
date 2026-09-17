@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.DeviceTests" />
     <InternalsVisibleTo Include="G9SyncData.IntegrationTests" />
   </ItemGroup>
 

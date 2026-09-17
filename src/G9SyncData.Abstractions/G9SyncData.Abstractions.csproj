@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.DeviceTests" />
   </ItemGroup>
 
 </Project>

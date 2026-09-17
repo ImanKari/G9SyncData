@@ -38,7 +38,14 @@ public enum G9ECompression : byte
 
 internal static class G9RowBatchFormat
 {
+    /// <summary>Row-wise body: each row's fields in turn.</summary>
     public const byte Version = 1;
+
+    /// <summary>Column-grouped body (<see cref="G9RowBatchColumnLayout" />, ADR-0040). Same fields, same encodings, grouped by field.</summary>
+    public const byte ColumnVersion = 2;
+
+    /// <summary>The newest layout this build reads and writes.</summary>
+    public const int MaxVersion = ColumnVersion;
     public const int HeaderSize = 10;
     public const int MaxBodyBytes = 512 * 1024 * 1024;
 

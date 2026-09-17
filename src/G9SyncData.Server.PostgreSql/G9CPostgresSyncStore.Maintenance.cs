@@ -69,6 +69,15 @@ public sealed partial class G9CPostgresSyncStore
     public async Task<int> CleanupTombstonesAsync(TimeSpan retention, CancellationToken cancellationToken)
     {
         EnsureInitialized();
+
+        // Maintenance is the natural home of the key-set sweep too (ADR-0030); builders sweep as well, so this is not the only one.
+        await SweepKeySetsIfDueAsync(cancellationToken).ConfigureAwait(false);
+        await using (var purge = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await ExecuteAsync(purge, null, $"DELETE FROM {_schema}.commands WHERE executed_at < now() - make_interval(secs => @g9_seconds)", cancellationToken,
+                P("g9_seconds", NpgsqlDbType.Double, _options.CommandLogRetention.TotalSeconds)).ConfigureAwait(false);
+        }
+
         var removed = 0;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         foreach (var table in _tables.Values)

@@ -6,6 +6,15 @@ public static class G9SyncProtocol
     /// <summary>Wire protocol version. The server refuses a Hello from a different major version.</summary>
     public const int Version = 1;
 
+    /// <summary>
+    ///     The newest G9RowBatch body layout this build reads and writes (1 row-wise, 2 column-grouped; ADR-0040). A request states the
+    ///     newest layout its sender reads; <see cref="NegotiateFrameVersion" /> picks what to answer with.
+    /// </summary>
+    public const int MaxFrameVersion = 2;
+
+    /// <summary>The frame layout to answer a request with: the newest both sides know, and 1 for a sender that did not say.</summary>
+    public static int NegotiateFrameVersion(int requested) => Math.Clamp(requested, 1, MaxFrameVersion);
+
     /// <summary>Default SignalR hub route.</summary>
     public const string DefaultHubRoute = "/g9sync";
 

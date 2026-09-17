@@ -33,6 +33,13 @@ internal static class G9Varint
         }
     }
 
+    /// <summary>An unsigned varint that must fit an <see cref="int" /> (a length, a count, an id).</summary>
+    public static int ReadInt32(ReadOnlySpan<byte> source, ref int position)
+    {
+        var value = Read(source, ref position);
+        return value <= int.MaxValue ? (int)value : throw new FormatException("Varint is out of range.");
+    }
+
     public static ulong ZigZag(long value) => (ulong)((value << 1) ^ (value >> 63));
 
     public static long UnZigZag(ulong value) => (long)(value >> 1) ^ -(long)(value & 1);

@@ -89,7 +89,8 @@ internal static class G9CSubscriptionResolver
             Key = G9CSyncParameters.BuildSubscriptionKey(definition.Name, canonical),
             Parameters = canonical,
             Values = values,
-            AuthHash = authText.Length == 0 ? string.Empty : G9CHash.Sha256Hex(authText.ToString())
+            AuthHash = authText.Length == 0 ? string.Empty : G9CHash.Sha256Hex(authText.ToString()),
+            Auth = auth
         };
         return true;
     }
@@ -260,7 +261,7 @@ internal static class G9CSubscriptionResolver
                     };
                     if (list is null) return false;
                     value = list;
-                    canonical = string.Join('', list.Order(StringComparer.Ordinal));
+                    canonical = string.Join((char)0x1F, list.Order(StringComparer.Ordinal));
                     return true;
                 }
                 default:

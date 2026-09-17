@@ -4,11 +4,12 @@
 
   <PropertyGroup>
     <RootNamespace>G9SyncData.Client.SignalR</RootNamespace>
-    <Description>G9SyncData SignalR client transport on G9SignalRSuperNetCore: the resilient G9 connection with its jittered reconnect policy, a hand-written AOT-safe hub proxy over the source-generated wire JSON, stable error codes and server pokes. References no ASP.NET Core server assembly (safe for MAUI).</Description>
+    <Description>G9SyncData SignalR client transport on G9SignalRSuperNetCore: the resilient G9 connection with its jittered reconnect policy, a hand-written AOT-safe hub proxy over MessagePack (default) or the source-generated wire JSON, stable error codes and server pokes. References no ASP.NET Core server assembly (safe for MAUI).</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="G9SignalRSuperNetCore.Client" />
+    <PackageReference Include="G9SignalRSuperNetCore.Client.MessagePack" />
     <!-- Also brings Microsoft.Extensions.Logging.Abstractions at the version SignalR itself requires. -->
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
   </ItemGroup>

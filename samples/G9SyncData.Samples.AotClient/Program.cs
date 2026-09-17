@@ -2,7 +2,7 @@ using G9SyncData;
 using G9SyncData.Client;
 using G9SyncData.Client.Runs;
 using G9SyncData.Generated;
-using Microsoft.Data.Sqlite;
+using SQLitePCL;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +11,8 @@ using Microsoft.Extensions.Logging;
 // Syncs the sample server's sites and every site's pots into a local SQLite file, printing live progress. --watch then
 // stays connected: server changes arrive as pokes and are pulled in the background.
 
-// NativeAOT: initialise native SQLite explicitly instead of Microsoft.Data.Sqlite's reflection-based discovery.
+// NativeAOT: initialise native SQLite explicitly, once, for every SQLite user in the process. The store talks to SQLitePCL.raw
+// directly (A-11), so this app has exactly one SQLite stack - the helpers below use the same raw API.
 SQLitePCL.Batteries_V2.Init();
 
 var hubUrl = args.FirstOrDefault(a => a.StartsWith("http", StringComparison.OrdinalIgnoreCase)) ?? "http://localhost:5210/g9sync";
@@ -67,23 +68,29 @@ static async Task<G9CSyncRunResult> RunAsync(G9CSyncEngine engine, G9CSyncReques
     return result;
 }
 
-static async Task<List<Guid>> ReadSiteIdsAsync(string path)
-{
-    var ids = new List<Guid>();
-    await using var connection = new SqliteConnection("Data Source=" + path);
-    await connection.OpenAsync();
-    await using var command = connection.CreateCommand();
-    command.CommandText = "SELECT Id FROM Site ORDER BY Name";
-    await using var reader = await command.ExecuteReaderAsync();
-    while (await reader.ReadAsync()) ids.Add(Guid.Parse(reader.GetString(0)));
-    return ids;
-}
+static Task<List<Guid>> ReadSiteIdsAsync(string path) =>
+    Task.FromResult(Query(path, "SELECT Id FROM Site ORDER BY Name", statement => Guid.Parse(raw.sqlite3_column_text(statement, 0).utf8_to_string())));
 
-static async Task<long> CountAsync(string path, string table)
+static Task<long> CountAsync(string path, string table) =>
+    Task.FromResult(Query(path, $"SELECT count(*) FROM [{table}]", statement => raw.sqlite3_column_int64(statement, 0)).Single());
+
+static List<T> Query<T>(string path, string sql, Func<sqlite3_stmt, T> read)
 {
-    await using var connection = new SqliteConnection("Data Source=" + path);
-    await connection.OpenAsync();
-    await using var command = connection.CreateCommand();
-    command.CommandText = $"SELECT count(*) FROM [{table}]";
-    return (long)(await command.ExecuteScalarAsync())!;
+    if (raw.sqlite3_open_v2(path, out var db, raw.SQLITE_OPEN_READONLY, null) != raw.SQLITE_OK) throw new InvalidOperationException("Cannot open " + path);
+    try
+    {
+        raw.sqlite3_busy_timeout(db, 30_000);
+        if (raw.sqlite3_prepare_v2(db, sql, out var statement) != raw.SQLITE_OK) throw new InvalidOperationException(raw.sqlite3_errmsg(db).utf8_to_string());
+        using (statement)
+        {
+            var rows = new List<T>();
+            while (raw.sqlite3_step(statement) == raw.SQLITE_ROW) rows.Add(read(statement));
+            return rows;
+        }
+    }
+    finally
+    {
+        raw.sqlite3_close_v2(db);
+        db.Dispose();
+    }
 }

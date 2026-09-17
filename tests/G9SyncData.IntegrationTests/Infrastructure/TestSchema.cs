@@ -7,7 +7,10 @@ namespace G9SyncData.IntegrationTests.Infrastructure;
 internal sealed record ServerModelOptions(
     G9EConflictPolicy PotConflicts = G9EConflictPolicy.ColumnMerge,
     bool IncludePotNote = true,
-    G9ESyncDirection SiteDirection = G9ESyncDirection.Bidirectional);
+    G9ESyncDirection SiteDirection = G9ESyncDirection.Bidirectional,
+    Action<G9CConflictRulesBuilder>? PotConflictRules = null,
+    bool PotNoteReadOnly = false,
+    string? PotWriteRule = null);
 
 /// <summary>
 ///     A small farm domain that exercises the hard parts: a partial unique index (the Dotmim 25P02 case), a row-state
@@ -50,9 +53,12 @@ internal static class TestSchema
                 .Column("Status", G9ESyncColumnType.Int32, nullable: false)
                 .Column("Weight", G9ESyncColumnType.Decimal)
                 .Column("PlantedAt", G9ESyncColumnType.DateTime);
-            if (options.IncludePotNote) t.Column("Note", G9ESyncColumnType.String);
+            if (options.IncludePotNote && options.PotNoteReadOnly) t.Column("Note", G9ESyncColumnType.String, nullable: true, column => column.ReadOnly());
+            else if (options.IncludePotNote) t.Column("Note", G9ESyncColumnType.String);
             t.Column("IsDeleted", G9ESyncColumnType.Boolean, nullable: false)
                 .Conflicts(options.PotConflicts);
+            if (options.PotConflictRules is not null) t.OnConflict(options.PotConflictRules);
+            if (options.PotWriteRule is not null) t.WriteRule(options.PotWriteRule);
         })
         .Subscription("sites", s => s
             .Include("farm.Site", "true", "{row}.\"IsActive\""))

@@ -16,15 +16,25 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <!-- Model-only EF Core provider: the extractor tests build a real relational IModel, never a connection. -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <!-- The app-side native SQLite choice the library leaves open (ADR-0009). -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <!-- Test-only: inspects device files. The store itself uses SQLitePCL.raw (A-11). -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\G9SyncData.Abstractions\G9SyncData.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Protocol\G9SyncData.Protocol.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Server.EfCore\G9SyncData.Server.EfCore.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Server\G9SyncData.Server.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.SourceGenerators\G9SyncData.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\DotmimDeviceSql.cs" Link="Shared\DotmimDeviceSql.cs" />
   </ItemGroup>
 
   <ItemGroup>

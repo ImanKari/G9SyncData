@@ -13,6 +13,10 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+    <!-- The native SQLite stack TESTS and SAMPLES run on. The store itself always compiles against SQLitePCLRaw.core 2.1.13
+         (its published minimum); `-p:G9SqliteBundleVersion=3.0.5` runs the same store binary on the 3.x stack AgriPad
+         resolves (ADR-0032). -->
+    <G9SqliteBundleVersion Condition="'$(G9SqliteBundleVersion)' == ''">2.1.13</G9SqliteBundleVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,13 +28,21 @@
 
     <!-- Providers -->
     <PackageVersion Include="Npgsql" Version="10.0.2" />
+    <!-- Server-side EF Core model extraction (v2). Matches the version Agriculture.Infrastructure.Persistence
+         uses (10.0.5), so the same IModel can be read without a second EF Core on the host. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.5" />
     <!-- The library takes .Core only: the app owns the native SQLite choice (ADR-0009). -->
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.7" />
 
     <!-- Transport -->
-    <PackageVersion Include="G9SignalRSuperNetCore.Server" Version="2.5.3" />
-    <PackageVersion Include="G9SignalRSuperNetCore.Client" Version="2.5.3" />
+    <PackageVersion Include="G9SignalRSuperNetCore.Server" Version="2.6.0" />
+    <PackageVersion Include="G9SignalRSuperNetCore.Client" Version="2.6.0" />
+    <!-- Binary hub protocol, the client default (ADR-0039): Nerdbank.MessagePack with PolyType shapes, NativeAOT-safe. -->
+    <PackageVersion Include="G9SignalRSuperNetCore.Server.MessagePack" Version="2.6.0" />
+    <PackageVersion Include="G9SignalRSuperNetCore.Client.MessagePack" Version="2.6.0" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
+    <!-- G9SyncWireShapes (G9SyncData.Protocol): the type shapes of every hub DTO. -->
+    <PackageVersion Include="PolyType" Version="1.4.1" />
 
     <!-- Source generator (targets netstandard2.0, runs inside the compiler) -->
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
@@ -38,14 +50,21 @@
 
     <!-- Tests and samples only -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
+    <!-- Model-only EF Core provider for the extractor tests: builds an IModel with real relational metadata
+         (table names, store types, indexes) without ever opening a connection. -->
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
+    <!-- Benchmarks and device tests only: the Zstandard side of the frame-compression comparison (AiGuides/19). -->
+    <PackageVersion Include="ZstdSharp.Port" Version="0.8.8" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <!-- Native SQLite for tests/samples. 2.1.13: past CVE-2025-6965 (<= 2.1.11) and on the same 2.x managed layer
          Microsoft.Data.Sqlite.Core 10.0.x is built against; 3.x moves SQLitePCLRaw.core (AgriPad's iOS trap). -->
-    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="$(G9SqliteBundleVersion)" />
+    <!-- The client store's only SQLite dependency (A-11, ADR-0032): the managed raw API, identical in 2.1.13 and 3.x. -->
+    <PackageVersion Include="SQLitePCLRaw.core" Version="2.1.13" />
   </ItemGroup>
 
 </Project>

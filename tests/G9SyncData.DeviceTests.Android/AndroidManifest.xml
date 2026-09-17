@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Cleartext only reaches the host harness through `adb reverse` on 127.0.0.1; this package never ships. -->
+  <application android:allowBackup="false" android:label="G9SyncData device tests" android:usesCleartextTraffic="true" android:largeHeap="true">
+  </application>
+  <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

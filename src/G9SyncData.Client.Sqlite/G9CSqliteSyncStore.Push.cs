@@ -1,9 +1,10 @@
+using System.Text;
 using System.Globalization;
 using G9SyncData.Client.Sqlite.Internal;
 using G9SyncData.Client.Storage;
 using G9SyncData.Protocol;
 using G9SyncData.Protocol.RowBatch;
-using Microsoft.Data.Sqlite;
+using G9SyncData.Client.Sqlite.Native;
 
 namespace G9SyncData.Client.Sqlite;
 
@@ -13,7 +14,7 @@ namespace G9SyncData.Client.Sqlite;
 /// </summary>
 public sealed partial class G9CSqliteSyncStore
 {
-    public async Task<G9CPushBatch?> BuildPushBatchAsync(IReadOnlyList<G9DtNegotiatedTable> tables, int maxRows, CancellationToken cancellationToken)
+    public async Task<G9CPushBatch?> BuildPushBatchAsync(IReadOnlyList<G9DtNegotiatedTable> tables, int maxRows, long maxBytes, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(tables);
         EnsureInitialized();
@@ -32,8 +33,6 @@ public sealed partial class G9CSqliteSyncStore
             uploadable[local.Tid] = (local, negotiated, columns);
         }
 
-        if (uploadable.Count == 0) return null;
-
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -47,7 +46,8 @@ public sealed partial class G9CSqliteSyncStore
             var sql = "SELECT tid, pk, dirty, dirty_mask, server_ver, local_seq, coalesce(hlc_ms, 0) FROM g9_rows WHERE dirty <> 0 AND rejected = 0 AND tid IN (" +
                       string.Join(',', uploadable.Keys.Select(k => k.ToString(CultureInfo.InvariantCulture))) + ")" +
                       (inflightMax is null ? string.Empty : " AND local_seq <= $imax") + " ORDER BY local_seq LIMIT $max";
-            using (var command = Command(connection, transaction, sql))
+            var commands = ReadPendingCommands(connection, transaction, inflightBatch, Math.Max(1, maxRows));
+            using (var command = Command(connection, transaction, uploadable.Count == 0 ? "SELECT 1 WHERE 0" : sql))
             {
                 command.Parameters.AddWithValue("$max", Math.Max(1, maxRows));
                 if (inflightMax is not null) command.Parameters.AddWithValue("$imax", long.Parse(inflightMax, CultureInfo.InvariantCulture));
@@ -58,7 +58,7 @@ public sealed partial class G9CSqliteSyncStore
                 }
             }
 
-            if (rows.Count == 0)
+            if (rows.Count == 0 && commands.Count == 0)
             {
                 if (inflightBatch is not null)
                 {
@@ -70,38 +70,73 @@ public sealed partial class G9CSqliteSyncStore
                 return null;
             }
 
-            using var writer = new G9CRowBatchWriter();
-            var usedTables = new List<G9DtTableColumns>();
-            foreach (var group in rows.GroupBy(r => r.Tid))
+            // Rows are encoded in local_seq order and the batch ends at the first row that would exceed the byte budget, so the batch is
+            // always a PREFIX of the pending changes: "sent" and "still pending" stay exact across retries. One section (frame) per table.
+            var sections = new Dictionary<long, PushSection>();
+            var included = 0;
+            var includedMaxSequence = 0L;
+            var budgetUsed = 0L;
+            var truncated = false;
+            var tooLarge = new List<(long Tid, string Key, long Bytes)>();
+            try
             {
-                var (table, negotiated, columns) = uploadable[group.Key];
-                usedTables.Add(new G9DtTableColumns { TableId = negotiated.TableId, Columns = columns.Select(c => c.Name).ToList() });
-                writer.BeginSection(G9ERowBatchOp.Push, negotiated.TableId, table.Model.KeyType, columns.Select(c => c.Type).ToArray());
-
-                using var select = Command(connection, transaction,
-                    columns.Count == 0
-                        ? $"SELECT 1 FROM {table.Quoted} WHERE {table.KeyQuoted} = $k"
-                        : $"SELECT {string.Join(", ", columns.Select(c => SqliteSql.Quote(c.Name)))} FROM {table.Quoted} WHERE {table.KeyQuoted} = $k");
-                var keyParameter = select.Parameters.Add("$k", SqliteType.Text);
-                select.Prepare();
-
-                foreach (var row in group)
+                foreach (var row in rows)
                 {
+                    var (table, negotiated, columns) = uploadable[row.Tid];
+                    if (!sections.TryGetValue(row.Tid, out var section))
+                    {
+                        section = new PushSection(table, negotiated, columns, new G9CRowBatchWriter(), Command(connection, transaction,
+                            columns.Count == 0
+                                ? $"SELECT 1 FROM {table.Quoted} WHERE {table.KeyQuoted} = $k"
+                                : $"SELECT {string.Join(", ", columns.Select(c => SqliteSql.Quote(c.Name)))} FROM {table.Quoted} WHERE {table.KeyQuoted} = $k"));
+                        section.Select.Parameters.Add("$k", SqliteType.Text);
+                        section.Select.Prepare();
+                        section.Writer.BeginSection(G9ERowBatchOp.Push, negotiated.TableId, table.Model.KeyType, columns.Select(c => c.Type).ToArray());
+                        sections[row.Tid] = section;
+                    }
+
                     var hlc = row.Hlc == 0 ? 0 : row.Hlc + offsetMs;
+                    const long RowOverhead = 48;
                     if (row.Dirty == 2)
                     {
-                        writer.BeginPushRow(row.Key, G9EPushRowOp.Delete, row.Seq, row.Base, 0, hlc);
-                        writer.EndRow();
+                        var deleteBytes = RowOverhead + Encoding.UTF8.GetByteCount(row.Key);
+                        if (included > 0 && budgetUsed + deleteBytes > maxBytes)
+                        {
+                            truncated = true;
+                            break;
+                        }
+
+                        section.Writer.BeginPushRow(row.Key, G9EPushRowOp.Delete, row.Seq, row.Base, 0, hlc);
+                        section.Writer.EndRow();
+                        section.Rows++;
+                        (included, includedMaxSequence, budgetUsed) = (included + 1, row.Seq, budgetUsed + deleteBytes);
                         continue;
                     }
 
-                    keyParameter.Value = KeyValue(table, row.Key);
-                    using var reader = select.ExecuteReader();
+                    section.Select.Parameters["$k"].Value = KeyValue(table, row.Key);
+                    using var reader = section.Select.ExecuteReader();
                     if (!reader.Read())
                     {
-                        writer.BeginPushRow(row.Key, G9EPushRowOp.Delete, row.Seq, row.Base, 0, hlc);
-                        writer.EndRow();
+                        section.Writer.BeginPushRow(row.Key, G9EPushRowOp.Delete, row.Seq, row.Base, 0, hlc);
+                        section.Writer.EndRow();
+                        section.Rows++;
+                        (included, includedMaxSequence, budgetUsed) = (included + 1, row.Seq, budgetUsed + RowOverhead + Encoding.UTF8.GetByteCount(row.Key));
                         continue;
+                    }
+
+                    var rowBytes = RowOverhead + Encoding.UTF8.GetByteCount(row.Key);
+                    for (var j = 0; j < columns.Count; j++) rowBytes += EstimateEncodedBytes(reader, j, columns[j].Type);
+                    if (rowBytes > maxBytes)
+                    {
+                        // Can never fit, whatever else the batch carries: reject it here so it does not block every later push.
+                        tooLarge.Add((row.Tid, row.Key, rowBytes));
+                        continue;
+                    }
+
+                    if (included > 0 && budgetUsed + rowBytes > maxBytes)
+                    {
+                        truncated = true;
+                        break;
                     }
 
                     var pushMask = 0L;
@@ -110,47 +145,158 @@ public sealed partial class G9CSqliteSyncStore
                         if ((row.Mask & (1L << columns[j].Local)) != 0) pushMask |= 1L << j;
                     }
 
-                    writer.BeginPushRow(row.Key, G9EPushRowOp.Upsert, row.Seq, row.Base, pushMask, hlc);
-                    if (columns.Count > 0)
-                    {
-                        for (var j = 0; j < columns.Count; j++) WriteLocalValue(writer, reader, j, columns[j].Type);
-                    }
-
-                    writer.EndRow();
+                    section.Writer.BeginPushRow(row.Key, G9EPushRowOp.Upsert, row.Seq, row.Base, pushMask, hlc);
+                    for (var j = 0; j < columns.Count; j++) WriteLocalValue(section.Writer, reader, j, columns[j].Type);
+                    section.Writer.EndRow();
+                    section.Rows++;
+                    (included, includedMaxSequence, budgetUsed) = (included + 1, row.Seq, budgetUsed + rowBytes);
                 }
 
-                writer.EndSection();
-            }
+                foreach (var (tid, key, bytes) in tooLarge)
+                {
+                    Exec(connection, transaction, "UPDATE g9_rows SET rejected = 1 WHERE tid = $t AND pk = $pk", ("$t", tid), ("$pk", key));
+                    Exec(connection, transaction,
+                        "INSERT OR REPLACE INTO g9_rejections (tid, pk, code, message, sql_state, constraint_name, column_name, details, at_utc) " +
+                        "VALUES ($t, $pk, $code, $message, NULL, NULL, NULL, NULL, $at)",
+                        ("$t", tid), ("$pk", key), ("$code", G9SyncErrorCodes.RejectTooLarge),
+                        ("$message", $"The row needs about {bytes} bytes; the server accepts at most {maxBytes} bytes per push."), ("$at", NowMs()));
+                }
 
-            long batchId;
-            long maxSequence;
-            if (inflightBatch is not null)
-            {
-                batchId = long.Parse(inflightBatch, CultureInfo.InvariantCulture);
-                maxSequence = long.Parse(inflightMax!, CultureInfo.InvariantCulture);
-            }
-            else
-            {
-                batchId = long.Parse(Meta(connection, transaction, "next_batch_id") ?? "1", CultureInfo.InvariantCulture);
-                maxSequence = rows.Max(r => r.Seq);
-                SetMeta(connection, transaction, "next_batch_id", (batchId + 1).ToString(CultureInfo.InvariantCulture));
-                SetMeta(connection, transaction, "inflight_batch_id", batchId.ToString(CultureInfo.InvariantCulture));
-                SetMeta(connection, transaction, "inflight_max_seq", maxSequence.ToString(CultureInfo.InvariantCulture));
-            }
+                if (included == 0 && commands.Count == 0)
+                {
+                    if (tooLarge.Count == 0) return null;
+                    transaction.Commit();
+                    return new G9CPushBatch { BatchId = 0, MaxSequence = 0, Frames = [], Tables = [], RowCount = 0, RejectedLocally = tooLarge.Count };
+                }
 
-            transaction.Commit();
-            return new G9CPushBatch
+                var frames = new List<byte[]>();
+                var usedTables = new List<G9DtTableColumns>();
+                foreach (var section in sections.Values.Where(section => section.Rows > 0))
+                {
+                    section.Writer.EndSection();
+                    frames.Add(section.Writer.ToFrame());
+                    usedTables.Add(new G9DtTableColumns { TableId = section.Negotiated.TableId, Columns = section.Columns.Select(c => c.Name).ToList() });
+                }
+
+                long batchId;
+                long maxSequence;
+                if (inflightBatch is not null)
+                {
+                    batchId = long.Parse(inflightBatch, CultureInfo.InvariantCulture);
+                    maxSequence = long.Parse(inflightMax!, CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    batchId = long.Parse(Meta(connection, transaction, "next_batch_id") ?? "1", CultureInfo.InvariantCulture);
+                    maxSequence = includedMaxSequence;
+                    SetMeta(connection, transaction, "next_batch_id", (batchId + 1).ToString(CultureInfo.InvariantCulture));
+                    SetMeta(connection, transaction, "inflight_batch_id", batchId.ToString(CultureInfo.InvariantCulture));
+                    SetMeta(connection, transaction, "inflight_max_seq", maxSequence.ToString(CultureInfo.InvariantCulture));
+                }
+
+                foreach (var item in commands)
+                {
+                    Exec(connection, transaction, "UPDATE g9_commands SET batch_id = $b WHERE command_id = $id", ("$b", batchId), ("$id", item.CommandId.ToString("D")));
+                }
+
+                transaction.Commit();
+                return new G9CPushBatch
+                {
+                    BatchId = batchId,
+                    MaxSequence = maxSequence,
+                    Frames = frames,
+                    Tables = usedTables,
+                    RowCount = included,
+                    Truncated = truncated,
+                    RejectedLocally = tooLarge.Count,
+                    Commands = commands
+                };
+            }
+            finally
             {
-                BatchId = batchId,
-                MaxSequence = maxSequence,
-                Frames = [writer.ToFrame()],
-                Tables = usedTables,
-                RowCount = rows.Count
-            };
+                foreach (var section in sections.Values) section.Dispose();
+            }
         }
         finally
         {
             _writeLock.Release();
+        }
+    }
+
+    public async Task<int> ForgetUploadedRowsAsync(string localTable, IReadOnlyCollection<string>? keys, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localTable);
+        EnsureInitialized();
+        var table = _byLocal.GetValueOrDefault(localTable) ?? throw new ArgumentException($"'{localTable}' is not a synced table.", nameof(localTable));
+        if (table.Negotiated?.Direction != G9ESyncDirection.UploadOnly)
+        {
+            throw new InvalidOperationException($"'{localTable}' is not upload-only: deleting its rows locally is a change the server must receive.");
+        }
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var transaction = connection.BeginTransaction(deferred: false);
+            Exec(connection, transaction, "UPDATE g9_ctx SET applying = 1 WHERE id = 1");   // a library write: not captured
+            Exec(connection, transaction, "CREATE TEMP TABLE IF NOT EXISTS g9_forget (pk TEXT PRIMARY KEY); DELETE FROM g9_forget");
+            if (keys is null)
+            {
+                Exec(connection, transaction, "INSERT INTO g9_forget (pk) SELECT pk FROM g9_rows WHERE tid = $t AND dirty = 0", ("$t", table.Tid));
+            }
+            else
+            {
+                using var add = Command(connection, transaction, "INSERT OR IGNORE INTO g9_forget (pk) SELECT pk FROM g9_rows WHERE tid = $t AND pk = $pk AND dirty = 0");
+                add.Parameters.AddWithValue("$t", table.Tid);
+                var pk = add.Parameters.Add("$pk", SqliteType.Text);
+                foreach (var key in keys)
+                {
+                    pk.Value = key;
+                    add.ExecuteNonQuery();
+                }
+            }
+
+            var forgotten = Convert.ToInt32(Scalar(connection, transaction, "SELECT count(*) FROM g9_forget"), CultureInfo.InvariantCulture);
+            Exec(connection, transaction, $"DELETE FROM {table.Quoted} WHERE CAST({table.KeyQuoted} AS TEXT) IN (SELECT pk FROM g9_forget)");
+            Exec(connection, transaction, "DELETE FROM g9_rows WHERE tid = $t AND pk IN (SELECT pk FROM g9_forget); DELETE FROM g9_forget", ("$t", table.Tid));
+            Exec(connection, transaction, "UPDATE g9_ctx SET applying = 0 WHERE id = 1");
+            transaction.Commit();
+            return forgotten;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>A conservative upper bound of one value's encoded size in a push frame (before compression).</summary>
+    private static long EstimateEncodedBytes(SqliteDataReader reader, int ordinal, G9ESyncColumnType type)
+    {
+        if (reader.IsDBNull(ordinal)) return 1;
+        return type switch
+        {
+            G9ESyncColumnType.String => 5 + Encoding.UTF8.GetByteCount(reader.GetString(ordinal)),
+            G9ESyncColumnType.Bytes => 5 + (reader.GetValue(ordinal) is byte[] blob ? blob.Length : Encoding.UTF8.GetByteCount(reader.GetString(ordinal))),
+            G9ESyncColumnType.Decimal or G9ESyncColumnType.Guid => 17,
+            _ => 9
+        };
+    }
+
+    /// <summary>One table's part of a push batch being built.</summary>
+    private sealed class PushSection(LocalTable table, G9DtNegotiatedTable negotiated, List<(string Name, G9ESyncColumnType Type, int Local)> columns,
+        G9CRowBatchWriter writer, SqliteCommand select) : IDisposable
+    {
+        public LocalTable Table { get; } = table;
+        public G9DtNegotiatedTable Negotiated { get; } = negotiated;
+        public List<(string Name, G9ESyncColumnType Type, int Local)> Columns { get; } = columns;
+        public G9CRowBatchWriter Writer { get; } = writer;
+        public SqliteCommand Select { get; } = select;
+        public int Rows { get; set; }
+
+        public void Dispose()
+        {
+            Select.Dispose();
+            Writer.Dispose();
         }
     }
 
@@ -164,7 +310,11 @@ public sealed partial class G9CSqliteSyncStore
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using var transaction = connection.BeginTransaction(deferred: false);
+
+            // Before BeginApply: finished commands release their rows, so the canonical rows below replace the optimistic ones.
+            var completed = CompleteCommands(connection, transaction, result.CommandResults);
             using var context = BeginApply(connection, transaction, dirtyAfterSequence: batch.MaxSequence, progress: null, backfills: []);
+            context.Report.CommandsCompleted = completed;
 
             using (var accept = Command(connection, transaction,
                        "UPDATE g9_rows SET server_ver = $v, " +

@@ -96,7 +96,10 @@ public sealed class G9CSyncServerTable
     /// <summary>Registration order; the push applies tables in this order (register parents first).</summary>
     public int Order { get; }
 
-    public bool TracksColumnVersions => ConflictPolicy == G9EConflictPolicy.ColumnMerge;
+    /// <summary>Ordered conflict rules (A-05); null when the table uses its policy alone.</summary>
+    public G9CConflictRules? ConflictRules { get; internal init; }
+
+    public bool TracksColumnVersions => ConflictPolicy == G9EConflictPolicy.ColumnMerge || ConflictRules is { Rules.Count: > 0 };
     public bool AcceptsUploads => Direction != G9ESyncDirection.DownloadOnly;
 
     public G9CSyncServerColumn? FindColumn(string name) => _byName.GetValueOrDefault(name);
@@ -128,12 +131,14 @@ public sealed class G9CSyncParameterDefinition
 /// <summary>How one table participates in a subscription.</summary>
 public sealed class G9CSyncSubscriptionTable
 {
-    internal G9CSyncSubscriptionTable(G9CSyncServerTable table, string scopeSql, string? whenSql, bool allowUpload)
+    internal G9CSyncSubscriptionTable(G9CSyncServerTable table, string scopeSql, string? whenSql, bool allowUpload,
+        IG9SyncScopeProvider? scopeProvider = null)
     {
         Table = table;
         ScopeSql = scopeSql;
         WhenSql = whenSql;
         AllowUpload = allowUpload;
+        ScopeProvider = scopeProvider;
     }
 
     public G9CSyncServerTable Table { get; }
@@ -146,6 +151,12 @@ public sealed class G9CSyncSubscriptionTable
 
     /// <summary>Row-state filter inside the scope (e.g. <c>{row}."IsCurrent"</c>). Null means every scoped row.</summary>
     public string? WhenSql { get; }
+
+    /// <summary>
+    ///     When set, membership comes from this provider's per-request key query instead of <see cref="ScopeSql" /> (which then
+    ///     only carries the provider's fingerprint, for the definition hash).
+    /// </summary>
+    public IG9SyncScopeProvider? ScopeProvider { get; }
 
     /// <summary>Whether clients may upload rows of this table under this subscription.</summary>
     public bool AllowUpload { get; }

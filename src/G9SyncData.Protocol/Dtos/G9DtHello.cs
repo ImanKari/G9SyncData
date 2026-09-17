@@ -92,5 +92,12 @@ public sealed class G9DtHelloResult
     public List<string> UnknownTables { get; set; } = [];
     public List<G9DtSubscriptionDefinition> Definitions { get; set; } = [];
     public List<G9DtSubscriptionState> Subscriptions { get; set; } = [];
+
+    /// <summary>The most rows the server accepts in one push; the client sizes its batches to it (0 = not announced).</summary>
+    public int MaxPushRows { get; set; }
+
+    /// <summary>The most frame bytes the server accepts in one push; the client sizes its batches to it (0 = not announced).</summary>
+    public long MaxPushBytes { get; set; }
+
     public G9DtSyncError? Error { get; set; }
 }

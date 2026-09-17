@@ -16,7 +16,9 @@ dotnet publish samples/G9SyncData.Samples.AotClient -c Release -r win-x64
 samples\G9SyncData.Samples.AotClient\bin\Release\net10.0\win-x64\publish\G9SyncData.Samples.AotClient.exe http://localhost:5210/g9sync
 ```
 
-Last verified 2026-09-16 (client telemetry included): zero trim/AOT warnings, 10.3 MB executable plus `e_sqlite3.dll`. On
+Last verified 2026-09-17 with the MessagePack hub protocol (the client default, ADR-0039): zero trim/AOT warnings, 14.6 MB
+executable; the native client synced the sample server's 50,080 rows over MessagePack in 613 ms. Before (2026-09-16, JSON): 10.3 MB
+executable plus `e_sqlite3.dll`. On
 2026-09-15 the native executable
 synced the sample server over SignalR: initial pull of 50,000 pots applied in 1.2 s, the following delta of 80 rows in
 17 ms (development machine, loopback — not a device measurement).
@@ -27,6 +29,7 @@ synced the sample server over SignalR: initial pull of 50,000 pots applied in 1.
 |---|---|---|
 | JSON | `G9SyncJsonContext.Default.X` / `G9SyncClientJsonContext`; register new types on the context | `JsonSerializer.Serialize(obj)` without type info |
 | SignalR JSON | insert the context at the head of `TypeInfoResolverChain` (both sides do) | default reflection resolver |
+| SignalR MessagePack | `[GenerateShapeFor<T>]` in `G9SyncWireShapes` + `AddG9MessagePackProtocol` (Nerdbank.MessagePack) | `Microsoft.AspNetCore.SignalR.Protocols.MessagePack` (reflection, not AOT-safe) |
 | Logging | `[LoggerMessage]` partial methods | `logger.LogInformation($"...")` |
 | Regex | `[GeneratedRegex]` | `new Regex(...)` |
 | Entity model | the source generator | reflection over properties |
@@ -35,9 +38,9 @@ synced the sample server over SignalR: initial pull of 50,000 pots applied in 1.
 
 ## Native SQLite under AOT
 
-`Microsoft.Data.Sqlite` discovers the native provider by reflection unless initialised. Apps call
-`SQLitePCL.Batteries_V2.Init()` before the first connection (the AOT sample does). The library itself references only
-`Microsoft.Data.Sqlite.Core` (ADR-0009).
+The store talks to `SQLitePCL.raw` directly and never discovers a provider: apps call `SQLitePCL.Batteries_V2.Init()` before the
+first connection (the AOT sample does, and uses the same raw API for its own queries). The library references only
+`SQLitePCLRaw.core` (ADR-0032); there is no reflection on the store's data path.
 
 ## SignalR under AOT
 

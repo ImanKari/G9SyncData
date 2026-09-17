@@ -8,11 +8,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Source-generated type shapes for the binary hub protocol (G9SyncWireShapes). -->
+    <PackageReference Include="PolyType" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\G9SyncData.Abstractions\G9SyncData.Abstractions.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.DeviceTests" />
   </ItemGroup>
 
 </Project>

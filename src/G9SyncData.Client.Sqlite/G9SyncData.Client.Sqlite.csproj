@@ -8,8 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- No native bundle: the consuming app references one (AiGuides/08-Client-Sqlite.md, ADR-0009). -->
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <!-- SQLitePCL.raw only - no ADO.NET provider (A-11, ADR-0032): one SQLite stack in the app's process. No native bundle either: the
+         consuming app references one and initialises it (AiGuides/08-Client-Sqlite.md, ADR-0009). Compiled against core 2.1.x, whose raw
+         API is identical in 3.0.x (3.x changed packaging only), so the app's own SQLitePCLRaw version is the one that runs. -->
+    <PackageReference Include="SQLitePCLRaw.core" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
@@ -19,6 +21,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.DeviceTests" />
     <InternalsVisibleTo Include="G9SyncData.IntegrationTests" />
   </ItemGroup>
 

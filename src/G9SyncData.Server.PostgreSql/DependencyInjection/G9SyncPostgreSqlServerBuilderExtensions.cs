@@ -1,5 +1,6 @@
 using G9SyncData.Server.Model;
 using G9SyncData.Server.PostgreSql;
+using G9SyncData.Server.PostgreSql.Capture;
 using G9SyncData.Server.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -31,8 +32,20 @@ public static class G9SyncPostgreSqlServerBuilderExtensions
             dataSourceFactory(sp),
             sp.GetRequiredService<G9CSyncServerModel>(),
             options,
-            sp.GetRequiredService<ILogger<G9CPostgresSyncStore>>()));
+            sp.GetRequiredService<ILogger<G9CPostgresSyncStore>>(),
+            sp));
         builder.Services.AddSingleton<IG9SyncServerStore>(sp => sp.GetRequiredService<G9CPostgresSyncStore>());
+
+        // WAL capture (ADR-0028): the consumer records changes made outside G9SyncData and answers push sync points. Without
+        // it every push in WAL mode would time out waiting for a sync point - by design, rather than risk a blind overwrite.
+        if (options.CaptureMode == G9EPostgresCaptureMode.WriteAheadLog)
+        {
+            builder.Services.AddHostedService(sp => new G9CWalCaptureService(
+                sp.GetRequiredService<G9SyncData.Server.G9CSyncServerEngine>(),
+                sp.GetRequiredService<G9CPostgresSyncStore>(),
+                sp.GetRequiredService<ILoggerFactory>()));
+        }
+
         return builder;
     }
 }

@@ -41,6 +41,9 @@ classify failures by code, never by message (plan P-19).
 | `G9S-REJ-CONSTRAINT` | database constraint (SQLSTATE and constraint name attached) | show, fix, row re-uploads on edit |
 | `G9S-REJ-PERMISSION` | row outside the client's writable scope | discard or re-scope |
 | `G9S-REJ-DIRECTION` | upload to a DownloadOnly table / include | developer error |
+| `G9S-CMD-UNKNOWN` | no server handler for the command's name and version | ship the handler before the app version that records the command |
+| `G9S-CMD-REJECTED` | a command handler refused without an application code | show the command's message |
+| `G9S-REJ-TOO-LARGE` | one row is larger than the server's announced `MaxPushBytes`; rejected on the device, every other row uploads | shrink the row (attachments belong in files) |
 | `G9S-REJ-TOO-MANY` | more rejections than `MaxRejectionsPerPush`: whole push failed | systematic bug; investigate |
 | `G9S-REJ-MALFORMED` | frame could not be decoded | library bug |
 | `G9S-CON-SERVER-WINS` | client change dropped by ServerWins | canonical row applied |

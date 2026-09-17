@@ -15,7 +15,7 @@ graph TD
     CLI --> TEST
     GEN[G9SyncData.SourceGenerators] -. analyzer .-> APP[App]
     PG --> NPG[(Npgsql)]
-    SQL --> MDS[(Microsoft.Data.Sqlite.Core)]
+    SQL --> MDS[(SQLitePCLRaw.core)]
     SRVSR --> G9S[(G9SignalRSuperNetCore.Server)]
     CLISR --> G9C[(G9SignalRSuperNetCore.Client)]
 ```
@@ -28,7 +28,7 @@ graph TD
 | Server.PostgreSql | net10.0 | yes | Server, Npgsql |
 | Server.SignalR | net10.0 | yes (hub ctor `RequiresDynamicCode`) | Server, ASP.NET Core, G9SignalRSuperNetCore.Server |
 | Client | net10.0 | yes | Protocol |
-| Client.Sqlite | net10.0 | yes | Client, Microsoft.Data.Sqlite.Core |
+| Client.Sqlite | net10.0 | yes | Client, SQLitePCLRaw.core (ADR-0032) |
 | Client.SignalR | net10.0 | yes | Client, SignalR.Client, G9SignalRSuperNetCore.Client |
 | SourceGenerators | netstandard2.0 | n/a (compiler) | Roslyn |
 | Testing | net10.0 | yes | Server, Client |

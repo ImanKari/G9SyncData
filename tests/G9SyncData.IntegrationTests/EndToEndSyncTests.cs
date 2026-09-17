@@ -1,5 +1,6 @@
 using G9SyncData.Client.Runs;
 using G9SyncData.IntegrationTests.Infrastructure;
+using G9SyncData.Protocol;
 using G9SyncData.Testing;
 using Npgsql;
 using static G9SyncData.IntegrationTests.Infrastructure.TestSchema;
@@ -119,6 +120,7 @@ public sealed class EndToEndSyncTests(ITestOutputHelper output)
         Assert.False(await client.ExistsAsync("Pot", late));
 
         await transaction.CommitAsync();
+        await harness.WaitForCaptureAsync();   // WAL mode records it after commit; trigger mode already has
         await client.SyncOkAsync();
         Assert.True(await client.ExistsAsync("Pot", late), "A timestamp or sequence cursor loses this row; the snapshot cursor must not.");
     }
@@ -266,11 +268,31 @@ public sealed class EndToEndSyncTests(ITestOutputHelper output)
         await Task.Delay(50);
         Assert.True(await harness.Store.CleanupTombstonesAsync(TimeSpan.Zero, CancellationToken.None) >= 1);
 
-        // Reconciles once; the fresh cursor must then be accepted although the long transaction is still open.
-        await client.SyncOkAsync();
+        // Reconciles; the fresh cursor must then be accepted although the long transaction is still open. The first run may itself
+        // end on the conservative ResyncRequired explained below (LES-0029 addendum), so it syncs until settled.
+        await client.SyncUntilSettledAsync();
         Assert.False(await client.ExistsAsync("Pot", pots[0]));
-        await client.SyncOkAsync();
-        Assert.Equal(1, client.InMemory.CallCount(G9ETransportOperation.Reconcile));
+
+        // The property is "no ENDLESS reconciliation", not "exactly one": xids are cluster-wide, and with a retention of zero the
+        // purged tombstone's xid is seconds old, so a short transaction of a parallel test (another database, same cluster) that was
+        // in progress at the new cursor and commits afterwards legitimately forces one more, conservative, reconciliation. With a
+        // real retention (days) no such transaction exists. The count must stop growing while the long transaction stays open.
+        var reconciles = client.InMemory.CallCount(G9ETransportOperation.Reconcile);
+        var stable = false;
+        for (var attempt = 0; attempt < 5 && !stable; attempt++)
+        {
+            // A run may report the conservative ResyncRequired as a subscription problem; the next run reconciles it.
+            var run = await client.SyncAsync();
+            Assert.True(run.Outcome is G9ESyncOutcome.Succeeded
+                        || (run.Outcome == G9ESyncOutcome.CompletedWithRejections && run.Problems.All(p => p.Action == G9ESubscriptionAction.ResyncRequired)),
+                SyncClient.Describe(run));
+            var now = client.InMemory.CallCount(G9ETransportOperation.Reconcile);
+            stable = now == reconciles;
+            reconciles = now;
+        }
+
+        Assert.True(stable, $"Reconciliation did not stop while an unrelated transaction was open ({reconciles} reconciliations).");
+        Assert.True(reconciles <= 5, $"{reconciles} reconciliations for one purged tombstone.");   // settling (<= 4 runs) + one stable run
 
         await transaction.RollbackAsync();
     }

@@ -6,8 +6,9 @@ using System.Text;
 namespace G9SyncData.Protocol.RowBatch;
 
 /// <summary>
-///     Reads a G9RowBatch frame produced by <see cref="G9CRowBatchWriter" />. Forward-only and allocation-light:
-///     values are decoded from the frame buffer on demand; only <see cref="GetString" /> and <see cref="Key" /> allocate.
+///     Reads a G9RowBatch frame produced by <see cref="G9CRowBatchWriter" />, in either body layout (1 row-wise, 2 column-grouped).
+///     Forward-only and allocation-light: values are decoded from the frame buffer on demand; only <see cref="GetString" /> and
+///     <see cref="Key" /> allocate.
 /// </summary>
 public sealed class G9CRowBatchReader : IDisposable
 {
@@ -74,18 +75,26 @@ public sealed class G9CRowBatchReader : IDisposable
             throw new FormatException("Not a G9RowBatch frame.");
         }
 
-        if (frame[4] != G9RowBatchFormat.Version) throw new FormatException($"Unsupported G9RowBatch version {frame[4]}.");
+        var version = frame[4];
+        if (version is not (G9RowBatchFormat.Version or G9RowBatchFormat.ColumnVersion))
+        {
+            throw new FormatException($"Unsupported G9RowBatch version {version}.");
+        }
+
         var compression = (G9ECompression)frame[5];
         var bodyLength = BinaryPrimitives.ReadInt32LittleEndian(frame.AsSpan(6, 4));
-        if (bodyLength < 4 || bodyLength > G9RowBatchFormat.MaxBodyBytes) throw new FormatException("Invalid body length.");
+        if (bodyLength < 4 || bodyLength > G9RowBatchFormat.MaxBodyBytes + (64 * 1024 * 1024)) throw new FormatException("Invalid body length.");
 
         switch (compression)
         {
             case G9ECompression.None:
                 if (frame.Length - G9RowBatchFormat.HeaderSize != bodyLength) throw new FormatException("Body length mismatch.");
-                return new G9CRowBatchReader(frame, G9RowBatchFormat.HeaderSize, bodyLength, rented: false);
+                return version == G9RowBatchFormat.Version
+                    ? new G9CRowBatchReader(frame, G9RowBatchFormat.HeaderSize, bodyLength, rented: false)
+                    : FromColumns(frame.AsSpan(G9RowBatchFormat.HeaderSize, bodyLength));
             case G9ECompression.Brotli:
                 var body = ArrayPool<byte>.Shared.Rent(bodyLength);
+                var keep = false;
                 try
                 {
                     if (!BrotliDecoder.TryDecompress(frame.AsSpan(G9RowBatchFormat.HeaderSize), body.AsSpan(0, bodyLength), out var written)
@@ -94,15 +103,31 @@ public sealed class G9CRowBatchReader : IDisposable
                         throw new FormatException("Brotli body could not be decompressed.");
                     }
 
+                    if (version == G9RowBatchFormat.ColumnVersion) return FromColumns(body.AsSpan(0, bodyLength));
+                    keep = true;
                     return new G9CRowBatchReader(body, 0, bodyLength, rented: true);
                 }
-                catch
+                finally
                 {
-                    ArrayPool<byte>.Shared.Return(body);
-                    throw;
+                    if (!keep) ArrayPool<byte>.Shared.Return(body);
                 }
             default:
                 throw new FormatException($"Unknown compression {(byte)compression}.");
+        }
+    }
+
+    /// <summary>A column-grouped body is regrouped into rows once, then read like any row-wise body.</summary>
+    private static G9CRowBatchReader FromColumns(ReadOnlySpan<byte> columns)
+    {
+        var rows = G9RowBatchColumnLayout.ToRows(columns, out var length);
+        try
+        {
+            return new G9CRowBatchReader(rows, 0, length, rented: true);
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(rows);
+            throw;
         }
     }
 
@@ -126,10 +151,10 @@ public sealed class G9CRowBatchReader : IDisposable
         var body = Body;
         Op = (G9ERowBatchOp)ReadByte(body);
         if (!Enum.IsDefined(Op)) throw new FormatException($"Unknown op {(byte)Op}.");
-        TableId = checked((int)G9Varint.Read(body, ref _position));
+        TableId = G9Varint.ReadInt32(body, ref _position);
         KeyType = (G9ESyncColumnType)ReadByte(body);
         if (!G9CSyncKey.IsSupportedKeyType(KeyType)) throw new FormatException($"Unsupported key type {KeyType}.");
-        var columnCount = checked((int)G9Varint.Read(body, ref _position));
+        var columnCount = G9Varint.ReadInt32(body, ref _position);
         if (columnCount > 1024) throw new FormatException("Too many columns.");
         EnsureAvailable(body, columnCount + 4);
         _types = new G9ESyncColumnType[columnCount];
@@ -169,7 +194,7 @@ public sealed class G9CRowBatchReader : IDisposable
                 _keyLength = _position - _keyStart;
                 break;
             default:
-                var length = checked((int)G9Varint.Read(body, ref _position));
+                var length = G9Varint.ReadInt32(body, ref _position);
                 EnsureAvailable(body, length);
                 _keyStart = _position;
                 _keyLength = length;
@@ -251,7 +276,8 @@ public sealed class G9CRowBatchReader : IDisposable
     public int GetInt32(int column)
     {
         var position = Offset(column, G9ESyncColumnType.Int32);
-        return checked((int)G9Varint.UnZigZag(G9Varint.Read(Body, ref position)));
+        var value = G9Varint.UnZigZag(G9Varint.Read(Body, ref position));
+        return value is >= int.MinValue and <= int.MaxValue ? (int)value : throw new FormatException("Int32 value is out of range.");
     }
 
     public long GetInt64(int column)
@@ -268,6 +294,8 @@ public sealed class G9CRowBatchReader : IDisposable
         var position = Offset(column, G9ESyncColumnType.Decimal);
         Span<int> bits = stackalloc int[4];
         for (var i = 0; i < 4; i++) bits[i] = BinaryPrimitives.ReadInt32LittleEndian(Body.Slice(position + (i * 4), 4));
+        // decimal.GetBits: bits 0-15 and 24-30 of the flags are zero and the scale is at most 28.
+        if ((bits[3] & 0x7F00FFFF) != 0 || ((bits[3] >> 16) & 0xFF) > 28) throw new FormatException("Invalid decimal value.");
         return new decimal(bits);
     }
 
@@ -281,15 +309,24 @@ public sealed class G9CRowBatchReader : IDisposable
     {
         var position = Offset(column, G9ESyncColumnType.DateTime);
         var ticks = BinaryPrimitives.ReadInt64LittleEndian(Body.Slice(position, 8));
-        return new DateTime(ticks, (DateTimeKind)Body[position + 8]);
+        var kind = Body[position + 8];
+        if ((ulong)ticks > (ulong)DateTime.MaxValue.Ticks || kind > (byte)DateTimeKind.Local) throw new FormatException("Invalid DateTime value.");
+        return new DateTime(ticks, (DateTimeKind)kind);
     }
 
     public DateTimeOffset GetDateTimeOffset(int column)
     {
         var position = Offset(column, G9ESyncColumnType.DateTimeOffset);
         var utcTicks = BinaryPrimitives.ReadInt64LittleEndian(Body.Slice(position, 8));
-        var offset = TimeSpan.FromMinutes(BinaryPrimitives.ReadInt16LittleEndian(Body.Slice(position + 8, 2)));
-        return new DateTimeOffset(utcTicks + offset.Ticks, offset);
+        var minutes = BinaryPrimitives.ReadInt16LittleEndian(Body.Slice(position + 8, 2));
+        var offset = TimeSpan.FromMinutes(minutes);
+        var local = utcTicks + offset.Ticks;
+        if (minutes is < -840 or > 840 || (ulong)utcTicks > (ulong)DateTime.MaxValue.Ticks || (ulong)local > (ulong)DateTime.MaxValue.Ticks)
+        {
+            throw new FormatException("Invalid DateTimeOffset value.");
+        }
+
+        return new DateTimeOffset(local, offset);
     }
 
     public TimeSpan GetTimeSpan(int column)
@@ -375,7 +412,7 @@ public sealed class G9CRowBatchReader : IDisposable
                     _position += 10;
                     break;
                 case G9ESyncColumnType.String or G9ESyncColumnType.Bytes:
-                    var length = checked((int)G9Varint.Read(body, ref _position));
+                    var length = G9Varint.ReadInt32(body, ref _position);
                     EnsureAvailable(body, length);
                     _position += length;
                     break;
@@ -404,7 +441,7 @@ public sealed class G9CRowBatchReader : IDisposable
     private ReadOnlySpan<byte> LengthPrefixed(int position)
     {
         var body = Body;
-        var length = checked((int)G9Varint.Read(body, ref position));
+        var length = G9Varint.ReadInt32(body, ref position);
         return body.Slice(position, length);
     }
 

@@ -43,10 +43,17 @@ internal sealed class PgTable
     public required string BaseName { get; init; }
     public required string TrackingName { get; init; }
     public required string TrackingBare { get; init; }
+
+    /// <summary>The UNLOGGED table holding materialised visibility key sets of this table (ADR-0030).</summary>
+    public required string KeySetName { get; init; }
     public required PgColumn Key { get; init; }
     public required string KeyStagingType { get; init; }
     public required NpgsqlDbType KeyStagingDbType { get; init; }
     public required IReadOnlyDictionary<string, PgBoundColumn> Columns { get; init; }
+
+    /// <summary>NOT NULL columns without a default that an uploaded insert cannot set: fine only when a row writer owns the uploads.</summary>
+    public IReadOnlyList<string> RequiredUnwritableColumns { get; init; } = [];
+
     public required int ExtraUniqueIndexes { get; init; }
     public required double AverageRowBytes { get; init; }
 

@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Android device test app (AiGuides/12-Testing.md → "Android"). It is driven from the host by
+    tests/G9SyncData.IntegrationTests/Android (opt-in: G9SYNC_ANDROID=auto|<serial>), never launched by hand, and it is
+    its OWN package - a device running AgriPad keeps its app, data and session untouched.
+
+    What runs on the device:
+      unit        the client library's unit tests (SQLite native layer, store, bulk apply, revocation) through a small
+                  reflection runner - the same test sources as tests/G9SyncData.Tests, linked below;
+      apply       the SQLite apply benchmark (benchmarks/.../SqliteApplyBenchmark.cs), every variant;
+      sync        a real client engine over SignalR to a harness server on the host (adb reverse), large-site workload
+                  (tests/Shared/DeviceSchema.*), with timings, CPU, allocations, memory, file sizes and UI-thread lag.
+
+    Release mirrors AgriPad's Android Release (profiled AOT, partial trimming) so its numbers are production numbers.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>G9SyncData.DeviceTests</RootNamespace>
+    <AssemblyName>G9SyncData.DeviceTests</AssemblyName>
+    <ApplicationId>com.g9tm.g9syncdata.devicetests</ApplicationId>
+    <ApplicationTitle>G9SyncData device tests</ApplicationTitle>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <!-- Test code: underscores in names, no ConfigureAwait, dynamic SQL, sync-over-async in the reflection runner. -->
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1515;CA1861;CA2100;CA1849;CA1031;CA1305;CA1307;CA1310;CA2000;CA1822;CA1812;CA5394;IL2026;IL2067;IL2070;IL2072;IL2075;IL3050</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <AndroidEnableProfiledAot>true</AndroidEnableProfiledAot>
+    <TrimMode>partial</TrimMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- AgriPad's Android SQLite stack is the 3.x generation (SQLitePCLRaw.core 3.0.x, e_sqlite3 3.53.x). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" VersionOverride="3.0.5" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="ZstdSharp.Port" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Client.SignalR\G9SyncData.Client.SignalR.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\DeviceSchema.Client.cs" Link="Shared\DeviceSchema.Client.cs" />
+    <Compile Include="..\Shared\DotmimDeviceSql.cs" Link="Shared\DotmimDeviceSql.cs" />
+    <Compile Include="..\G9SyncData.Tests\Client\SqliteDotmimRetirementTests.cs" Link="Linked\Tests\SqliteDotmimRetirementTests.cs" />
+    <Compile Include="..\..\benchmarks\G9SyncData.Benchmarks\SqliteApplyBenchmark.cs" Link="Linked\SqliteApplyBenchmark.cs" />
+    <Compile Include="..\..\benchmarks\G9SyncData.Benchmarks\DigestBenchmark.cs" Link="Linked\DigestBenchmark.cs" />
+    <Compile Include="..\..\benchmarks\G9SyncData.Benchmarks\CompressionBenchmark.cs" Link="Linked\CompressionBenchmark.cs" />
+    <Compile Include="..\G9SyncData.Tests\Client\SqliteApplyValueTests.cs" Link="Linked\Tests\SqliteApplyValueTests.cs" />
+    <Compile Include="..\G9SyncData.Tests\Abstractions\AbstractionsTests.cs" Link="Linked\Tests\AbstractionsTests.cs" />
+    <Compile Include="..\G9SyncData.Tests\Client\SqliteNativeTests.cs" Link="Linked\Tests\SqliteNativeTests.cs" />
+    <Compile Include="..\G9SyncData.Tests\Client\SqliteSyncStoreTests.cs" Link="Linked\Tests\SqliteSyncStoreTests.cs" />
+    <Compile Include="..\G9SyncData.Tests\Client\SqliteBulkApplyTests.cs" Link="Linked\Tests\SqliteBulkApplyTests.cs" />
+    <Compile Include="..\G9SyncData.Tests\Client\RevocationPolicyUnitTests.cs" Link="Linked\Tests\RevocationPolicyUnitTests.cs" />
+    <!-- G9RowBatch codec and layout 2 (ADR-0040): span arithmetic and pooled buffers under Android AOT. -->
+    <Compile Include="..\G9SyncData.Tests\Protocol\RowBatchCodecTests.cs" Link="Linked\Tests\RowBatchCodecTests.cs" />
+    <Compile Include="..\G9SyncData.Tests\Protocol\RowBatchColumnLayoutTests.cs" Link="Linked\Tests\RowBatchColumnLayoutTests.cs" />
+  </ItemGroup>
+
+</Project>

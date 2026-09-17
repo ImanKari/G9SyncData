@@ -14,6 +14,8 @@
 dotnet build G9SyncData.slnx                                    # must be clean: warnings are errors
 dotnet test tests/G9SyncData.Tests                              # no database
 dotnet test tests/G9SyncData.IntegrationTests                   # disposable PostgreSQL
+dotnet test tests/G9SyncData.Tests -p:G9SqliteBundleVersion=3.0.5   # same store binary on the SQLitePCLRaw 3.x stack (ADR-0032)
+$env:G9SYNC_ANDROID = "auto"; dotnet test tests/G9SyncData.IntegrationTests --filter "FullyQualifiedName~Android"   # device/emulator (12-Testing)
 dotnet publish samples/G9SyncData.Samples.AotClient -c Release -r win-x64   # NativeAOT proof
 dotnet pack G9SyncData.slnx -c Release                          # → artifacts/pack
 dotnet run -c Release --project benchmarks/G9SyncData.Benchmarks # disposable PostgreSQL; writes benchmarks/results/latest.md
@@ -38,7 +40,7 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 | Error | Cause | Fix |
 |---|---|---|
-| `NU1903` SQLitePCLRaw.lib.e_sqlite3 2.1.11 | CVE-2025-6965 in the native SQLite the full `Microsoft.Data.Sqlite` package bundles | libraries reference `Microsoft.Data.Sqlite.Core`; apps/tests pick `SQLitePCLRaw.bundle_e_sqlite3` ≥ 2.1.13 (ADR-0009) |
+| `NU1903` SQLitePCLRaw.lib.e_sqlite3 2.1.11 | CVE-2025-6965 in the native SQLite the full `Microsoft.Data.Sqlite` package bundles | the library references only `SQLitePCLRaw.core` (ADR-0032); apps/tests pick `SQLitePCLRaw.bundle_e_sqlite3` ≥ 2.1.13 |
 | `NU1605` Logging.Abstractions downgrade | a project referenced 10.0.0 directly while SignalR.Client 10.0.12 needs ≥ 10.0.12 | do not reference it directly where a dependency already brings a higher one |
 | `NU1510` package will not be pruned | `Microsoft.Extensions.Hosting` referenced in a project that has the ASP.NET Core framework reference | remove the redundant PackageReference |
 | `RS1032` diagnostic message | a generator message contained `e.g.` (read as several sentences without a final period) | single-sentence messages without abbreviations |

@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using G9SignalRSuperNetCore.Server.Classes.Abstracts;
+using G9SyncData;
 using G9SyncData.Protocol;
 using G9SyncData.Server.Auth;
 using Microsoft.AspNetCore.SignalR;
@@ -36,7 +37,7 @@ public sealed partial class G9SyncHub : G9AHubBase<G9SyncHub, IG9SyncHubListener
         var result = await GuardAsync(G9SyncProtocol.Methods.Hello, ct => _engine.HelloAsync(CreateCaller(), request, ct)).ConfigureAwait(false);
         if (_options.EnablePokes && result.Error is null)
         {
-            foreach (var table in result.Tables)
+            foreach (var table in result.Tables.Where(t => t.Direction != G9ESyncDirection.UploadOnly))   // nothing to download, nothing to poke
             {
                 await Groups.AddToGroupAsync(Context.ConnectionId, G9SyncProtocol.TableGroup(table.Name), Context.ConnectionAborted).ConfigureAwait(false);
             }

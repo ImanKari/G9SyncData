@@ -21,6 +21,21 @@ public sealed class G9DtPushRequest
     public List<G9DtSubscriptionRef> Subscriptions { get; set; } = [];
 
     public List<G9DtTableColumns> Tables { get; set; } = [];
+
+    /// <summary>Commands to execute, in device order, before the rows (ADR-0025).</summary>
+    public List<G9DtCommand> Commands { get; set; } = [];
+
+    /// <summary>
+    ///     The columns the device holds for every table, in its order. Sent with commands, so the server can return canonical rows
+    ///     for tables the push itself does not carry.
+    /// </summary>
+    public List<G9DtTableColumns> HeldTables { get; set; } = [];
+
+    /// <summary>
+    ///     The newest G9RowBatch body layout the client reads (ADR-0040): 2 = column-grouped. Absent (0) from older clients, which get
+    ///     layout 1. The server answers with at most this.
+    /// </summary>
+    public int FrameVersion { get; set; }
 }
 
 public sealed class G9DtAcceptedRows
@@ -70,6 +85,9 @@ public sealed class G9DtPushResult
     /// <summary>G9RowBatch frames with the canonical server rows for conflicted or server-transformed rows.</summary>
     public List<byte[]> CanonicalFrames { get; set; } = [];
 
+    /// <summary>One result per pushed command, in the order sent.</summary>
+    public List<G9DtCommandResult> CommandResults { get; set; } = [];
+
     public G9DtSyncError? Error { get; set; }
 }
 
@@ -88,6 +106,12 @@ public sealed class G9DtPullRequest
     public List<G9DtTableColumns> Tables { get; set; } = [];
 
     public List<G9DtBackfillRequest> Backfills { get; set; } = [];
+
+    /// <summary>
+    ///     The newest G9RowBatch body layout the client reads (ADR-0040): 2 = column-grouped. Absent (0) from older clients, which get
+    ///     layout 1. The server answers with at most this.
+    /// </summary>
+    public int FrameVersion { get; set; }
 }
 
 public sealed class G9DtPlannedPart
@@ -141,6 +165,12 @@ public sealed class G9DtReconcileRequest
     public Guid ClientId { get; set; }
     public G9DtSubscriptionRef Subscription { get; set; } = new();
     public List<G9DtTableDigest> Tables { get; set; } = [];
+
+    /// <summary>
+    ///     The newest G9RowBatch body layout the client reads (ADR-0040): 2 = column-grouped. Absent (0) from older clients, which get
+    ///     layout 1. The server answers with at most this.
+    /// </summary>
+    public int FrameVersion { get; set; }
 }
 
 public sealed class G9DtTableBuckets
@@ -165,4 +195,10 @@ public sealed class G9DtFetchRowsRequest
     public int TableId { get; set; }
     public List<string> Keys { get; set; } = [];
     public List<string> Columns { get; set; } = [];
+
+    /// <summary>
+    ///     The newest G9RowBatch body layout the client reads (ADR-0040): 2 = column-grouped. Absent (0) from older clients, which get
+    ///     layout 1. The server answers with at most this.
+    /// </summary>
+    public int FrameVersion { get; set; }
 }

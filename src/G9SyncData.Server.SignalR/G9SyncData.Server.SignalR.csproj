@@ -4,12 +4,13 @@
 
   <PropertyGroup>
     <RootNamespace>G9SyncData.Server.SignalR</RootNamespace>
-    <Description>G9SyncData SignalR server transport on G9SignalRSuperNetCore: the G9SyncHub (source-generated JSON protocol, streamed pulls and pushes, stable error codes through HubException) and coalesced change pokes to the connections holding a table.</Description>
+    <Description>G9SyncData SignalR server transport on G9SignalRSuperNetCore: the G9SyncHub (MessagePack and source-generated JSON protocols, streamed pulls and pushes, stable error codes through HubException) and coalesced change pokes to the connections holding a table.</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="G9SignalRSuperNetCore.Server" />
+    <PackageReference Include="G9SignalRSuperNetCore.Server.MessagePack" />
   </ItemGroup>
 
   <ItemGroup>

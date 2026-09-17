@@ -30,7 +30,10 @@ public sealed class SqliteSyncStoreTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await _store.DisposeAsync();
-        SqliteConnection.ClearAllPools();
+
+        // The store releases its own pool; this class's helper connections use their own connection string. Never ClearAllPools():
+        // tests run in parallel, and it disposes connections other tests are using (LES-0030).
+        using (var helper = new SqliteConnection("Data Source=" + _path)) SqliteConnection.ClearPool(helper);
         foreach (var file in new[] { _path, _path + "-wal", _path + "-shm" })
         {
             if (File.Exists(file)) File.Delete(file);
@@ -101,7 +104,7 @@ public sealed class SqliteSyncStoreTests : IAsyncLifetime
         await MarkSyncedAsync(edited);
         await ExecAsync("UPDATE Pot SET Note = 'changed' WHERE Id = $p0", Key(edited));
 
-        var batch = await _store.BuildPushBatchAsync(hello.Tables, 100, CancellationToken.None);
+        var batch = await _store.BuildPushBatchAsync(hello.Tables, 100, long.MaxValue, CancellationToken.None);
         Assert.NotNull(batch);
         Assert.Equal(2, batch.RowCount);
         Assert.Equal(["Note", "Code", "Status"], batch.Tables.Single().Columns);
@@ -121,7 +124,7 @@ public sealed class SqliteSyncStoreTests : IAsyncLifetime
         }
 
         // Rebuilt before the acknowledgement: the same batch id, so the server can recognise a retry.
-        var rebuilt = await _store.BuildPushBatchAsync(hello.Tables, 100, CancellationToken.None);
+        var rebuilt = await _store.BuildPushBatchAsync(hello.Tables, 100, long.MaxValue, CancellationToken.None);
         Assert.Equal(batch.BatchId, rebuilt!.BatchId);
 
         await ExecAsync("UPDATE Pot SET Code = 'B2' WHERE Id = $p0", Key(edited));
@@ -138,9 +141,36 @@ public sealed class SqliteSyncStoreTests : IAsyncLifetime
         Assert.Equal(11, version);
         Assert.Equal(0b001, mask & 0b001);
 
-        var next = await _store.BuildPushBatchAsync(hello.Tables, 100, CancellationToken.None);
+        var next = await _store.BuildPushBatchAsync(hello.Tables, 100, long.MaxValue, CancellationToken.None);
         Assert.Equal(batch.BatchId + 1, next!.BatchId);
         Assert.Equal(1, next.RowCount);
+    }
+
+    [Fact]
+    public async Task Rows_marked_dirty_together_each_get_their_own_push_sequence()
+    {
+        // LES-0039: marked rows shared one local sequence, and the server stages a push by sequence - a push of two of them failed (23505).
+        var hello = Hello();
+        await _store.SaveHelloAsync(hello, CancellationToken.None);
+        var keys = Enumerable.Range(0, 5).Select(_ => Guid.NewGuid()).ToList();
+        foreach (var key in keys) await ExecAsync("INSERT INTO Pot (Id, Code, Status) VALUES ($p0, 'A', 1)", Key(key));
+        foreach (var key in keys) await MarkSyncedAsync(key);
+
+        Assert.Equal(5, await _store.MarkDirtyAsync("Pot", keys.Select(Key).ToList(), CancellationToken.None));
+
+        var batch = await _store.BuildPushBatchAsync(hello.Tables, 100, long.MaxValue, CancellationToken.None);
+        var sequences = new List<long>();
+        using (var reader = G9CRowBatchReader.Open(batch!.Frames.Single()))
+        {
+            while (reader.NextSection())
+            {
+                while (reader.ReadRow()) sequences.Add(reader.Sequence);
+            }
+        }
+
+        Assert.Equal(5, sequences.Count);
+        Assert.Equal(5, sequences.Distinct().Count());
+        Assert.True(sequences.Max() <= (long)(await ScalarAsync("SELECT seq FROM g9_clock WHERE id = 1"))!, "The clock must be past every sequence it handed out.");
     }
 
     [Fact]

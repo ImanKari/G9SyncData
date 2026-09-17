@@ -144,6 +144,7 @@ public sealed class G9CSyncTableBuilder
     private G9EConflictPolicy _conflictPolicy = G9EConflictPolicy.ServerWins;
     private bool? _orderedApply;
     private string? _writeRule;
+    private G9CConflictRulesBuilder? _conflictRules;
 
     internal G9CSyncTableBuilder(string schema, string name)
     {
@@ -193,6 +194,18 @@ public sealed class G9CSyncTableBuilder
         return this;
     }
 
+    /// <summary>
+    ///     Ordered conflict rules (A-05): the first rule whose condition holds decides what happens to a conflicting upload; the rest
+    ///     fall back to <see cref="Conflicts" />. A table with rules tracks per-column versions, so rules see exact column facts.
+    /// </summary>
+    public G9CSyncTableBuilder OnConflict(Action<G9CConflictRulesBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        _conflictRules ??= new G9CConflictRulesBuilder();
+        configure(_conflictRules);
+        return this;
+    }
+
     /// <summary>Forces (true) or forbids (false) device-order row-by-row apply. Default: automatic.</summary>
     public G9CSyncTableBuilder OrderedApply(bool ordered)
     {
@@ -229,9 +242,15 @@ public sealed class G9CSyncTableBuilder
             errors.Add($"Table '{logical}' has {physical} physical columns; the maximum is {G9CSyncModelBuilder.MaxPhysicalColumns}.");
         }
 
+        var rules = _conflictRules?.Build(logical, errors);
+        if (rules is not null && _conflictPolicy == G9EConflictPolicy.Custom)
+        {
+            errors.Add($"Table '{logical}' combines conflict rules with the Custom policy; express the resolver as a rule's Decide(...) instead.");
+        }
+
         if (errors.Count > before) return null;
         return new G9CSyncServerTable(_schema, _name, _keyColumn!, _keyType, _columns.Select(c => c.Build()).ToArray(),
-            _direction, _conflictPolicy, _orderedApply, _writeRule, order);
+            _direction, _conflictPolicy, _orderedApply, _writeRule, order) { ConflictRules = rules };
     }
 }
 
@@ -288,7 +307,7 @@ public sealed class G9CSyncSubscriptionBuilder
 {
     private readonly string _name;
     private readonly List<G9CSyncParameterDefinition> _parameters = [];
-    private readonly List<(string Table, string Scope, string? When, bool AllowUpload)> _includes = [];
+    private readonly List<(string Table, string Scope, string? When, bool AllowUpload, IG9SyncScopeProvider? Provider)> _includes = [];
     private readonly List<G9CSyncSubscriptionDependency> _dependencies = [];
     private bool _ephemeral;
     private TimeSpan _ttl;
@@ -317,7 +336,25 @@ public sealed class G9CSyncSubscriptionBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeSql);
-        _includes.Add((table, scopeSql, whenSql, allowUpload));
+        _includes.Add((table, scopeSql, whenSql, allowUpload, null));
+        return this;
+    }
+
+    /// <summary>
+    ///     Includes a table whose membership is computed per request by <paramref name="scope" /> - for example an EF Core query
+    ///     composed with the application's own authorisation filters (<c>G9SyncData.Server.EfCore</c>).
+    ///     <para>
+    ///         ⚠ If the query's result depends on the caller's permissions, surface those permissions as a
+    ///         <see cref="ServerParameter" /> (a permission stamp is enough). A changed server parameter is what makes a device
+    ///         reconcile; a permission read only inside the query changes the rows it returns but tells no device to look again.
+    ///     </para>
+    /// </summary>
+    public G9CSyncSubscriptionBuilder Include(string table, IG9SyncScopeProvider scope, string? whenSql = null, bool allowUpload = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope.Fingerprint);
+        _includes.Add((table, "{scope:" + scope.Fingerprint + "}", whenSql, allowUpload, scope));
         return this;
     }
 
@@ -372,7 +409,7 @@ public sealed class G9CSyncSubscriptionBuilder
         }
 
         var includes = new List<G9CSyncSubscriptionTable>();
-        foreach (var (tableName, scope, when, allowUpload) in _includes)
+        foreach (var (tableName, scope, when, allowUpload, provider) in _includes)
         {
             if (!tables.TryGetValue(tableName, out var table))
             {
@@ -381,7 +418,7 @@ public sealed class G9CSyncSubscriptionBuilder
             }
 
             if (includes.Any(i => ReferenceEquals(i.Table, table))) errors.Add($"Subscription '{_name}' includes '{tableName}' twice.");
-            includes.Add(new G9CSyncSubscriptionTable(table, scope, when, allowUpload && table.AcceptsUploads));
+            includes.Add(new G9CSyncSubscriptionTable(table, scope, when, allowUpload && table.AcceptsUploads, provider));
         }
 
         if (includes.Count == 0) errors.Add($"Subscription '{_name}' includes no tables.");

@@ -82,7 +82,10 @@ public sealed partial class G9CSyncServerEngine
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         G9CSyncServerTelemetry.Hellos.Add(1);
 
-        var result = new G9DtHelloResult { Epoch = _store.Epoch, ServerTimeUtc = DateTime.UtcNow };
+        var result = new G9DtHelloResult
+        {
+            Epoch = _store.Epoch, ServerTimeUtc = DateTime.UtcNow, MaxPushRows = _options.MaxPushRows, MaxPushBytes = _options.MaxPushBytes
+        };
         if (request.ProtocolVersion != G9SyncProtocol.Version)
         {
             result.Error = new G9DtSyncError
@@ -145,7 +148,11 @@ public sealed partial class G9CSyncServerEngine
         var plan = new G9DtPullPlan();
         var shapes = ResolveShapes(request.Tables, writableOnly: false);
         var snapshot = await _store.GetCurrentSnapshotAsync(cancellationToken).ConfigureAwait(false);
-        var payload = new G9DtPullTokenPayload { ClientId = request.ClientId, UserId = auth.UserId, Epoch = _store.Epoch, NewSnapshot = snapshot };
+        var payload = new G9DtPullTokenPayload
+        {
+            ClientId = request.ClientId, UserId = auth.UserId, Epoch = _store.Epoch, NewSnapshot = snapshot,
+            FrameVersion = G9SyncProtocol.NegotiateFrameVersion(request.FrameVersion)
+        };
         var resolvedList = new List<G9CResolvedSubscription>();
 
         foreach (var reference in request.Subscriptions)
@@ -186,6 +193,8 @@ public sealed partial class G9CSyncServerEngine
 
             foreach (var include in resolved.Definition.Tables)
             {
+                // An upload-only table's rows belong to the devices that write them: the server never sends them back.
+                if (include.Table.Direction == G9ESyncDirection.UploadOnly) continue;
                 if (!shapes.TryGetValue(_store.GetTableId(include.Table), out var shape)) continue;
                 payload.Parts.Add(new G9DtTokenPart
                 {
@@ -253,6 +262,12 @@ public sealed partial class G9CSyncServerEngine
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         var payload = _tokens.Read(token);
         if (payload.Epoch != _store.Epoch) throw new G9CSyncException(G9SyncErrorCodes.ResyncEpoch, "The server epoch changed since the pull was planned.");
+        if (continuation is null && await _store.IsSnapshotAheadAsync(payload.NewSnapshot, cancellationToken).ConfigureAwait(false))
+        {
+            // Checked once per pull, not per resumed page: the database cannot go back in time between two pages of one stream
+            // without also losing the connection, and the resumed call re-reads the token anyway.
+            throw new G9CSyncException(G9SyncErrorCodes.ResyncEpoch, "The pull was planned against a newer state of the database (restore or failover).");
+        }
 
         var auth = await _authProvider.ResolveAsync(caller, cancellationToken).ConfigureAwait(false);
         if (!string.Equals(payload.UserId, auth.UserId, StringComparison.Ordinal))
@@ -359,7 +374,9 @@ public sealed partial class G9CSyncServerEngine
             Transformers = services.GetServices<IG9UploadTransformer>().ToArray(),
             DeleteHandlers = services.GetServices<IG9DeleteHandler>().ToArray(),
             ConflictResolvers = services.GetServices<IG9ConflictResolver>().ToArray(),
-            PostCommitHandlers = services.GetServices<IG9PostCommitHandler>().ToArray()
+            PostCommitHandlers = services.GetServices<IG9PostCommitHandler>().ToArray(),
+            RowWriters = services.GetServices<IG9RowWriter>().ToArray(),
+            CommandHandlers = services.GetServices<IG9CommandHandler>().ToArray()
         };
 
         var result = await _store.ApplyPushAsync(new G9CStorePushRequest
@@ -370,11 +387,14 @@ public sealed partial class G9CSyncServerEngine
             Auth = auth,
             Frames = frames,
             Tables = shapes,
+            Commands = request.Commands.OrderBy(c => c.Sequence).ToList(),
+            HeldTables = request.HeldTables.Count == 0 ? new Dictionary<int, G9CPushTableShape>() : ResolveShapes(request.HeldTables, writableOnly: false),
             Subscriptions = subscriptions,
             Pipeline = pipeline,
             Services = services,
             MaxRejections = _options.MaxRejectionsPerPush,
-            MaxRows = _options.MaxPushRows
+            MaxRows = _options.MaxPushRows,
+            FrameVersion = G9SyncProtocol.NegotiateFrameVersion(request.FrameVersion)
         }, cancellationToken).ConfigureAwait(false);
 
         if (!result.AlreadyApplied && result.Error is null && pipeline.PostCommitHandlers.Count > 0)
@@ -422,7 +442,7 @@ public sealed partial class G9CSyncServerEngine
         {
             var table = _store.FindTable(digest.TableId);
             var include = table is null ? null : resolved.Definition.FindTable(table);
-            if (table is null || include is null) continue;
+            if (table is null || include is null || table.Direction == G9ESyncDirection.UploadOnly) continue;
             if (digest.Digests is not { Length: G9CSyncDigest.BucketCount } || digest.Counts is not { Length: G9CSyncDigest.BucketCount })
             {
                 throw new G9CSyncException(G9SyncErrorCodes.InvalidParameters, $"Digest for table {digest.TableId} must have {G9CSyncDigest.BucketCount} buckets.");
@@ -436,7 +456,8 @@ public sealed partial class G9CSyncServerEngine
         var mismatchedBuckets = 0;
         await foreach (var item in _store.ReconcileAsync(new G9CStoreReconcileRequest
                            {
-                               Subscription = resolved, Tables = tables, PageRows = Math.Max(_options.PageRows, 5000)
+                               Subscription = resolved, Tables = tables, PageRows = Math.Max(_options.PageRows, 5000),
+                               FrameVersion = G9SyncProtocol.NegotiateFrameVersion(request.FrameVersion)
                            }, cancellationToken).ConfigureAwait(false))
         {
             if (!item.IsFinal)
@@ -482,6 +503,10 @@ public sealed partial class G9CSyncServerEngine
                     ?? throw new G9CSyncException(G9SyncErrorCodes.UnknownTable, $"Unknown table id {request.TableId}.");
         var include = resolved.Definition.FindTable(table)
                       ?? throw new G9CSyncException(G9SyncErrorCodes.InvalidParameters, $"'{table.LogicalName}' is not part of '{resolved.Definition.Name}'.");
+        if (table.Direction == G9ESyncDirection.UploadOnly)
+        {
+            throw new G9CSyncException(G9SyncErrorCodes.RejectDirection, $"'{table.LogicalName}' is upload-only: its rows are never sent to devices.");
+        }
         if (request.Keys.Count > _options.MaxFetchKeys)
         {
             throw new G9CSyncException(G9SyncErrorCodes.InvalidParameters, $"At most {_options.MaxFetchKeys} keys per fetch.");
@@ -499,7 +524,8 @@ public sealed partial class G9CSyncServerEngine
         {
             await foreach (var page in _store.FetchRowsAsync(new G9CStoreFetchRequest
                                {
-                                   Table = table, Include = include, Columns = columns, Subscription = resolved, Keys = keys, PageRows = _options.PageRows
+                                   Table = table, Include = include, Columns = columns, Subscription = resolved, Keys = keys, PageRows = _options.PageRows,
+                                   FrameVersion = G9SyncProtocol.NegotiateFrameVersion(request.FrameVersion)
                                }, cancellationToken).ConfigureAwait(false))
             {
                 yield return new G9DtSyncChunk { Sequence = sequence++, Payload = page.Frame, RowCount = page.RowCount, SubscriptionKey = resolved.Key };
@@ -575,7 +601,11 @@ public sealed partial class G9CSyncServerEngine
     {
         if (string.IsNullOrEmpty(cursor)) return (G9ESubscriptionAction.Initial, "No cursor: initial snapshot.");
         if (!G9CSyncCursor.TryParse(cursor, out var epoch, out var snapshot)) return (G9ESubscriptionAction.ResyncRequired, "The cursor is unreadable.");
-        if (epoch != _store.Epoch) return (G9ESubscriptionAction.ResyncRequired, "The server epoch changed (database restored or capture reinstalled).");
+        if (epoch != _store.Epoch) return (G9ESubscriptionAction.ResyncRequired, "The server epoch changed (database restored or copied, or capture reinstalled).");
+        if (await _store.IsSnapshotAheadAsync(snapshot, cancellationToken).ConfigureAwait(false))
+        {
+            return (G9ESubscriptionAction.ResyncRequired, "The cursor is newer than the database (point-in-time restore or failover).");
+        }
 
         var tables = resolved.Definition.Tables.Select(t => t.Table).ToArray();
         return await _store.IsBeyondTombstoneHorizonAsync(snapshot, tables, cancellationToken).ConfigureAwait(false)
@@ -641,7 +671,8 @@ public sealed partial class G9CSyncServerEngine
             PreviousSnapshot = part.PreviousSnapshot,
             NewSnapshot = payload.NewSnapshot,
             AfterKey = afterKey,
-            PageRows = _options.PageRows
+            PageRows = _options.PageRows,
+            FrameVersion = G9SyncProtocol.NegotiateFrameVersion(payload.FrameVersion)
         };
     }
 

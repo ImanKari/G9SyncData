@@ -66,7 +66,32 @@ internal static class SqliteSql
             column_name TEXT NULL, details TEXT NULL, at_utc INTEGER NOT NULL, PRIMARY KEY (tid, pk)) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS g9_runs (run_id TEXT NOT NULL PRIMARY KEY, started_utc INTEGER NOT NULL, report_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS g9_stats (key TEXT NOT NULL PRIMARY KEY, value REAL NOT NULL, samples INTEGER NOT NULL) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS g9_commands (
+            command_id TEXT NOT NULL PRIMARY KEY,
+            seq INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            created_utc INTEGER NOT NULL,
+            state INTEGER NOT NULL DEFAULT 0,
+            batch_id INTEGER NULL,
+            code TEXT NULL,
+            message TEXT NULL,
+            result TEXT NULL,
+            completed_utc INTEGER NULL) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS g9_commands_pending ON g9_commands (seq) WHERE state = 0;
+        CREATE TABLE IF NOT EXISTS g9_command_rows (command_id TEXT NOT NULL, tid INTEGER NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (command_id, tid, pk)) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS g9_command_rows_row ON g9_command_rows (tid, pk);
+        CREATE TABLE IF NOT EXISTS g9_quarantine (
+            tid INTEGER NOT NULL, pk TEXT NOT NULL, reason INTEGER NOT NULL, rule TEXT NULL, row_json TEXT NOT NULL,
+            had_pending INTEGER NOT NULL, dirty_mask INTEGER NOT NULL, at_utc INTEGER NOT NULL, PRIMARY KEY (tid, pk)) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS g9_revoked (
+            tid INTEGER NOT NULL, pk TEXT NOT NULL, disposition INTEGER NOT NULL, reason INTEGER NOT NULL, rule TEXT NULL, at_utc INTEGER NOT NULL,
+            PRIMARY KEY (tid, pk)) WITHOUT ROWID;
         """;
+
+    /// <summary>Command mode (ADR-0025): local effects of a command being recorded.</summary>
+    public const string CommandMode = "(SELECT applying FROM g9_ctx WHERE id = 1) = 2";
 
     public static string Quote(string identifier) => "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]";
 
@@ -121,7 +146,34 @@ internal static class SqliteSql
     public static string TriggerName(G9CSyncClientTable table, string suffix) => Quote("g9_" + table.LocalName + "_" + suffix);
 
     public static string DropTriggers(G9CSyncClientTable table) =>
-        $"DROP TRIGGER IF EXISTS {TriggerName(table, "ai")}; DROP TRIGGER IF EXISTS {TriggerName(table, "au")}; DROP TRIGGER IF EXISTS {TriggerName(table, "ad")};";
+        $"DROP TRIGGER IF EXISTS {TriggerName(table, "ai")}; DROP TRIGGER IF EXISTS {TriggerName(table, "au")}; DROP TRIGGER IF EXISTS {TriggerName(table, "ad")}; " +
+        $"DROP TRIGGER IF EXISTS {TriggerName(table, "ci")}; DROP TRIGGER IF EXISTS {TriggerName(table, "cu")}; DROP TRIGGER IF EXISTS {TriggerName(table, "cd")};";
+
+    /// <summary>
+    ///     Command-mode triggers (ADR-0025), on EVERY table regardless of direction: a command may change a table the device cannot
+    ///     upload. They record which rows the command touched, and nothing else.
+    /// </summary>
+    public static string CreateCommandTriggers(G9CSyncClientTable table, long tid)
+    {
+        var name = Quote(table.LocalName);
+        var tidLiteral = Literal(tid);
+        const string command = "(SELECT command_id FROM g9_ctx WHERE id = 1)";
+        return $"""
+            CREATE TRIGGER {TriggerName(table, "ci")} AFTER INSERT ON {name} WHEN {CommandMode}
+            BEGIN
+                INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ({command}, {tidLiteral}, {KeyExpression(table, "NEW")});
+            END;
+            CREATE TRIGGER {TriggerName(table, "cu")} AFTER UPDATE ON {name} WHEN {CommandMode}
+            BEGIN
+                INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ({command}, {tidLiteral}, {KeyExpression(table, "NEW")});
+                INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ({command}, {tidLiteral}, {KeyExpression(table, "OLD")});
+            END;
+            CREATE TRIGGER {TriggerName(table, "cd")} AFTER DELETE ON {name} WHEN {CommandMode}
+            BEGIN
+                INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ({command}, {tidLiteral}, {KeyExpression(table, "OLD")});
+            END;
+            """;
+    }
 
     public static string CreateTriggers(G9CSyncClientTable table, long tid)
     {

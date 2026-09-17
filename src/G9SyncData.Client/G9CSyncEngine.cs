@@ -34,6 +34,7 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
     private volatile bool _initialized;
     private Guid _clientId;
     private long _order;
+    private int _queuedCount;
     private Task? _worker;
     private G9CSyncRun? _current;
     private int _suppressions;
@@ -59,13 +60,11 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
 
     public bool IsRunning => Volatile.Read(ref _current) is not null;
 
-    public int QueuedRuns
-    {
-        get
-        {
-            lock (_queueLock) return _queue.Count;
-        }
-    }
+    /// <remarks>
+    ///     Read without the queue lock: the progress tracker samples it while holding its own lock, and the queue lock must never be
+    ///     taken after the tracker lock (preemption cancels a run, which reaches the tracker, so the order is queue → tracker).
+    /// </remarks>
+    public int QueuedRuns => Volatile.Read(ref _queuedCount);
 
     public bool IsBackgroundSuppressed => Volatile.Read(ref _suppressions) > 0;
 
@@ -133,6 +132,8 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
         if (!_initialized) throw new InvalidOperationException("Call InitializeAsync first.");
+        G9CSyncRun run;
+        G9CSyncRun? preempted = null;
         lock (_queueLock)
         {
             if (request.CanCoalesce)
@@ -147,19 +148,28 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
                 }
             }
 
-            var run = new G9CSyncRun(request);
+            run = new G9CSyncRun(request);
             _queue.Enqueue(run, (-(int)request.Priority, _order++));
+            Volatile.Write(ref _queuedCount, _queue.Count);
             var current = _current;
             if (current is not null && current.Request.Priority == G9ESyncPriority.Background && request.Priority > G9ESyncPriority.Background)
             {
                 current.Preempted = true;
-                current.Cancel();
-                LogPreempted(_logger, current.RunId, run.RunId);
+                preempted = current;
             }
 
             _signal.Release();
-            return run;
         }
+
+        // Cancelling runs the token's callbacks synchronously (progress tracker, transport, store), so it happens outside the queue lock:
+        // a callback that waits for a lock the run thread holds while it asks the engine for state would otherwise deadlock (LES-0036).
+        if (preempted is not null)
+        {
+            preempted.Cancel();
+            LogPreempted(_logger, preempted.RunId, run.RunId);
+        }
+
+        return run;
     }
 
     /// <summary>Queues a run and awaits its result.</summary>
@@ -192,6 +202,49 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
 
     // ================================================================ queries
 
+    /// <summary>
+    ///     Records a command (ADR-0025): the server executes the handler registered for <paramref name="name" /> on the next push,
+    ///     once, in device order. <paramref name="applyLocally" /> writes the command's effects on this device immediately, in the same
+    ///     transaction; those rows are not uploaded as row changes, are protected from pulls until the server's result arrives, and
+    ///     are then replaced by the server's canonical state (also when the command is rejected).
+    /// </summary>
+    public async Task<G9CLocalCommand> ExecuteCommandAsync(string name, string payloadJson, Func<IG9LocalCommandWriter, CancellationToken, Task>? applyLocally = null,
+        int version = 1, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(payloadJson);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.EnqueueCommandAsync(new G9CCommandRequest { Name = name, Version = version, Payload = payloadJson }, applyLocally, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>A typed <see cref="ExecuteCommandAsync(string, string, Func{IG9LocalCommandWriter, CancellationToken, Task}?, int, CancellationToken)" />.</summary>
+    public Task<G9CLocalCommand> ExecuteCommandAsync<TCommand>(string name, TCommand payload, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TCommand> typeInfo,
+        Func<IG9LocalCommandWriter, CancellationToken, Task>? applyLocally = null, int version = 1, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(typeInfo);
+        return ExecuteCommandAsync(name, System.Text.Json.JsonSerializer.Serialize(payload, typeInfo), applyLocally, version, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Frees space taken by an UPLOAD-ONLY table: removes rows that have been uploaded (all, or the given keys) without uploading a
+    ///     delete. Rows with a pending change are kept. Throws for a table that is not upload-only — there a local delete is a change
+    ///     the server must hear about.
+    /// </summary>
+    public async Task<int> ForgetUploadedRowsAsync(string localTable, IReadOnlyCollection<string>? keys = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localTable);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.ForgetUploadedRowsAsync(localTable, keys, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Recorded commands, newest first.</summary>
+    public async Task<IReadOnlyList<G9CLocalCommand>> GetCommandsAsync(G9ELocalCommandState? state = null, int limit = 200, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.GetCommandsAsync(state, limit, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<G9CPendingSummary> GetPendingSummaryAsync(CancellationToken cancellationToken = default)
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -205,6 +258,33 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
     }
 
     /// <summary>Makes rejected rows eligible for the next push (after the user fixed them, or to retry).</summary>
+    /// <summary>Rows moved to the holding area when they stopped being visible (ADR-0026).</summary>
+    public async Task<IReadOnlyList<G9CQuarantinedRow>> GetQuarantinedAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.GetQuarantinedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Puts a quarantined row back as a pending local change (it uploads on the next sync; the server decides).</summary>
+    public async Task<int> RestoreQuarantinedAsync(string localTable, string key, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.RestoreQuarantinedAsync(localTable, key, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<int> DiscardQuarantinedAsync(string? localTable = null, string? key = null, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.DiscardQuarantinedAsync(localTable, key, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Rows kept in their tables after revocation, with the rule that kept them: "why is this row still here".</summary>
+    public async Task<IReadOnlyList<G9CRetainedRow>> GetRetainedAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.GetRetainedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<int> RetryRejectedAsync(string? localTable = null, string? key = null, CancellationToken cancellationToken = default)
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -262,6 +342,7 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
         lock (_queueLock)
         {
             while (_queue.TryDequeue(out var run, out _)) abandoned.Add(run);
+            Volatile.Write(ref _queuedCount, 0);
         }
 
         foreach (var run in abandoned)
@@ -316,6 +397,7 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
             lock (_queueLock)
             {
                 if (!_queue.TryDequeue(out run, out _)) continue;
+                Volatile.Write(ref _queuedCount, _queue.Count);
                 run.IsStarted = true;
                 _current = run;
             }

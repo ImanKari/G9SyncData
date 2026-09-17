@@ -1,14 +1,30 @@
 # 11 — SignalR transport
 
 Server: `src/G9SyncData.Server.SignalR`. Client: `src/G9SyncData.Client.SignalR`. Both sit on `G9SignalRSuperNetCore`
-2.5.x. The transports only translate calls; every rule lives in the engines.
+2.6.x. The transports only translate calls; every rule lives in the engines.
+
+## Hub protocols (ADR-0039)
+
+The server offers **MessagePack and JSON**; each connection chooses in the SignalR handshake. Clients default to MessagePack
+(`G9CSignalRSyncTransportOptions.Protocol`).
+
+| | MessagePack (default) | JSON |
+|---|---|---|
+| Implementation | `G9SignalRSuperNetCore.{Server,Client}.MessagePack` → Nerdbank.MessagePack, serializers from PolyType shapes generated at build time (`G9SyncWireShapes` in `G9SyncData.Protocol`) | `G9SyncJsonContext` (System.Text.Json source generation) |
+| Chunk payloads | raw bytes | base64 text (+33%) |
+| 500,000-row initial sync (emulator) | 23.1 MB down, 37 MB allocated | 30.7 MB down, 69 MB allocated |
+| Cost | ~100–200 ms more for the first connect of a process (code outside the AOT profile is JIT-compiled); warm syncs are faster (no-op 19 ms vs 25 ms) | readable in traces |
+| NativeAOT | yes | yes |
+
+A new hub DTO needs a `[GenerateShapeFor<T>]` line in `G9SyncWireShapes` as well as a `[JsonSerializable]` line in `G9SyncJsonContext`;
+`SignalRTransportTests` runs every transport test over both protocols.
 
 ## Server
 
 ```csharp
 builder.Services.AddG9SyncDataServer(...).UsePostgreSql(dataSource).UseSignalR(o =>
 {
-    o.MaximumReceiveMessageSize = 16 * 1024 * 1024;   // push chunks, base64-expanded by JSON
+    o.MaximumReceiveMessageSize = 16 * 1024 * 1024;   // push chunks (base64-expanded by JSON; raw bytes over MessagePack)
     o.PokeCoalescence = TimeSpan.FromSeconds(1);
 });
 app.UseWebSockets();
@@ -16,7 +32,8 @@ app.MapG9SyncHub().RequireAuthorization();            // route G9SyncProtocol.De
 ```
 
 `UseSignalR()` registers SignalR, inserts `G9SyncJsonContext` at the head of the JSON protocol's resolver chain (other
-hubs are unaffected), sets the receive limit for `G9SyncHub` only and adds the poke service. Apps that use G9SignalRSuperNetCore
+hubs are unaffected), adds the MessagePack protocol with `G9SyncWireShapes` (`AddG9MessagePackProtocol`), sets the receive limit for
+`G9SyncHub` only and adds the poke service. Apps that use G9SignalRSuperNetCore
 policy attributes call `AddSignalRSuperNetCoreCore()` as usual.
 
 ### Hub methods (`G9SyncProtocol.Methods`)
@@ -81,6 +98,7 @@ services.AddG9SyncDataClient(model)
 | Option | Default |
 |---|---|
 | `Url` | required |
+| `Protocol` | `MessagePack` (`Json` for readable traces) |
 | `AccessTokenProvider` | none |
 | `ConfigureHttpConnection`, `ConfigureBuilder` | hooks |
 | `ConnectTimeout` | 20 s |

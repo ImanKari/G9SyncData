@@ -11,8 +11,10 @@ omitted); row data travels as binary **G9RowBatch** frames inside `G9DtSyncChunk
 
 | Operation | Request → response | Notes |
 |---|---|---|
-| **Hello** | `G9DtHelloRequest { ClientId, AppVersion, ProtocolVersion, Tables (client model), Subscriptions (name, parameters, cursor, hashes) }` → `G9DtHelloResult { Epoch, ServerTimeUtc, Tables (negotiated), UnknownTables, Definitions, Subscriptions (decision per key), Error }` | column negotiation: server model order, filtered to columns the client has with the same type |
-| **Push** | `G9DtPushRequest { ClientId, BatchId, Subscriptions, Tables (column order per table) }` + stream of chunks with `Push` sections → `G9DtPushResult { BatchId, AlreadyApplied, Accepted, Rejections, Conflicts, CanonicalFrames, Error }` | idempotent by `BatchId` |
+| **Frame layout** | every frame-producing request carries `FrameVersion` (ADR-0040) | see "Body layouts" below |
+| **Push: `HeldTables`** | the columns the device holds for each table, in its order: sent for every PUSHED table (and every table when the push carries commands). Canonical rows come back in exactly these columns — including read-only and computed ones a push never carries (LES-0035) |
+| **Hello** | `G9DtHelloRequest { ClientId, AppVersion, ProtocolVersion, Tables (client model), Subscriptions (name, parameters, cursor, hashes) }` → `G9DtHelloResult { Epoch, ServerTimeUtc, Tables (negotiated), UnknownTables, Definitions, Subscriptions (decision per key), MaxPushRows, MaxPushBytes, Error }` — the device sizes push batches to the announced limits (0 = not announced; ADR-0037) | column negotiation: server model order, filtered to columns the client has with the same type |
+| **Push** | `G9DtPushRequest { ClientId, BatchId, Subscriptions, Tables (column order per table), Commands, HeldTables }` + stream of chunks with `Push` sections → `G9DtPushResult { BatchId, AlreadyApplied, Accepted, Rejections, Conflicts, CanonicalFrames, CommandResults, Error }` | idempotent by `BatchId` |
 | **PlanPull** | `G9DtPullRequest { ClientId, Subscriptions, Tables, Backfills }` → `G9DtPullPlan { Token, Parts (key, table, kind, rows, bytes), TotalRows, EstimatedBytes, Cursors, Skipped, Error }` | exact row counts before any data moves |
 | **Pull** | `(token, continuation?)` → stream of `G9DtSyncChunk` | resumable anywhere with the same token |
 | **Reconcile** | `G9DtReconcileRequest { ClientId, Subscription, Tables (256 digests + counts each) }` → stream: `KeyVersions` chunks, then a final chunk with `G9DtReconcileSummary { Cursor, DefinitionHash, AuthHash, Mismatched }` | |
@@ -30,6 +32,14 @@ changed or tombstone horizon passed) · `Unknown` · `InvalidParameters` · `For
 carries `Continuation { PartIndex, AfterKey, NextSequence }` is a **safe resume point**: everything up to it is complete.
 Pages with no rows are never sent; the last chunk of a stream has `IsFinal = true`.
 
+### Commands (ADR-0025)
+
+`G9DtPushRequest.Commands` carries `G9DtCommand { CommandId, Sequence, Name, Version, Payload (JSON), CreatedUtcMs, Touched
+[{TableId, Key}] }`; with commands, `HeldTables` lists every table the device holds with its column order (the shape of canonical
+rows for tables the push does not carry). `G9DtPushResult.CommandResults` has one `G9DtCommandResult { CommandId, Status (Ok 0,
+Rejected 1, Superseded 2), Code, Message, Result }` per command, and `CanonicalFrames` also carry the upserts/tombstones that settle
+the commands' rows. A push may carry commands and no row frames.
+
 ### Push idempotency
 
 The server stores the last applied `BatchId` and its result per client in the same transaction as the apply. A request
@@ -39,7 +49,9 @@ The client reuses a batch id until the batch is acknowledged ([08](08-Client-Sql
 ## Cursor
 
 `v1:{epoch:N}:{pg_snapshot text}` (`G9CSyncCursor`). Opaque to clients. The epoch is the capture installation's id
-(`g9sync.install.epoch`); a different epoch means the database was restored or reinstalled → `ResyncRequired`.
+(`g9sync.install.epoch`); a different epoch means the database was restored, copied or reinstalled → `ResyncRequired`. The server
+rotates the epoch itself when the database's OID changed, and treats a cursor whose snapshot is newer than the database (point-in-time
+restore, lagging failover) as `ResyncRequired` too (ADR-0036).
 
 ## Pull token
 
@@ -50,10 +62,28 @@ The client reuses a batch id until the batch is acknowledged ([08](08-Client-Sql
 ## G9RowBatch frame
 
 ```
-header (10 bytes):  'G' '9' 'R' 'B' | version u8 (=1) | compression u8 (0 none, 1 Brotli) | body length i32 LE
+header (10 bytes):  'G' '9' 'R' 'B' | version u8 (1 row-wise, 2 column-grouped) | compression u8 (0 none, 1 Brotli) | body length i32 LE
 body:               section count i32 LE | section*
-section:            op u8 | table id varint | key type u8 | column count varint | column types u8[count] | row count i32 LE | row*
+section (layout 1): op u8 | table id varint | key type u8 | column count varint | column types u8[count] | row count i32 LE | row*
+section (layout 2): the same header | stream byte length varint * streams | stream*
 ```
+
+### Body layouts (ADR-0040)
+
+**Layout 1** is row-wise: each row's fields in turn (below). **Layout 2** holds the same fields, encoded identically, grouped by field:
+every stream is that field of every row, in row order.
+
+| Op | Streams, in order |
+|---|---|
+| `Upsert`, `Backfill` | keys · versions · null bitmaps · one per column (values of non-null cells only) |
+| `Tombstone`, `MoveOut` | keys · versions |
+| `KeyVersions` | keys · versions · row hashes |
+| `Push` | keys · push ops · local sequences · base versions · dirty masks · HLC ms · null bitmaps (upsert rows only) · one per column |
+
+A stream with bytes no row used, or too few bytes, makes the frame malformed. The reader accepts both layouts everywhere. Which layout a
+response uses is negotiated per request: `G9DtPullRequest`, `G9DtReconcileRequest`, `G9DtFetchRowsRequest` and `G9DtPushRequest` carry
+`FrameVersion` (the newest layout the client reads; absent = 1), the server answers with `G9SyncProtocol.NegotiateFrameVersion(FrameVersion)`,
+and a pull token records the layout chosen at planning. Clients send push frames in layout 1.
 
 - The writer compresses with Brotli (quality 4, window 22) when the body exceeds 128 bytes and compression helps;
   otherwise the body is stored raw. Body limit 512 MiB.

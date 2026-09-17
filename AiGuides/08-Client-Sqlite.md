@@ -10,8 +10,46 @@ never captured.
 services.AddG9SyncDataClient(model).UseSqlite(o => o.DatabasePath = path);
 ```
 
-The package references **`Microsoft.Data.Sqlite.Core` only**: the app references the native SQLite it wants (e.g.
-`SQLitePCLRaw.bundle_e_sqlite3` ≥ 2.1.13) and, under NativeAOT, calls `SQLitePCL.Batteries_V2.Init()` (ADR-0009).
+The package references **`SQLitePCLRaw.core` only** (≥ 2.1.13; 2.x and 3.x both work, ADR-0032) — no Microsoft.Data.Sqlite. The app
+references the native SQLite it wants (e.g. `SQLitePCLRaw.bundle_e_sqlite3`, or what sqlite-net already brings) and **initialises the
+provider once before the store's first connection**: `SQLitePCL.Batteries_V2.Init()`. Without it the first store call throws an
+`InvalidOperationException` that says so. SQL errors surface as `G9CSqliteException` (`SqliteErrorCode`, `SqliteExtendedErrorCode`).
+
+### Data access (`Native/G9SqliteNative.cs`)
+
+Internal types named like the Microsoft.Data.Sqlite members the store used (`SqliteConnection`, `SqliteCommand`, …), over
+`SQLitePCL.raw`. Their contract is pinned by `tests/G9SyncData.Tests/Client/SqliteNativeTests.cs`:
+
+| Behaviour | Why the store needs it |
+|---|---|
+| Each statement of a multi-statement command compiles when execution reaches it | schema scripts create a table and then use it (LES-0033) |
+| A disposed reader runs the command's remaining statements | side effects never depend on whether rows were read |
+| Statements are prepared once per command and rebound per execution | the apply loop runs one command per row |
+| Values bind by runtime type: GUID → `D` text, decimal → text, DateTime → `yyyy-MM-dd HH:mm:ss.FFFFFFF`, bool → 0/1 | the formats the v1 store wrote |
+| A missing parameter throws | a typo is never a silent NULL |
+| Pools per connection string; `ClearPool` closes idle handles and handles in use when returned; no clear-all | LES-0030, LES-0033 |
+| A pooled handle is rolled back before reuse; `BeginNestedTransaction` = SAVEPOINT inside an owner's transaction | commands on the app's connection |
+| Keywords: `Data Source`/`Filename`, `Mode`, `Cache`, `Pooling`, `Default Timeout`, `Foreign Keys`; `Password` and `:memory:` refused | |
+| `TrySetTriggersEnabled` switches trigger execution for ONE handle (`SQLITE_DBCONFIG_ENABLE_TRIGGER`), recompiling its statements; never on a borrowed handle; the pool closes a handle returned with triggers off | the apply fast path (ADR-0034) |
+
+### Commands on the app's own connection
+
+```csharp
+// sqlite-net: the command and the app's own writes commit (or roll back) together
+await db.RunInTransactionAsync(conn =>
+    store.EnqueueCommand(conn.Handle, new G9CCommandRequest { Name = "move-tree", Payload = json }, () =>
+    {
+        conn.Update(tree);              // the command's local effect: not uploaded as a row change, protected until settled
+        conn.Insert(historyEntry);
+    }));
+```
+
+- Inside a transaction the command is a SAVEPOINT of it; outside one it is its own `BEGIN IMMEDIATE`. Writes on the connection
+  outside `applyLocally` are ordinary captured changes.
+- The handle must be open on the store's database file (refused otherwise). The store's write lock is not taken.
+- The **app connection's** busy timeout applies while a sync is writing: set it (sqlite-net `BusyTimeout`) to at least a few
+  seconds, or expect `G9CSqliteException` with `SqliteErrorCode` 5 and nothing recorded.
+- Resolve the store as `G9CSqliteSyncStore` from DI (`UseSqlite` registers it) after `engine.InitializeAsync()`.
 
 | Option | Default | Notes |
 |---|---|---|
@@ -21,6 +59,10 @@ The package references **`Microsoft.Data.Sqlite.Core` only**: the app references
 | `BusyTimeoutMilliseconds` | 30 000 | app writes on other connections wait, not fail |
 | `UseWriteAheadLog` | true | |
 | `MaxChangedKeysPerTable` | 5 000 | cap of keys reported in `RowsApplied` per table |
+| `SkipTriggersDuringApply` | true | trigger execution off on the store's connection during applies, unless the database has app triggers (ADR-0034) |
+| `RebuildIndexesAfterRows` | 20 000 | a download filling an empty table with at least this many rows rebuilds its plain indexes after the load; 0 = never |
+| `SynchronousNormalForDownloads` | true | WAL mode: staging and applying commit with `synchronous=NORMAL` (server data only) |
+| `WalSizeLimitBytes` | 64 MiB | `journal_size_limit` of the store's connections; negative = unlimited |
 
 ## Objects it creates
 
@@ -52,6 +94,24 @@ Local names may not start with `g9_`. The app must never write `g9_*` tables.
 - Triggers use `INSERT OR IGNORE` + `UPDATE`, never UPSERT (UPSERT inside triggers has parser ambiguities).
 - `DownloadOnly` tables get no triggers.
 
+## Command outbox (`G9CSqliteSyncStore.Commands.cs`, ADR-0025)
+
+- `g9_commands (command_id, seq, name, version, payload, created_utc, state, batch_id, code, message, result, completed_utc)` and
+  `g9_command_rows (command_id, tid, pk)`; `g9_ctx.command_id` (added by `ALTER TABLE` to stores created earlier).
+- `applying = 2` is command mode: the capture triggers (`WHEN applying = 0`) stay silent; command triggers `g9_<table>_ci/_cu/_cd`
+  (created on EVERY table, whatever its direction) insert the touched keys into `g9_command_rows`.
+- `BuildPushBatchAsync` adds pending commands (a retried batch: exactly its own, by `batch_id`; a new batch: all pending) and returns a
+  batch even without dirty rows. `ApplyPushResultAsync` completes commands BEFORE `BeginApply`, so their rows are no longer protected
+  when the canonical frames are applied. `BeginApply` adds rows of still-pending commands to the skip set.
+
+## Revocation (`G9CSqliteSyncStore.Revocation.cs`, ADR-0026)
+
+- `g9_quarantine (tid, pk, reason, rule, row_json, had_pending, dirty_mask, at_utc)` — values as JSON (blobs as `{"$b64": …}`);
+  `g9_revoked (tid, pk, disposition, reason, rule, at_utc)` for marked and retained rows.
+- `MoveOut` (policy `Delete`) and `RemoveSubscriptionAsync` call `DisposeReleasedRow` for rows with `subs = 0` — pending changes included.
+- Upserts clear a row's revoked mark only when `g9_revoked` is non-empty (checked once per apply), so large pulls pay nothing.
+- `ReevaluateRetainedAsync` (end of every run): clears marks of rows held again, deletes `Retain` rows whose condition released them.
+
 ## Apply rules (`G9CSqliteSyncStore.Apply.cs`)
 
 Every apply is one write transaction with `applying = 1`:
@@ -65,9 +125,45 @@ Every apply is one write transaction with `applying = 1`:
 - Staged pulls apply every chunk, store cursors and mark backfilled columns synced in the same transaction.
 - The local clock advances once per applied row, so the change feed sees downloads too.
 
+### Large downloads (ADR-0034)
+
+Measured on 500,000 rows: 8.45 s → 2.9 s for the apply, 392 MB → 267 MB on disk ([19](19-Performance.md)).
+
+- **Triggers skipped, not dropped.** `BeginApply` reads `sqlite_master` for triggers; if every one is a library trigger
+  (`g9_{table}_{ai|au|ad|ci|cu|cd}` of a model table) it switches trigger execution off for the apply's connection. `applying = 1` is
+  still set: correctness never depends on the switch. `ApplyContext.Dispose` switches it back on — also after a failure.
+- **App triggers win.** One foreign trigger anywhere keeps execution on for every apply (event 20110, logged once per store): the app's
+  FTS or audit triggers fire for downloaded rows exactly as before. Retire Dotmim's triggers when a table moves to G9SyncData, or the
+  fast path stays off ([16](16-AgriPad-Integration.md)).
+- **Indexes after the load.** For a staged pull, `SnapshotRowsByTable(plan)` sums snapshot rows per table. A table with at least
+  `RebuildIndexesAfterRows` of them that has no row when the apply starts has its plain indexes dropped (event 20111, Debug);
+  `EndApply` re-runs their `sqlite_master` statements before commit. Partial, descending and expression indexes come back exactly;
+  UNIQUE and primary-key indexes are never dropped. A failed apply rolls the drops back with the rows.
+- **Durability.** `DownloadDurability` sets `synchronous=NORMAL` around `StageChunkAsync`, `ApplyStagedPullAsync` and
+  `ApplyReconcileAsync` when the journal mode is WAL and the handle is stricter, and restores the previous value.
+- **Rows arrive in key order** (server pages by key). Keep it that way: random order doubled the load.
+
+### Allocation-free apply
+
+Upserts bind straight from the frame: `SqliteRowStatement` (`Native/G9SqliteNative.cs`) is a prepared statement with positional typed
+binds (`BindInt64`, `BindDouble`, `BindText(ReadOnlySpan<byte>)`, `BindBlob`, …) that the apply loop feeds with UTF-8 spans of the
+frame; GUID, date and decimal values are formatted into stack buffers (`TryFormat`), keys likewise. One upsert statement and one
+row-metadata statement per table are cached in the `ApplyContext`; the dirty-row check runs only for tables that have dirty rows.
+500,000 rows on the emulator: 69 MB allocated for the whole initial sync (was 508 MB), 4 GCs of each generation; reconciliation of
+500,000 matching rows 0 MB (was 227 MB). `SqliteApplyValueTests` pins the stored forms. Reconciliation digests stream through a
+`SqliteRowStatement` and the managed `G9CMd5` (LES-0040) and materialise only rows of mismatched buckets.
+
+### Marking rows dirty
+
+`MarkDirtyAsync(table, keys)` and the Dotmim import mark rows set-based: the keys go into a temporary table numbered with
+`row_number()`, and each row gets `local_seq = first + n` — its own push sequence, as a captured edit would (LES-0039).
+
 ## Push batching (`G9CSqliteSyncStore.Push.cs`)
 
-- Dirty, non-rejected rows of uploadable tables, ordered by `local_seq`, up to `PushBatchRows`.
+- Dirty, non-rejected rows of uploadable tables, ordered by `local_seq`, up to the batch's row limit AND byte budget
+  (`BuildPushBatchAsync(tables, maxRows, maxBytes)`): each row's encoded size is estimated, the batch is the longest prefix that fits
+  (`Truncated` when rows remain), and a row larger than the whole budget gets `rejected = 1` and a `G9S-REJ-TOO-LARGE` rejection
+  (`RejectedLocally`) instead of blocking the rows behind it (ADR-0037).
 - Local mask bits (model column order) are remapped to the negotiated column order; read-only and computed columns are
   never uploaded.
 - The first build of a batch stores `inflight_batch_id` / `inflight_max_seq`; rebuilding before the acknowledgement reuses
@@ -75,6 +171,25 @@ Every apply is one write transaction with `applying = 1`:
 - The acknowledgement clears `dirty` only for rows with `local_seq <= MaxSequence`; a row edited meanwhile stays dirty.
   Rejections set `rejected = 1` (until the row is edited again or `RetryRejectedAsync`). Canonical rows from the server
   are applied.
+
+## Retiring Dotmim.Sync on a device (`G9CSqliteSyncStore.Dotmim.cs`, ADR-0038)
+
+`RetireDotmimCaptureAsync(options?)` removes Dotmim's capture from the tables this store syncs, in one transaction:
+
+1. **Unsent work is imported first** (`ImportPendingChanges`, default on): tracking rows with `update_scope_id IS NULL` (local changes)
+   whose `timestamp` is newer than the oldest `scope_info_client.scope_last_sync_timestamp` become pending upserts (row exists) or
+   deletes (tombstone, row gone). A scope that never synced makes every local change pending.
+2. **Dotmim's triggers are dropped** — only a trigger named `{TriggersPrefix}{table}…_{insert|update|delete}_trigger` whose body writes
+   the table's tracking table (`update_scope_id`, `sync_row_is_tombstone`). An app trigger with a similar name survives.
+3. **Tracking tables** with Dotmim's column shape are dropped (`DropTrackingTables`), and **`scope_info` / `scope_info_client`** once no
+   tracking table is left (`DropScopeTablesWhenUnused`).
+
+The result lists what was dropped and imported, and `RemainingForeignTriggers` — anything left there keeps the apply fast path off
+(ADR-0034). Running it again is a no-op. `GetForeignTriggersAsync()` answers the same question without changing anything.
+Stop syncing the tables through Dotmim FIRST: a Dotmim scope that still lists a table re-creates its triggers on its next sync.
+
+`ForgetUploadedRowsAsync(table, keys?)` (upload-only tables only) deletes uploaded rows with `applying = 1` — no delete is captured — and
+keeps any row with a pending change.
 
 ## Schema evolution
 
@@ -92,6 +207,14 @@ Every apply is one write transaction with `applying = 1`:
 | Double | REAL |
 | Decimal | REAL (default) or TEXT |
 | String, DateTimeOffset (`o`-like text) | TEXT |
-| Guid | TEXT, lower-case `D` format (key column `COLLATE NOCASE`) |
+| Guid | TEXT, lower-case `D` format (key column `COLLATE NOCASE`) — see below |
 | DateTime | TEXT (format above) or INTEGER ticks |
 | Bytes | BLOB |
+
+### Why GUIDs stay TEXT
+
+A GUID is 128 bits: it cannot be an SQLite INTEGER (64 bits). The compact form is a 16-byte BLOB; measured on 500,000 rows it loads
+12% faster and makes the file 23% smaller than 36-character text (ADR-0034, variant I). The store keeps TEXT because the tables belong
+to the app, and both sqlite-net and EF Core map `Guid` to TEXT: switching would change every entity key, every query literal and every
+index of the app. The larger costs were elsewhere (key order 2×, idle triggers 2.6×, index maintenance 1.8×). BLOB keys remain an
+option for a table the app declares that way; the store has no BLOB-GUID mapping today ([17](17-Known-Limitations.md)).

@@ -39,7 +39,19 @@ public static class G9SyncErrorCodes
     public const string RejectPermission = "G9S-REJ-PERMISSION";
     public const string RejectDirection = "G9S-REJ-DIRECTION";
     public const string RejectTooMany = "G9S-REJ-TOO-MANY";
+
+    /// <summary>
+    ///     One row is larger than the server accepts in a push (<c>MaxPushBytes</c>): it can never be uploaded as it is. Rejected on the
+    ///     device, so every other row still uploads.
+    /// </summary>
+    public const string RejectTooLarge = "G9S-REJ-TOO-LARGE";
     public const string RejectMalformed = "G9S-REJ-MALFORMED";
+
+    /// <summary>No handler is registered for the command's name and version.</summary>
+    public const string CommandUnknown = "G9S-CMD-UNKNOWN";
+
+    /// <summary>A command handler refused the command without an application code.</summary>
+    public const string CommandRejected = "G9S-CMD-REJECTED";
 
     // Conflicts (push)
     public const string ConflictServerWins = "G9S-CON-SERVER-WINS";

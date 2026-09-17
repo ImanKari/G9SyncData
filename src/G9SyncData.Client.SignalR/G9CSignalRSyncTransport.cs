@@ -1,6 +1,7 @@
 using System.Net;
 using System.Runtime.CompilerServices;
 using G9SignalRSuperNetCore.Client;
+using G9SignalRSuperNetCore.Client.MessagePack;
 using G9SyncData.Client.Transport;
 using G9SyncData.Protocol;
 using Microsoft.AspNetCore.SignalR;
@@ -35,7 +36,8 @@ public sealed partial class G9CSignalRSyncTransport
         PrepareConnection(options.Url,
             customConfigureBuilder: builder =>
             {
-                builder.AddJsonProtocol(protocol => protocol.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, G9SyncJsonContext.Default));
+                if (options.Protocol == G9ESyncHubProtocol.MessagePack) builder.AddG9MessagePackProtocol(G9SyncWireShapes.GeneratedTypeShapeProvider);
+                else builder.AddJsonProtocol(protocol => protocol.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, G9SyncJsonContext.Default));
                 return options.ConfigureBuilder?.Invoke(builder) ?? builder;
             },
             configureHttpConnection: http =>

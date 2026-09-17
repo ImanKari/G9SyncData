@@ -70,6 +70,9 @@ internal sealed class G9DtPullTokenPayload
     public string NewSnapshot { get; set; } = string.Empty;
     public List<G9DtTokenSubscription> Subscriptions { get; set; } = [];
     public List<G9DtTokenPart> Parts { get; set; } = [];
+
+    /// <summary>The frame layout negotiated when the pull was planned (0 in tokens from before ADR-0040 = layout 1).</summary>
+    public int FrameVersion { get; set; }
 }
 
 internal sealed class G9DtTokenSubscription

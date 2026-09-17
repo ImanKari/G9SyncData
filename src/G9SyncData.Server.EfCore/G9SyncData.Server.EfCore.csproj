@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    This project deliberately does NOT import build/G9SyncData.Library.props.
+
+    That file sets IsAotCompatible, which turns the trim/AOT analysers into build errors. EF Core is
+    not trim- or AOT-clean (the model is built by reflection over the context's CLR types), and this
+    library is SERVER-side only, where AOT is not a requirement (ADR-0003 scopes AOT to the device).
+    Claiming compatibility here would be dishonest, so the properties are set explicitly instead and
+    the trim analyser stays off. Nothing on the device references this assembly.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <RootNamespace>G9SyncData.Server.EfCore</RootNamespace>
+    <Description>G9SyncData server model derived from an Entity Framework Core model: table, key, column, type-mapping and index information is read from IModel, so the sync model cannot drift from the application's own schema. Server-side only; not AOT-compatible by design.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Abstractions\G9SyncData.Abstractions.csproj" />
+    <ProjectReference Include="..\G9SyncData.Server\G9SyncData.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

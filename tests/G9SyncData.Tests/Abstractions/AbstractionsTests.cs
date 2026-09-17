@@ -15,6 +15,49 @@ public sealed class DigestTests
     {
         Assert.Equal(bucket, G9CSyncDigest.GetBucket(key));
         Assert.Equal(rowHash, G9CSyncDigest.GetRowHash(key, version));
+        Assert.Equal(bucket, G9CSyncDigest.GetBucket(System.Text.Encoding.UTF8.GetBytes(key)));
+        Assert.Equal(rowHash, G9CSyncDigest.GetRowHash(System.Text.Encoding.UTF8.GetBytes(key), version));
+    }
+
+    [Theory]
+    [InlineData("8f3eb2a1-0c4d-4e5f-9a6b-7c8d9e0f1a2b", 0L)]
+    [InlineData("9007199254740993", long.MaxValue)]
+    [InlineData("Key With Spaces ۱ and a long tail ....................................................................................................................................................................................................................................................................", 42L)]
+    public void The_allocation_free_digest_equals_the_string_digest(string key, long version)
+    {
+        var utf8 = System.Text.Encoding.UTF8.GetBytes(key);
+        Assert.Equal(G9CSyncDigest.GetBucket(key), G9CSyncDigest.GetBucket(utf8));
+        Assert.Equal(G9CSyncDigest.GetRowHash(key, version), G9CSyncDigest.GetRowHash(utf8, version));
+    }
+
+    [Theory]
+    [InlineData("", "d41d8cd98f00b204e9800998ecf8427e")]
+    [InlineData("a", "0cc175b9c0f1b6a831c399e269772661")]
+    [InlineData("abc", "900150983cd24fb0d6963f7d28e17f72")]
+    [InlineData("message digest", "f96b697d7cb7938d525a2f31aaf161d0")]
+    [InlineData("abcdefghijklmnopqrstuvwxyz", "c3fcd3d76192e4007dfb496cca67e13b")]
+    [InlineData("12345678901234567890123456789012345678901234567890123456789012345678901234567890", "57edf4a22be3c955ac49da2e2107b67a")]
+    public void The_managed_md5_matches_rfc_1321(string text, string expected)
+    {
+        Span<byte> hash = stackalloc byte[16];
+        G9CMd5.HashData(System.Text.Encoding.ASCII.GetBytes(text), hash);
+        Assert.Equal(expected, Convert.ToHexStringLower(hash));
+    }
+
+    [Fact]
+    public void The_managed_md5_matches_the_platform_md5_for_every_length_that_crosses_a_block()
+    {
+        var random = new Random(20260917);
+        Span<byte> managed = stackalloc byte[16];
+        for (var length = 0; length <= 300; length++)
+        {
+            var data = new byte[length];
+            random.NextBytes(data);
+            G9CMd5.HashData(data, managed);
+#pragma warning disable CA5351 // the reference implementation for a test
+            Assert.Equal(System.Security.Cryptography.MD5.HashData(data), managed.ToArray());
+#pragma warning restore CA5351
+        }
     }
 
     [Fact]

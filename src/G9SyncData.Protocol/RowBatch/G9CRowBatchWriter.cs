@@ -363,36 +363,64 @@ public sealed class G9CRowBatchWriter : IDisposable
     // ---------------------------------------------------------------- frame
 
     /// <summary>Produces the frame. Falls back to an uncompressed body when compression does not help.</summary>
-    public byte[] ToFrame(G9ECompression compression = G9ECompression.Brotli, int quality = 4)
+    /// <param name="compression">Body compression.</param>
+    /// <param name="quality">Brotli quality.</param>
+    /// <param name="version">
+    ///     Body layout: 1 row-wise (every reader), 2 column-grouped (smaller once compressed, ADR-0040). Write 2 only for a peer that
+    ///     asked for it.
+    /// </param>
+    public byte[] ToFrame(G9ECompression compression = G9ECompression.Brotli, int quality = 4, int version = G9RowBatchFormat.Version)
     {
         ThrowIfDisposed();
         if (_inSection) throw new InvalidOperationException("EndSection must be called before ToFrame.");
-        BinaryPrimitives.WriteInt32LittleEndian(_buffer.AsSpan(0, 4), _sectionCount);
-        var body = _buffer.AsSpan(0, _length);
-
-        if (compression == G9ECompression.Brotli && _length > 128)
+        if (version is not (G9RowBatchFormat.Version or G9RowBatchFormat.ColumnVersion))
         {
-            var rented = ArrayPool<byte>.Shared.Rent(BrotliEncoder.GetMaxCompressedLength(_length));
-            try
-            {
-                if (BrotliEncoder.TryCompress(body, rented, out var written, quality, 22) && written < _length)
-                {
-                    var compressed = new byte[G9RowBatchFormat.HeaderSize + written];
-                    WriteHeader(compressed, G9ECompression.Brotli);
-                    rented.AsSpan(0, written).CopyTo(compressed.AsSpan(G9RowBatchFormat.HeaderSize));
-                    return compressed;
-                }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
+            throw new ArgumentOutOfRangeException(nameof(version), version, "Unknown G9RowBatch version.");
         }
 
-        var raw = new byte[G9RowBatchFormat.HeaderSize + _length];
-        WriteHeader(raw, G9ECompression.None);
-        body.CopyTo(raw.AsSpan(G9RowBatchFormat.HeaderSize));
-        return raw;
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.AsSpan(0, 4), _sectionCount);
+        byte[]? grouped = null;
+        try
+        {
+            ReadOnlySpan<byte> body;
+            if (version == G9RowBatchFormat.ColumnVersion)
+            {
+                grouped = G9RowBatchColumnLayout.FromRows(_buffer.AsSpan(0, _length), out var groupedLength);
+                body = grouped.AsSpan(0, groupedLength);
+            }
+            else
+            {
+                body = _buffer.AsSpan(0, _length);
+            }
+
+            if (compression == G9ECompression.Brotli && body.Length > 128)
+            {
+                var rented = ArrayPool<byte>.Shared.Rent(BrotliEncoder.GetMaxCompressedLength(body.Length));
+                try
+                {
+                    if (BrotliEncoder.TryCompress(body, rented, out var written, quality, 22) && written < body.Length)
+                    {
+                        var compressed = new byte[G9RowBatchFormat.HeaderSize + written];
+                        WriteHeader(compressed, (byte)version, G9ECompression.Brotli, body.Length);
+                        rented.AsSpan(0, written).CopyTo(compressed.AsSpan(G9RowBatchFormat.HeaderSize));
+                        return compressed;
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rented);
+                }
+            }
+
+            var raw = new byte[G9RowBatchFormat.HeaderSize + body.Length];
+            WriteHeader(raw, (byte)version, G9ECompression.None, body.Length);
+            body.CopyTo(raw.AsSpan(G9RowBatchFormat.HeaderSize));
+            return raw;
+        }
+        finally
+        {
+            if (grouped is not null) ArrayPool<byte>.Shared.Return(grouped);
+        }
     }
 
     /// <summary>Clears all content so the pooled buffer can be reused for the next frame.</summary>
@@ -539,15 +567,15 @@ public sealed class G9CRowBatchWriter : IDisposable
         _length += value.Length;
     }
 
-    private void WriteHeader(Span<byte> frame, G9ECompression compression)
+    private static void WriteHeader(Span<byte> frame, byte version, G9ECompression compression, int bodyLength)
     {
         frame[0] = (byte)'G';
         frame[1] = (byte)'9';
         frame[2] = (byte)'R';
         frame[3] = (byte)'B';
-        frame[4] = G9RowBatchFormat.Version;
+        frame[4] = version;
         frame[5] = (byte)compression;
-        BinaryPrimitives.WriteInt32LittleEndian(frame[6..], _length);
+        BinaryPrimitives.WriteInt32LittleEndian(frame[6..], bodyLength);
     }
 
     private void EnsureCapacity(int additional)

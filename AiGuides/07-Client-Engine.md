@@ -20,6 +20,46 @@ an `IG9SyncClientStore` and an `IG9SyncTransport`, and publishes progress, event
 | `GetHealthAsync()` | connection, queue, epoch, pending, subscriptions, recent runs |
 | events `RowsApplied`, `RunCompleted` | table + keys changed; final result |
 
+## Commands (ADR-0025)
+
+```csharp
+var command = await engine.ExecuteCommandAsync("replant", new Replant(potId, treeId), AppJson.Default.Replant,
+    applyLocally: async (local, ct) =>
+    {
+        await local.ExecuteAsync("UPDATE Placement SET IsCurrent = 0 WHERE PotId = $p0 AND IsCurrent = 1", potId.ToString());
+        await local.ExecuteAsync("INSERT INTO Placement (Id, PotId, TreeId, IsCurrent) VALUES ($p0, $p1, $p2, 1)", newId, potId, treeId);
+    });
+var outcomes = await engine.GetCommandsAsync(G9ELocalCommandState.Rejected);
+```
+
+- `applyLocally` runs in the same SQLite transaction that records the command; if it throws, nothing is recorded. Its rows are NOT
+  uploaded as row changes; they are protected from pulls until the command's result arrives and are then replaced by the server's
+  canonical state — also when the command is rejected (the device reverts) or creates a row the device may not see (it is removed).
+- A run pushes when rows OR commands are pending (`G9CPendingSummary.PendingCommands`). Commands travel in device order, up to
+  `PushBatchRows` per batch, with the rows each touched and the device's held-table columns.
+- Outcomes (`Ok`, `Rejected` + code, `Superseded`) are kept for 30 days in `g9_commands`; `G9CApplyReport.CommandsCompleted` counts them per run.
+
+## Revocation policy (ADR-0026)
+
+```csharp
+new G9CSqliteSyncStoreOptions
+{
+    DatabasePath = path,
+    Revocation = G9CRevocationPolicy.Create(rules => rules
+        .ForTable("samples-until-sent", "SamplingItem").RetainWhile(row => !IsReportSent(row))
+        .ForTable("keep-marked", "Tree", row => !row.HasPendingChanges).MarkRevoked()
+        .When("redact-notes", row => row.Values.ContainsKey("Note")).Custom((row, editor) => { editor.Set("Note", null); return G9ERevocationDisposition.MarkRevoked; }))
+    // rows no rule matches: deleted, or quarantined when they have pending changes
+};
+
+var held = await engine.GetQuarantinedAsync();          // the user's unsynced work on rows they lost access to
+await engine.RestoreQuarantinedAsync("Tree", key);       // e.g. after access returns: back as a pending change
+var kept = await engine.GetRetainedAsync();              // marked / retained rows, with rule and reason
+```
+
+A run's `G9CApplyReport` counts `RevokedDeleted`, `RevokedQuarantined` and `RevokedRetained`. Rules run inside the apply transaction:
+keep them quick and pure.
+
 ## Requests, priorities, coalescing
 
 - `G9CSyncRequest`: `Subscriptions` (keys or names; null = all, background skips `Heavy`), `Push`, `Pull`,
@@ -29,6 +69,9 @@ an `IG9SyncClientStore` and an `IG9SyncTransport`, and publishes progress, event
   `Canceled` and its request is **queued again** behind the new run (ADR-0020); a staged pull it left is resumed by
   whichever run plans next.
 - Every run is a `G9Sync.Run` activity and feeds the `G9SyncData.Client` meter ([02](02-Architecture.md) → Observability).
+- **Locking rule (LES-0036):** nothing that runs other code — `CancellationTokenSource.Cancel()`, events, progress callbacks — is
+  invoked while the queue lock is held. `Run` decides the pre-emption under the lock and cancels after releasing it; `QueuedRuns` is a
+  count kept under the lock and read without it (the progress tracker samples it under its own lock).
 - Identical plain requests (no post steps, no progress callback, no cancellation token) **coalesce**: both awaiters get
   the same result.
 - Dependencies of selected subscriptions are added automatically and synced in the same plan.
@@ -38,7 +81,9 @@ an `IG9SyncClientStore` and an `IG9SyncTransport`, and publishes progress, event
 1. **Connect + Hello.** Sends the client model and subscriptions with cursors; stores negotiated tables and definitions;
    the server returns a decision per subscription: `Ok`, `Initial`, `Reconcile`, `ResyncRequired`, or a problem
    (`Unknown`, `InvalidParameters`, `Forbidden` — reported in `Problems`, subscription marked failed).
-2. **Push** (when rows are pending): batches of `PushBatchRows` in local change order until nothing is pending.
+2. **Push** (when rows are pending): batches in local change order until nothing is pending, each at most
+   `min(PushBatchRows, MaxPushRows)` rows and 90% of the server's `MaxPushBytes` (announced in Hello). A row that alone exceeds the byte
+   limit is rejected locally (`G9S-REJ-TOO-LARGE`) and counted in the run's rejections (ADR-0037).
 3. **Select** subscriptions and dependencies.
 4. **Reconcile** those that need it: server said so, definition/auth hash changed, `ForceReconcile`, adopted rows, or
    `ReconcileEvery` elapsed.
@@ -46,6 +91,12 @@ an `IG9SyncClientStore` and an `IG9SyncTransport`, and publishes progress, event
 6. **Download** chunks into staging; each chunk carries a resume point.
 7. **Apply** the staged pull atomically and store the new cursors in the same transaction.
 8. **Post steps** (app-owned, with their own progress slice), then persist the run report and phase statistics.
+
+### Upload-only tables
+
+Pushed like any table; never planned, reconciled, fetched or poked. Space is reclaimed by the app:
+`await engine.ForgetUploadedRowsAsync("OutboxPhoto", keys)` removes uploaded rows (no pending change) without uploading deletes; it
+throws for any other direction.
 
 ## Retry and resume
 
@@ -89,6 +140,7 @@ include those tables, debounced by `ChangesDebounce`. A poke is only a hint; cur
 | `PullOnChangesAvailable` / `ChangesDebounce` | true / 2 s |
 | `ProgressMaxHz` | 10 |
 | `FetchKeysPerRequest` | 2000 |
+| `MaxFrameVersion` | 2 — the G9RowBatch layout asked for (ADR-0040); 1 = row-wise frames |
 | `StagedPullMaxAge` | 90 min (tokens live 2 h) |
 | `KeepDeletedFeedEntries` / `KeepRunReports` | 50 000 / 50 |
 

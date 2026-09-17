@@ -152,4 +152,6 @@ public sealed class G9CSyncPipeline
     public IReadOnlyList<IG9DeleteHandler> DeleteHandlers { get; init; } = [];
     public IReadOnlyList<IG9ConflictResolver> ConflictResolvers { get; init; } = [];
     public IReadOnlyList<IG9PostCommitHandler> PostCommitHandlers { get; init; } = [];
+    public IReadOnlyList<IG9RowWriter> RowWriters { get; init; } = [];
+    public IReadOnlyList<IG9CommandHandler> CommandHandlers { get; init; } = [];
 }

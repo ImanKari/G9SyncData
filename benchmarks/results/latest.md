@@ -1,6 +1,6 @@
 # G9SyncData benchmark
 
-Rows: 144,316 · run 2026-09-15 21:10 UTC
+Rows: 144,316 · run 2026-09-17 07:39 UTC
 
 - **Machine:** Intel64 Family 6 Model 183 Stepping 1, GenuineIntel, 24 logical cores
 - **OS / runtime:** Microsoft Windows 10.0.26200 / .NET 10.0.12
@@ -10,21 +10,21 @@ Rows: 144,316 · run 2026-09-15 21:10 UTC
 
 | Metric | Value |
 |---|---|
-| Bulk INSERT, no capture | 812 ms |
-| Bulk INSERT, with capture | 2,004 ms (+147%) |
-| Bulk UPDATE of every row, no capture | 1,045 ms |
-| Bulk UPDATE of every row, with capture | 2,782 ms (+166%) |
-| 2,000 single-row UPDATE transactions, no capture | 345 ms |
-| 2,000 single-row UPDATE transactions, with capture | 490 ms (+42%, 0.072 ms per statement) |
-| Tracking table size / base table size | 34.0 MB / 47.7 MB |
+| Bulk INSERT, no capture | 778 ms |
+| Bulk INSERT, with capture | 1,762 ms (+127%) |
+| Bulk UPDATE of every row, no capture | 792 ms |
+| Bulk UPDATE of every row, with capture | 2,143 ms (+171%) |
+| 2,000 single-row UPDATE transactions, no capture | 209 ms |
+| 2,000 single-row UPDATE transactions, with capture | 326 ms (+56%, 0.059 ms per statement) |
+| Tracking table size / base table size | 36.7 MB / 48.1 MB |
 
 ## S2
 
 | Metric | Value |
 |---|---|
-| PlanPull (exact row counts) | 69 ms |
-| Snapshot pull, server engine only | 1,939 ms · 74,447 rows/s · 73 chunks |
-| 1% delta: plan + pull, server engine only | 219 ms · 1,443 rows (pull 74 ms) |
+| PlanPull (exact row counts) | 322 ms |
+| Snapshot pull, server engine only | 1,373 ms · 105,119 rows/s · 73 chunks |
+| 1% delta: plan + pull, server engine only | 91 ms · 1,443 rows (pull 54 ms) |
 
 ## S4
 
@@ -32,22 +32,22 @@ Rows: 144,316 · run 2026-09-15 21:10 UTC
 |---|---|
 | Frame bytes (Brotli) | 6.5 MB · 47.0 B/row |
 | On the JSON hub protocol (base64) | 8.6 MB |
-| Frame decode (every value boxed) | 125 ms · 1,150,648 rows/s |
+| Frame decode (every value boxed) | 126 ms · 1,143,064 rows/s |
 
 ## S3
 
 | Metric | Value |
 |---|---|
-| Initial sync end to end (JSON round trip, SQLite apply) | 4,797 ms · 30,084 rows/s |
-|   phases | Connecting 49 · Planning 143 · Downloading 1,901 · Applying 2,667 |
-|   SQLite file after initial sync | 115.6 MB |
-| 1% delta sync (1,443 rows) | 402 ms · Connecting 4 · Planning 140 · Downloading 84 · Applying 159 |
-| Push of 1% local edits (1,443 rows) + pull | 574 ms · Connecting 3 · Pushing 312 · Planning 32 · Downloading 95 · Applying 115 |
-| No-op sync (nothing changed) | 176 ms · Connecting 2 · Planning 129 · Downloading 41 |
+| Initial sync end to end (JSON round trip, SQLite apply) | 2,114 ms · 68,271 rows/s |
+|   phases | Connecting 43 · Planning 272 · Downloading 796 · Applying 973 |
+|   SQLite file after initial sync | 114.0 MB |
+| 1% delta sync (1,443 rows) | 314 ms · Connecting 3 · Planning 25 · Downloading 145 · Applying 128 |
+| Push of 1% local edits (1,443 rows) + pull | 410 ms · Connecting 2 · Pushing 245 · Planning 24 · Downloading 44 · Applying 78 |
+| No-op sync (nothing changed) | 59 ms · Connecting 2 · Planning 22 · Downloading 32 |
 
 ## S5
 
 | Metric | Value |
 |---|---|
-| Forced reconciliation of 144,316 matching rows (digests both sides) | 712 ms · Connecting 2 · Reconciling 536 · Planning 134 · Downloading 35 · Applying 1 |
+| Forced reconciliation of 144,316 matching rows (digests both sides) | 602 ms · Connecting 2 · Reconciling 433 · Planning 131 · Downloading 31 |
 

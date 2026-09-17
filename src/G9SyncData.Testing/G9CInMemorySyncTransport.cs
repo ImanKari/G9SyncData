@@ -52,6 +52,12 @@ public sealed class G9CInMemorySyncTransport : IG9SyncTransport
 
     public event Action<G9DtChangesAvailable>? ChangesAvailable;
 
+    /// <summary>
+    ///     Raised as every call starts, on the calling thread, with the call's cancellation token, so a test can observe or hook
+    ///     cancellation (e.g. register a callback that re-enters the engine).
+    /// </summary>
+    public event Action<G9ETransportOperation, CancellationToken>? CallStarting;
+
     public int CallCount(G9ETransportOperation operation) => _calls.GetValueOrDefault(operation);
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
@@ -179,6 +185,7 @@ public sealed class G9CInMemorySyncTransport : IG9SyncTransport
     {
         cancellationToken.ThrowIfCancellationRequested();
         _calls.AddOrUpdate(operation, 1, static (_, count) => count + 1);
+        CallStarting?.Invoke(operation, cancellationToken);
         if (Faults.Latency > TimeSpan.Zero) await Task.Delay(Faults.Latency, cancellationToken).ConfigureAwait(false);
         if (Faults.TakeFailBefore(operation)) throw NetworkFailure(operation, "the call failed before reaching the server");
     }
@@ -200,6 +207,7 @@ public sealed class G9CInMemorySyncTransport : IG9SyncTransport
     private static G9CSyncException MapServerException(Exception exception) => exception switch
     {
         G9CSyncException sync => new G9CSyncException(sync.Code, sync.Message) { Retryable = sync.Retryable, Details = sync.Details },
-        _ => new G9CSyncException(G9SyncErrorCodes.ServerError, "The server failed to process the call.") { Retryable = true, Details = exception.GetType().Name }
+        // The inner exception stays attached for test diagnostics only; code, message and details are what SignalR would deliver.
+        _ => new G9CSyncException(G9SyncErrorCodes.ServerError, "The server failed to process the call.", exception) { Retryable = true, Details = exception.GetType().Name }
     };
 }

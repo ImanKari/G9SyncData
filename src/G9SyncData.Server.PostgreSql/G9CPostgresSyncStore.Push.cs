@@ -65,6 +65,12 @@ public sealed partial class G9CPostgresSyncStore
         await ExecuteAsync(connection, transaction, "SELECT set_config('g9sync.origin', @g9_origin, true)", cancellationToken,
             P("g9_origin", NpgsqlDbType.Text, request.ClientId.ToString())).ConfigureAwait(false);
 
+        // WAL mode: the guarded triggers track this transaction; tell the consumer to skip it (ADR-0028).
+        if (IsWalMode) await EmitPushMarkerAsync(connection, transaction, request.ClientId, cancellationToken).ConfigureAwait(false);
+
+        // Commands first, in device order (ADR-0025): the rows a device pushed after recording a command may depend on it.
+        await ExecuteCommandsAsync(connection, transaction, request, result, cancellationToken).ConfigureAwait(false);
+
         foreach (var tableWork in work.OrderBy(w => w.Table.Model.Order))
         {
             await ApplyTableAsync(connection, transaction, request, tableWork, result, cancellationToken).ConfigureAwait(false);
@@ -184,8 +190,8 @@ public sealed partial class G9CPostgresSyncStore
             $"UPDATE {stage} AS s SET g9_exists = true FROM {table.BaseName} AS t WHERE t.{key} = s.g9_key", ct).ConfigureAwait(false);
 
         // 2. write authorisation for rows that already exist (update / delete must start inside a scope)
-        var authBindings = new List<(G9CResolvedSubscription Subscription, string Prefix)>();
-        var authPredicate = BuildAuthPredicate(table, request.Subscriptions, "t", authBindings);
+        var authBindings = new List<(G9CResolvedSubscription Subscription, string Prefix, PgScope Scope)>();
+        var authPredicate = await BuildAuthPredicateAsync(table, request.Subscriptions, "t", authBindings, ct).ConfigureAwait(false);
         if (authPredicate is null)
         {
             await ExecuteAsync(connection, transaction,
@@ -200,7 +206,11 @@ public sealed partial class G9CPostgresSyncStore
                 $"AND NOT EXISTS (SELECT 1 FROM {table.BaseName} AS t WHERE t.{key} = s.g9_key AND coalesce({authPredicate}, false))");
             command.Parameters.Add(P("g9_code", NpgsqlDbType.Text, G9SyncErrorCodes.RejectPermission));
             command.Parameters.Add(P("g9_message", NpgsqlDbType.Text, "The row is outside every subscription the caller may write to."));
-            foreach (var (subscription, prefix) in authBindings) BindSubscription(command.Parameters, subscription, prefix);
+            foreach (var (subscription, prefix, scope) in authBindings)
+            {
+                BindSubscription(command.Parameters, subscription, prefix);
+                BindScopeParameters(command.Parameters, scope, prefix);
+            }
             await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
@@ -233,6 +243,11 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         // 4. conflicts
+        // WAL mode: changes by other writers reach tracking asynchronously, so lock the rows and record their current state
+        // before reading tracking - otherwise a just-committed server edit could be overwritten unseen (ADR-0028). This does
+        // not wait for the consumer, so push availability never depends on it.
+        if (IsWalMode) await LockAndRecordCurrentStateAsync(connection, transaction, table, stage, ct).ConfigureAwait(false);
+
         await ExecuteAsync(connection, transaction, $"""
             UPDATE {stage} AS s
             SET g9_conflict_mask = CASE WHEN k.deleted THEN -1 ELSE {_schema}.changed_mask(k.col_vers, s.g9_base_ver, @g9_idx) END,
@@ -267,6 +282,21 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         var state = BuildApplyState(connection, transaction, table, columns, stage, request.MaxRejections, result.Rejections.Count);
+
+        // A row writer (ADR-0025) replaces only the INSERT/UPDATE/DELETE. What the application writes may differ from what was
+        // uploaded (audit stamps, resolved codes), so every written row goes back to the device as a canonical row.
+        foreach (var candidate in request.Pipeline.RowWriters) await candidate.PrepareAsync(request.Services, ct).ConfigureAwait(false);
+        state.Writer = request.Pipeline.RowWriters.FirstOrDefault(w => w.AppliesTo(model));
+        if (state.Writer is not null)
+        {
+            transformed = true;
+            state.WriteContext = new G9CRowWriteContext
+            {
+                Table = model, ClientId = request.ClientId, BatchId = request.BatchId, Caller = request.Caller, Auth = request.Auth,
+                Connection = connection, Transaction = transaction, Services = request.Services
+            };
+        }
+
         var permissionFailures = new HashSet<long>();
         for (var attempt = 0; ; attempt++)
         {
@@ -296,12 +326,12 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         // 7. results
-        await CollectResultsAsync(connection, transaction, table, work, stage, transformed, result, ct).ConfigureAwait(false);
+        await CollectResultsAsync(connection, transaction, request, table, work, stage, transformed, result, ct).ConfigureAwait(false);
         if (result.Rejections.Count > request.MaxRejections) throw TooManyRejections(request.MaxRejections);
     }
 
-    private static string? BuildAuthPredicate(PgTable table, IReadOnlyList<G9CResolvedSubscription> subscriptions, string alias,
-        List<(G9CResolvedSubscription Subscription, string Prefix)> bindings)
+    private async ValueTask<string?> BuildAuthPredicateAsync(PgTable table, IReadOnlyList<G9CResolvedSubscription> subscriptions, string alias,
+        List<(G9CResolvedSubscription Subscription, string Prefix, PgScope Scope)> bindings, CancellationToken ct)
     {
         var parts = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -311,8 +341,9 @@ public sealed partial class G9CPostgresSyncStore
             var include = subscription.Definition.FindTable(table.Model);
             if (include is null || !include.AllowUpload || !seen.Add(subscription.Key)) continue;
             var prefix = "a" + i.ToString(CultureInfo.InvariantCulture) + "_";
-            parts.Add("(" + Bind(include.ScopeSql, alias, subscription.Definition, prefix) + ")");
-            bindings.Add((subscription, prefix));
+            var scope = await ResolveScopeAsync(include, subscription, ct).ConfigureAwait(false);
+            parts.Add("(" + BindScope(scope, alias, subscription.Definition, prefix) + ")");
+            bindings.Add((subscription, prefix, scope));
         }
 
         if (parts.Count == 0) return null;
@@ -433,6 +464,12 @@ public sealed partial class G9CPostgresSyncStore
     private async Task ApplyConflictPolicyAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, G9CStorePushRequest request, PgTable table,
         PgBoundColumn[] columns, string stage, CancellationToken ct)
     {
+        if (table.Model.ConflictRules is { Rules.Count: > 0 } rules)
+        {
+            await EvaluateConflictRulesAsync(connection, transaction, request, table, columns, stage, rules, ct).ConfigureAwait(false);
+            return;
+        }
+
         var serverWins = $"UPDATE {stage} SET g9_action = 0, g9_code = CASE WHEN g9_server_deleted THEN '{G9SyncErrorCodes.ConflictDeleted}' ELSE '{G9SyncErrorCodes.ConflictServerWins}' END " +
                          "WHERE g9_conflict_mask IS NOT NULL AND g9_action = 1";
         switch (table.Model.ConflictPolicy)
@@ -585,7 +622,8 @@ public sealed partial class G9CPostgresSyncStore
             InsertSet = insert.Replace("{F}", ArrayFilter, StringComparison.Ordinal),
             InsertRow = insert.Replace("{F}", RowFilter, StringComparison.Ordinal),
             MaxRejections = maxRejections,
-            PriorRejections = priorRejections
+            PriorRejections = priorRejections,
+            Columns = columns
         };
     }
 
@@ -607,15 +645,15 @@ public sealed partial class G9CPostgresSyncStore
             await ExecuteAsync(state.Connection, state.Transaction, "SET CONSTRAINTS ALL IMMEDIATE; SET CONSTRAINTS ALL DEFERRED", ct).ConfigureAwait(false);
             await state.Transaction.ReleaseAsync(savepoint, ct).ConfigureAwait(false);
         }
-        catch (PostgresException exception) when (IsRowLevelFailure(exception))
+        catch (Exception exception) when (RowFailure.TryFrom(exception, out var failure))
         {
             await state.Transaction.RollbackAsync(savepoint, ct).ConfigureAwait(false);
             if (rows.Count == 1)
             {
-                state.Failures[rows[0].Seq] = exception;
+                state.Failures[rows[0].Seq] = failure;
                 if (state.Failures.Count + state.PriorRejections > state.MaxRejections) throw TooManyRejections(state.MaxRejections);
-                await MarkFailureAsync(state, rows[0].Seq, exception, ct).ConfigureAwait(false);
-                LogRowRejected(_logger, state.Table.Model.LogicalName, rows[0].Seq, exception.SqlState, exception.ConstraintName);
+                await MarkFailureAsync(state, rows[0].Seq, failure, ct).ConfigureAwait(false);
+                LogRowRejected(_logger, state.Table.Model.LogicalName, rows[0].Seq, failure.SqlState ?? failure.Code, failure.Constraint);
                 return;
             }
 
@@ -627,6 +665,12 @@ public sealed partial class G9CPostgresSyncStore
 
     private async Task ExecuteApplyAsync(ApplyState state, List<ApplyRow> rows, CancellationToken ct)
     {
+        if (state.Writer is not null)
+        {
+            await WriteThroughWriterAsync(state, rows, ct).ConfigureAwait(false);
+            return;
+        }
+
         if (!state.Table.Ordered)
         {
             var sql = new StringBuilder();
@@ -658,16 +702,85 @@ public sealed partial class G9CPostgresSyncStore
         }
     }
 
-    private async Task MarkFailureAsync(ApplyState state, long seq, PostgresException exception, CancellationToken ct)
+    /// <summary>Reads the batch's staged rows and hands them to the row writer, with only the columns the policy decided to apply.</summary>
+    private async Task WriteThroughWriterAsync(ApplyState state, List<ApplyRow> rows, CancellationToken ct)
     {
-        var code = exception.SqlState.StartsWith("P0", StringComparison.Ordinal) ? G9SyncErrorCodes.RejectValidation : G9SyncErrorCodes.RejectConstraint;
+        var table = state.Table;
+        var writes = new List<G9CRowWrite>(rows.Count);
+        await using (var command = Command(state.Connection, state.Transaction,
+                         $"SELECT g9_seq, g9_op, g9_exists, g9_key, g9_key::text, coalesce(g9_apply_mask, g9_dirty_mask)" +
+                         $"{string.Concat(state.Columns.Select(c => ", " + c.Db!.Quoted))} FROM {state.Stage} WHERE g9_seq = ANY(@g9_seqs) ORDER BY g9_seq"))
+        {
+            command.Parameters.Add(P("g9_seqs", NpgsqlDbType.Array | NpgsqlDbType.Bigint, rows.Select(r => r.Seq).ToArray()));
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var op = reader.GetInt16(1) == 2 ? G9ERowWriteOp.Delete : G9ERowWriteOp.Upsert;
+                var exists = reader.GetBoolean(2);
+                var mask = reader.GetInt64(5);
+                var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+                if (op == G9ERowWriteOp.Upsert)
+                {
+                    for (var i = 0; i < state.Columns.Length; i++)
+                    {
+                        if (exists && (mask & (1L << i)) == 0) continue;
+                        values[state.Columns[i].Model.Name] = reader.IsDBNull(6 + i) ? null : reader.GetValue(6 + i);
+                    }
+                }
+
+                writes.Add(new G9CRowWrite
+                {
+                    Seq = reader.GetInt64(0),
+                    Op = op,
+                    Exists = exists,
+                    KeyValue = reader.GetValue(3),
+                    Key = table.Model.KeyType == G9ESyncColumnType.Guid ? G9CSyncKey.FromGuid(reader.GetGuid(3)) : reader.GetString(4),
+                    Values = values
+                });
+            }
+        }
+
+        await state.Writer!.WriteAsync(state.WriteContext!, writes, ct).ConfigureAwait(false);
+    }
+
+    private async Task MarkFailureAsync(ApplyState state, long seq, RowFailure failure, CancellationToken ct)
+    {
         await ExecuteAsync(state.Connection, state.Transaction,
             $"UPDATE {state.Stage} SET g9_action = 0, g9_code = @g9_code, g9_message = @g9_message, g9_sqlstate = @g9_state, " +
             "g9_constraint = @g9_constraint, g9_column = @g9_column, g9_details = @g9_details WHERE g9_seq = @g9_seq", ct,
-            P("g9_code", NpgsqlDbType.Text, code), P("g9_message", NpgsqlDbType.Text, exception.MessageText),
-            P("g9_state", NpgsqlDbType.Text, exception.SqlState), P("g9_constraint", NpgsqlDbType.Text, exception.ConstraintName),
-            P("g9_column", NpgsqlDbType.Text, exception.ColumnName), P("g9_details", NpgsqlDbType.Text, exception.Detail),
+            P("g9_code", NpgsqlDbType.Text, failure.Code), P("g9_message", NpgsqlDbType.Text, failure.Message),
+            P("g9_state", NpgsqlDbType.Text, failure.SqlState), P("g9_constraint", NpgsqlDbType.Text, failure.Constraint),
+            P("g9_column", NpgsqlDbType.Text, failure.Column), P("g9_details", NpgsqlDbType.Text, failure.Details),
             P("g9_seq", NpgsqlDbType.Bigint, seq)).ConfigureAwait(false);
+    }
+
+    /// <summary>A failure attributable to the rows being applied: a database row-level error, or an application rejection.</summary>
+    private sealed record RowFailure(string Code, string? Message, string? SqlState, string? Constraint, string? Column, string? Details)
+    {
+        /// <summary>
+        ///     Recognises row-level failures anywhere in the exception chain: a writer's ORM wraps the database error (EF Core
+        ///     throws DbUpdateException around the PostgresException), and application code may throw <see cref="G9CRowRejectedException" />.
+        /// </summary>
+        public static bool TryFrom(Exception exception, out RowFailure failure)
+        {
+            for (var current = exception; current is not null; current = current.InnerException)
+            {
+                switch (current)
+                {
+                    case G9CRowRejectedException rejected:
+                        failure = new RowFailure(rejected.Code, rejected.Message, null, null, null, rejected.Details);
+                        return true;
+                    case PostgresException postgres when IsRowLevelFailure(postgres):
+                        failure = new RowFailure(
+                            postgres.SqlState.StartsWith("P0", StringComparison.Ordinal) ? G9SyncErrorCodes.RejectValidation : G9SyncErrorCodes.RejectConstraint,
+                            postgres.MessageText, postgres.SqlState, postgres.ConstraintName, postgres.ColumnName, postgres.Detail);
+                        return true;
+                }
+            }
+
+            failure = null!;
+            return false;
+        }
     }
 
     private async Task RemarkFailuresAsync(ApplyState state, CancellationToken ct)
@@ -676,13 +789,18 @@ public sealed partial class G9CPostgresSyncStore
     }
 
     private async Task<List<long>> FindWriteViolationsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, string stage,
-        string authPredicate, List<(G9CResolvedSubscription Subscription, string Prefix)> bindings, CancellationToken ct)
+        string authPredicate, List<(G9CResolvedSubscription Subscription, string Prefix, PgScope Scope)> bindings, CancellationToken ct)
     {
         var violations = new List<long>();
         await using var command = Command(connection, transaction,
             $"SELECT s.g9_seq FROM {stage} AS s JOIN {table.BaseName} AS t ON t.{table.Key.Quoted} = s.g9_key " +
             $"WHERE s.g9_action = 1 AND s.g9_op = 1 AND NOT coalesce({authPredicate}, false)");
-        foreach (var (subscription, prefix) in bindings) BindSubscription(command.Parameters, subscription, prefix);
+        foreach (var (subscription, prefix, scope) in bindings)
+        {
+            BindSubscription(command.Parameters, subscription, prefix);
+            BindScopeParameters(command.Parameters, scope, prefix);
+        }
+
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false)) violations.Add(reader.GetInt64(0));
         return violations;
@@ -702,7 +820,7 @@ public sealed partial class G9CPostgresSyncStore
 
     // ================================================================ results
 
-    private async Task CollectResultsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, PushWork work, string stage,
+    private async Task CollectResultsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, G9CStorePushRequest request, PgTable table, PushWork work, string stage,
         bool transformed, G9DtPushResult result, CancellationToken ct)
     {
         var key = table.Key.Quoted;
@@ -766,14 +884,21 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         if (transformed) canonicalKeys.UnionWith(upserted);
-        if (canonicalKeys.Count == 0) return;
+        if (canonicalKeys.Count == 0 || table.Model.Direction == G9ESyncDirection.UploadOnly) return;   // upload-only rows never go back
 
-        var frame = await BuildCanonicalFrameAsync(connection, transaction, table, work.Shape.Columns, canonicalKeys.ToArray(), ct).ConfigureAwait(false);
+        // The device applies a canonical row in the columns it HOLDS, which include read-only and computed columns the push shape
+        // leaves out (LES-0035). A client too old to say which it holds gets the push shape only when the two cannot differ.
+        IReadOnlyList<G9CSyncServerColumn> shape;
+        if (request.HeldTables.TryGetValue(table.TableId, out var held)) shape = held.Columns;
+        else if (!table.Model.Columns.Any(c => c.IsReadOnly || c.IsComputed)) shape = work.Shape.Columns;
+        else return;   // the device keeps its values until the next pull delivers the row
+
+        var frame = await BuildCanonicalFrameAsync(connection, transaction, table, shape, canonicalKeys.ToArray(), request.FrameVersion, ct).ConfigureAwait(false);
         if (frame is not null) result.CanonicalFrames.Add(frame);
     }
 
     private async Task<byte[]?> BuildCanonicalFrameAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table,
-        IReadOnlyList<G9CSyncServerColumn> columns, string[] keys, CancellationToken ct)
+        IReadOnlyList<G9CSyncServerColumn> columns, string[] keys, int frameVersion, CancellationToken ct)
     {
         var key = table.Key.Quoted;
         var types = columns.Select(c => c.Type).ToArray();
@@ -809,7 +934,7 @@ public sealed partial class G9CPostgresSyncStore
             AppendKeySection(writer, G9ERowBatchOp.Tombstone, table, tombstones);
         }
 
-        return writer.TotalRows == 0 ? null : writer.ToFrame();
+        return writer.TotalRows == 0 ? null : writer.ToFrame(version: frameVersion);
     }
 
     private async Task<List<string>> ReadKeysAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string sql, CancellationToken ct)
@@ -850,7 +975,10 @@ public sealed partial class G9CPostgresSyncStore
         public required string InsertRow { get; init; }
         public required int MaxRejections { get; init; }
         public required int PriorRejections { get; init; }
-        public Dictionary<long, PostgresException> Failures { get; } = [];
+        public Dictionary<long, RowFailure> Failures { get; } = [];
         public int SavepointCounter { get; set; }
+        public required PgBoundColumn[] Columns { get; init; }
+        public IG9RowWriter? Writer { get; set; }
+        public G9CRowWriteContext? WriteContext { get; set; }
     }
 }

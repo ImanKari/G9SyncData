@@ -12,6 +12,13 @@ internal static class PgTestServer
             ? configured
             : "Host=localhost;Port=15433;Username=postgres;Database=postgres";
 
+    /// <summary>
+    ///     Capture mode for the whole suite: <c>G9SYNC_TEST_CAPTURE=wal</c> runs every integration test with the WAL consumer
+    ///     (ADR-0028) instead of triggers. Run the suite once per mode - every v1 guarantee must hold in both.
+    /// </summary>
+    public static bool UseWal { get; } =
+        string.Equals(Environment.GetEnvironmentVariable("G9SYNC_TEST_CAPTURE"), "wal", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Null when the server answers; otherwise why it does not.</summary>
     public static string? UnavailableReason => Unavailable.Value;
 
@@ -35,6 +42,15 @@ internal static class PgTestServer
 public sealed class PostgresFactAttribute : FactAttribute
 {
     public PostgresFactAttribute()
+    {
+        if (PgTestServer.UnavailableReason is { } reason) Skip = "PostgreSQL test server unavailable (set G9SYNC_TEST_PG): " + reason;
+    }
+}
+
+/// <summary>A theory that is skipped, not failed, when no PostgreSQL test server answers.</summary>
+public sealed class PostgresTheoryAttribute : TheoryAttribute
+{
+    public PostgresTheoryAttribute()
     {
         if (PgTestServer.UnavailableReason is { } reason) Skip = "PostgreSQL test server unavailable (set G9SYNC_TEST_PG): " + reason;
     }

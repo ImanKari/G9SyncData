@@ -40,7 +40,18 @@ public interface IG9SyncClientStore : IAsyncDisposable
     // ------------------------------------------------ push
 
     /// <summary>Builds the next push batch from dirty rows in local change order, or null when nothing is pending. Reuses an in-flight batch id.</summary>
-    Task<G9CPushBatch?> BuildPushBatchAsync(IReadOnlyList<G9DtNegotiatedTable> tables, int maxRows, CancellationToken cancellationToken);
+    /// <summary>
+    ///     The next batch of pending changes, oldest first: at most <paramref name="maxRows" /> rows and about <paramref name="maxBytes" />
+    ///     encoded bytes (the server's announced limits). A row that alone exceeds <paramref name="maxBytes" /> is rejected locally
+    ///     (<c>G9S-REJ-TOO-LARGE</c>) instead of blocking every later push.
+    /// </summary>
+    Task<G9CPushBatch?> BuildPushBatchAsync(IReadOnlyList<G9DtNegotiatedTable> tables, int maxRows, long maxBytes, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     Removes rows of an UPLOAD-ONLY table from the device without uploading a delete: uploaded rows (no pending change) only, all of
+    ///     them or the given keys. The way to free space for data the server keeps, such as readings or logs.
+    /// </summary>
+    Task<int> ForgetUploadedRowsAsync(string localTable, IReadOnlyCollection<string>? keys, CancellationToken cancellationToken);
 
     Task<G9CApplyReport> ApplyPushResultAsync(G9CPushBatch batch, G9DtPushResult result, CancellationToken cancellationToken);
 
@@ -77,6 +88,34 @@ public interface IG9SyncClientStore : IAsyncDisposable
     // ------------------------------------------------ queries and maintenance
 
     Task<G9CPendingSummary> GetPendingSummaryAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     Records a command and, when <paramref name="applyLocally" /> is given, writes its local effects in the same transaction
+    ///     (ADR-0025). If <paramref name="applyLocally" /> throws, nothing is recorded.
+    /// </summary>
+    Task<G9CLocalCommand> EnqueueCommandAsync(G9CCommandRequest request, Func<IG9LocalCommandWriter, CancellationToken, Task>? applyLocally,
+        CancellationToken cancellationToken);
+
+    /// <summary>Rows in the holding area (ADR-0026).</summary>
+    Task<IReadOnlyList<G9CQuarantinedRow>> GetQuarantinedAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     Puts a quarantined row back into its table as a pending local change (every column dirty), so it uploads on the next push —
+    ///     useful once access is restored. Returns 1 when restored.
+    /// </summary>
+    Task<int> RestoreQuarantinedAsync(string localTable, string key, CancellationToken cancellationToken);
+
+    /// <summary>Discards quarantined rows (all when both arguments are null).</summary>
+    Task<int> DiscardQuarantinedAsync(string? localTable, string? key, CancellationToken cancellationToken);
+
+    /// <summary>Rows kept in their table after revocation, with the rule that kept them.</summary>
+    Task<IReadOnlyList<G9CRetainedRow>> GetRetainedAsync(CancellationToken cancellationToken);
+
+    /// <summary>Re-checks rows retained by a <c>RetainWhile</c> rule and deletes those no longer retained. Returns the number deleted.</summary>
+    Task<int> ReevaluateRetainedAsync(CancellationToken cancellationToken);
+
+    /// <summary>Recorded commands, newest first; filtered by state when given.</summary>
+    Task<IReadOnlyList<G9CLocalCommand>> GetCommandsAsync(G9ELocalCommandState? state, int limit, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit, CancellationToken cancellationToken);
 
@@ -181,6 +220,15 @@ public sealed class G9CPushBatch
     public required IReadOnlyList<byte[]> Frames { get; init; }
     public required IReadOnlyList<G9DtTableColumns> Tables { get; init; }
     public required int RowCount { get; init; }
+
+    /// <summary>True when the byte budget ended the batch early: more pending rows follow.</summary>
+    public bool Truncated { get; init; }
+
+    /// <summary>Rows rejected on the device while building the batch (<c>G9S-REJ-TOO-LARGE</c>); they are not in the batch.</summary>
+    public int RejectedLocally { get; init; }
+
+    /// <summary>Commands carried by this batch, in device order (ADR-0025).</summary>
+    public IReadOnlyList<G9DtCommand> Commands { get; init; } = [];
 }
 
 /// <summary>A pull being staged (persisted, survives app restarts).</summary>
@@ -211,6 +259,18 @@ public sealed class G9CApplyReport
     public long Rejected { get; set; }
     public long Conflicts { get; set; }
 
+    /// <summary>Commands whose server result was applied.</summary>
+    public long CommandsCompleted { get; set; }
+
+    /// <summary>Rows no subscription held any more that were deleted (ADR-0026).</summary>
+    public long RevokedDeleted { get; set; }
+
+    /// <summary>Rows moved to the holding area.</summary>
+    public long RevokedQuarantined { get; set; }
+
+    /// <summary>Rows kept in their table (marked or retained).</summary>
+    public long RevokedRetained { get; set; }
+
     /// <summary>Changed keys per local table (capped per table).</summary>
     public Dictionary<string, List<string>> ChangedKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -227,6 +287,10 @@ public sealed class G9CApplyReport
         Accepted += other.Accepted;
         Rejected += other.Rejected;
         Conflicts += other.Conflicts;
+        CommandsCompleted += other.CommandsCompleted;
+        RevokedDeleted += other.RevokedDeleted;
+        RevokedQuarantined += other.RevokedQuarantined;
+        RevokedRetained += other.RevokedRetained;
         foreach (var (table, keys) in other.ChangedKeys)
         {
             if (!ChangedKeys.TryGetValue(table, out var list)) ChangedKeys[table] = list = [];
@@ -244,6 +308,9 @@ public sealed class G9CPendingSummary
 {
     public int TotalRows { get; init; }
     public int RejectedRows { get; init; }
+
+    /// <summary>Commands recorded on the device and not yet executed by the server.</summary>
+    public int PendingCommands { get; init; }
     public IReadOnlyList<G9CPendingTable> Tables { get; init; } = [];
 }
 

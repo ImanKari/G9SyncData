@@ -1,8 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 
 namespace G9SyncData;
@@ -23,7 +21,8 @@ namespace G9SyncData;
 ///         <b>Bucket digest</b> = XOR of the row hashes of every row in the bucket. XOR makes the digest
 ///         order-independent and incrementally maintainable.
 ///     </para>
-///     MD5 is used as a portable, SQL-reproducible bucketing function, not for security (ADR-0012).
+///     MD5 is used as a portable, SQL-reproducible bucketing function, not for security (ADR-0012); computed by <see cref="G9CMd5" />,
+///     not the platform class, because Android routes that through JNI.
 /// </remarks>
 public static class G9CSyncDigest
 {
@@ -55,6 +54,42 @@ public static class G9CSyncDigest
         return BinaryPrimitives.ReadInt64BigEndian(hash);
     }
 
+    /// <summary>Bucket of a canonical key given as UTF-8 (allocation-free form of <see cref="GetBucket(string)" />).</summary>
+    public static int GetBucket(ReadOnlySpan<byte> canonicalKeyUtf8)
+    {
+        Span<byte> hash = stackalloc byte[16];
+        G9CMd5.HashData(canonicalKeyUtf8, hash);
+        return hash[0];
+    }
+
+    /// <summary>
+    ///     Row hash of a canonical UTF-8 key and its server version, without computed columns (allocation-free form of
+    ///     <see cref="GetRowHash(string, long, ReadOnlySpan{string})" />).
+    /// </summary>
+    public static long GetRowHash(ReadOnlySpan<byte> canonicalKeyUtf8, long version)
+    {
+        var length = canonicalKeyUtf8.Length + 21;
+        byte[]? rented = null;
+        var buffer = length <= 256 ? stackalloc byte[length] : rented = ArrayPool<byte>.Shared.Rent(length);
+        try
+        {
+            canonicalKeyUtf8.CopyTo(buffer);
+            buffer[canonicalKeyUtf8.Length] = (byte)':';
+            if (!version.TryFormat(buffer[(canonicalKeyUtf8.Length + 1)..], out var digits, default, CultureInfo.InvariantCulture))
+            {
+                throw new InvalidOperationException("The version does not fit its buffer.");
+            }
+
+            Span<byte> hash = stackalloc byte[16];
+            G9CMd5.HashData(buffer[..(canonicalKeyUtf8.Length + 1 + digits)], hash);
+            return BinaryPrimitives.ReadInt64BigEndian(hash);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
     /// <summary>Canonical text of a computed value, identical to what the server SQL produces.</summary>
     public static string? CanonicalText(G9ESyncColumnType type, object? value) => value switch
     {
@@ -67,8 +102,6 @@ public static class G9CSyncDigest
         _ => value.ToString()
     };
 
-    [SuppressMessage("Security", "CA5351:Do Not Use Broken Cryptographic Algorithms",
-        Justification = "Portable bucketing hash reproducible in SQL; not a security boundary (ADR-0012).")]
     private static void HashUtf8(string text, Span<byte> destination)
     {
         var byteCount = Encoding.UTF8.GetByteCount(text);
@@ -77,7 +110,7 @@ public static class G9CSyncDigest
         try
         {
             var written = Encoding.UTF8.GetBytes(text, buffer);
-            MD5.HashData(buffer[..written], destination);
+            G9CMd5.HashData(buffer[..written], destination);
         }
         finally
         {

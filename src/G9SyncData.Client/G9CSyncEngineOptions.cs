@@ -28,6 +28,12 @@ public sealed class G9CSyncEngineOptions
 
     public int FetchKeysPerRequest { get; set; } = 2000;
 
+    /// <summary>
+    ///     The newest G9RowBatch body layout to ask the server for (ADR-0040). Default <see cref="G9SyncData.Protocol.G9SyncProtocol.MaxFrameVersion" />
+    ///     (2, column-grouped: ~15% fewer bytes); 1 asks for row-wise frames. The device reads both either way.
+    /// </summary>
+    public int MaxFrameVersion { get; set; } = G9SyncData.Protocol.G9SyncProtocol.MaxFrameVersion;
+
     /// <summary>A staged pull older than this is discarded instead of resumed (its token would have expired).</summary>
     public TimeSpan StagedPullMaxAge { get; set; } = TimeSpan.FromMinutes(90);
 

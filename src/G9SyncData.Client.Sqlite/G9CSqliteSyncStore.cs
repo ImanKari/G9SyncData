@@ -5,7 +5,7 @@ using G9SyncData.Client.Sqlite.Internal;
 using G9SyncData.Client.Storage;
 using G9SyncData.Protocol;
 using G9SyncData.Protocol.RowBatch;
-using Microsoft.Data.Sqlite;
+using G9SyncData.Client.Sqlite.Native;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -26,6 +26,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
     private G9CSyncClientModel? _model;
     private Dictionary<string, LocalTable> _byLocal = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<int, LocalTable> _byServerId = [];
+    private int _foreignTriggersLogged;
 
     public G9CSqliteSyncStore(G9CSqliteSyncStoreOptions options, ILogger<G9CSqliteSyncStore>? logger = null)
     {
@@ -49,6 +50,13 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             using (var transaction = connection.BeginTransaction(deferred: false))
             {
                 Exec(connection, transaction, SqliteSql.Metadata);
+                if (Convert.ToInt64(Scalar(connection, transaction, "SELECT count(*) FROM pragma_table_info('g9_ctx') WHERE name = 'command_id'"),
+                        CultureInfo.InvariantCulture) == 0)
+                {
+                    // Stores created before commands existed (ADR-0025).
+                    Exec(connection, transaction, "ALTER TABLE g9_ctx ADD COLUMN command_id TEXT NULL");
+                }
+
                 if (Meta(connection, transaction, "client_id") is null) SetMeta(connection, transaction, "client_id", Guid.NewGuid().ToString("D"));
                 if (Meta(connection, transaction, "next_batch_id") is null) SetMeta(connection, transaction, "next_batch_id", "1");
 
@@ -142,11 +150,15 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
         var triggerCount = Convert.ToInt64(Scalar(connection, transaction,
             "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ($a, $b, $c)",
             ("$a", "g9_" + table.LocalName + "_ai"), ("$b", "g9_" + table.LocalName + "_au"), ("$c", "g9_" + table.LocalName + "_ad")), CultureInfo.InvariantCulture);
+        var commandTriggerCount = Convert.ToInt64(Scalar(connection, transaction,
+            "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ($a, $b, $c)",
+            ("$a", "g9_" + table.LocalName + "_ci"), ("$b", "g9_" + table.LocalName + "_cu"), ("$c", "g9_" + table.LocalName + "_cd")), CultureInfo.InvariantCulture);
 
-        if (!string.Equals(existingHash, hash, StringComparison.Ordinal) || (captureWanted && triggerCount != 3))
+        if (!string.Equals(existingHash, hash, StringComparison.Ordinal) || (captureWanted && triggerCount != 3) || commandTriggerCount != 3)
         {
             Exec(connection, transaction, SqliteSql.DropTriggers(table));
             if (captureWanted) Exec(connection, transaction, SqliteSql.CreateTriggers(table, tid));
+            Exec(connection, transaction, SqliteSql.CreateCommandTriggers(table, tid));
             if (existingHash is { Length: > 0 } && !string.Equals(existingHash, hash, StringComparison.Ordinal))
             {
                 // Column order may have changed: pending rows upload every column rather than trusting old mask bits.
@@ -338,7 +350,10 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
         }
     }
 
-    public async Task RemoveSubscriptionAsync(string key, G9EMoveOutPolicy policy, CancellationToken cancellationToken)
+    public Task RemoveSubscriptionAsync(string key, G9EMoveOutPolicy policy, CancellationToken cancellationToken) =>
+        RemoveSubscriptionAsync(key, policy, G9ERevocationReason.Unsubscribed, cancellationToken);
+
+    private async Task RemoveSubscriptionAsync(string key, G9EMoveOutPolicy policy, G9ERevocationReason reason, CancellationToken cancellationToken)
     {
         var model = EnsureInitialized();
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -370,16 +385,24 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
 
             if (policy == G9EMoveOutPolicy.Delete)
             {
-                var removed = 0;
-                foreach (var table in _byLocal.Values)
+                // Rows no other subscription holds go through the revocation policy (ADR-0026), pending changes included.
+                var released = new List<(long Tid, string Key)>();
+                using (var command = Command(connection, transaction,
+                           "SELECT r.tid, r.pk FROM g9_rows r JOIN temp.g9_affected a ON a.tid = r.tid AND a.pk = r.pk WHERE r.subs = 0 AND r.deleted = 0"))
+                using (var reader = command.ExecuteReader())
                 {
-                    removed += Exec(connection, transaction,
-                        $"DELETE FROM {table.Quoted} WHERE {table.KeyQuoted} IN (SELECT r.pk FROM g9_rows r JOIN temp.g9_affected a ON a.tid = r.tid AND a.pk = r.pk WHERE r.tid = $t AND r.subs = 0 AND r.dirty = 0)",
-                        ("$t", table.Tid));
+                    while (reader.Read()) released.Add((reader.GetInt64(0), reader.GetString(1)));
                 }
 
-                Exec(connection, transaction,
-                    "UPDATE g9_rows SET deleted = 1, local_seq = (SELECT seq FROM g9_clock WHERE id = 1) WHERE (tid, pk) IN (SELECT tid, pk FROM temp.g9_affected) AND subs = 0 AND dirty = 0");
+                var sequence = Convert.ToInt64(Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
+                var removed = 0;
+                foreach (var (tid, rowKey) in released)
+                {
+                    var table = _byLocal.Values.FirstOrDefault(t => t.Tid == tid);
+                    if (table is not null && DisposeReleasedRow(connection, transaction, table, rowKey, reason, key, ++sequence, report: null)) removed++;
+                }
+
+                Exec(connection, transaction, "UPDATE g9_clock SET seq = $s WHERE id = 1", ("$s", sequence));
                 LogSubscriptionRemoved(_logger, key, removed);
             }
 
@@ -461,13 +484,17 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             while (reader.Read()) expired.Add(reader.GetString(0));
         }
 
-        foreach (var key in expired) await RemoveSubscriptionAsync(key, G9EMoveOutPolicy.Delete, cancellationToken).ConfigureAwait(false);
+        foreach (var key in expired) await RemoveSubscriptionAsync(key, G9EMoveOutPolicy.Delete, G9ERevocationReason.Expired, cancellationToken).ConfigureAwait(false);
         return expired.Count;
     }
 
     public ValueTask DisposeAsync()
     {
         _writeLock.Dispose();
+
+        // Release THIS database's pooled connections (and their file handles), so the file can be moved or deleted. Never
+        // SqliteConnection.ClearAllPools(): it is process-wide and disposes connections other stores are using (LES-0030).
+        using (var connection = new SqliteConnection(_connectionString)) SqliteConnection.ClearPool(connection);
         return ValueTask.CompletedTask;
     }
 
@@ -491,7 +518,8 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
         try
         {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            Exec(connection, null, "PRAGMA busy_timeout = " + _options.BusyTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + "; PRAGMA foreign_keys = OFF;");
+            Exec(connection, null, "PRAGMA busy_timeout = " + _options.BusyTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + "; PRAGMA foreign_keys = OFF; " +
+                                   "PRAGMA journal_size_limit = " + _options.WalSizeLimitBytes.ToString(CultureInfo.InvariantCulture) + ";");
             return connection;
         }
         catch

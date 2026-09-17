@@ -10,6 +10,7 @@
     <Project Path="src/G9SyncData.Abstractions/G9SyncData.Abstractions.csproj" />
     <Project Path="src/G9SyncData.Protocol/G9SyncData.Protocol.csproj" />
     <Project Path="src/G9SyncData.Server/G9SyncData.Server.csproj" />
+    <Project Path="src/G9SyncData.Server.EfCore/G9SyncData.Server.EfCore.csproj" />
     <Project Path="src/G9SyncData.Server.PostgreSql/G9SyncData.Server.PostgreSql.csproj" />
     <Project Path="src/G9SyncData.Server.SignalR/G9SyncData.Server.SignalR.csproj" />
     <Project Path="src/G9SyncData.Client/G9SyncData.Client.csproj" />

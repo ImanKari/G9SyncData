@@ -38,7 +38,7 @@ Base (`PgCaptureSql.Base`):
 
 | Object | Purpose |
 |---|---|
-| `g9sync.install(epoch, schema_version, library_version)` | one row; the epoch identifies this installation |
+| `g9sync.install(epoch, schema_version, library_version, database_oid, epoch_changed_at, epoch_change_reason, …)` | one row; the epoch identifies this installation IN THIS DATABASE: a different `database_oid` at startup (restored backup, template copy) rotates it and deletes key sets (ADR-0036) |
 | `g9sync.tables(table_id, schema_name, table_name, columns[], capture_hash, max_removed_xid)` | table ids; captured column list (reset of column versions when it changes); tombstone horizon |
 | `g9sync.clients(client_id, user_id, app_version, last_push_batch, last_push_result, first_seen, last_seen)` | push idempotency and client registry |
 | `g9sync.ver_seq` | global monotonic row version |
@@ -59,11 +59,30 @@ Per synced table (`PgCaptureSql.Capture`):
 
 Removing capture: drop the three triggers per table and the `g9sync` schema.
 
+## Capture modes: triggers or the write-ahead log (ADR-0021, ADR-0028)
+
+`G9CPostgresSyncOptions.CaptureMode` selects who writes the tracking rows described above. **Everything else in this
+chapter - cursors, reads, push apply, reconciliation, the change feed - is identical in both modes**, because both modes
+write the same tracking rows. The whole integration suite runs in both modes to keep it that way.
+
+| | `Triggers` (default) | `WriteAheadLog` |
+|---|---|---|
+| Application writers | tracked by the triggers in their own transaction (+~100% on bulk writes) | triggers guarded out (+1.2%); the WAL consumer records the change milliseconds after commit |
+| Device pushes | tracked by the triggers | tracked by the (guarded) triggers; plus a pre-check that records the current state of the pushed rows before the conflict check |
+| Changed-column masks | OLD vs NEW in the trigger | per-column hashes, computed by the same SQL in every writer |
+| Server prerequisites | none | `wal_level=logical`, a slot, a publication - see [`20-Infrastructure-PostgreSQL.md`](20-Infrastructure-PostgreSQL.md) |
+| After an outage | nothing to recover | a capture gap is repaired by a rescan (only changed rows move) |
+
+Code: `G9CPostgresSyncStore.Wal.cs` (startup, seeding, rescans, the push pre-check, `WaitForCaptureAsync`),
+`Capture/G9CWalCaptureService.cs` (the consumer), `Capture/G9CLogicalReplicationChangeSource.cs` (pgoutput decoding) and
+`PgCaptureSql.WalRecordCurrentState` (the one statement every WAL-mode writer uses).
+
 ## Snapshot cursor and reads (ADR-0005)
 
 A pull plan takes `pg_current_snapshot()` as the new snapshot. Parts per included table:
 
-- **Snapshot / initial** — base table rows matching scope and When, keyset-paginated by key:
+- **Snapshot / initial** — through a **key set** (below) for provider scopes and, by default, for SQL template scopes; directly
+  for scopes that are literally `true` (and for templates when `KeySets.Scopes = ProviderScopes`):
   `WHERE scope AND when AND key > @after ORDER BY key LIMIT @page`, joined to tracking for the version (0 if never changed).
 - **Delta** — tracking rows changed between the client's snapshot and the new one:
 
@@ -79,8 +98,69 @@ A pull plan takes `pg_current_snapshot()` as the new snapshot. Parts per include
   at `@prev` and committed before `@new` is included — the case timestamp cursors lose.
 - **Backfill** — only the requested new columns for rows the client already holds.
 
-Each page becomes one frame and one chunk; its last key is the continuation. Estimates count rows exactly and multiply by
-the table's average row bytes and `WireCompressionRatio`.
+Each page becomes one frame and one chunk; its last key is the continuation.
+
+**Every page must cost O(page) wherever it falls in the part** (ADR-0035, LES-0037). A page resumes with `key > @after` on its driving
+table, and PostgreSQL does not carry that inequality across the join: snapshot and reconciliation pages repeat it on the joined tracking
+table (`… ON k.key = t.key AND k.key > @after`), delta pages on the joined base table. Key-set and fetch pages probe by key in nested
+loops and are left as they are. `PagingCostTests` EXPLAIN ANALYZE these statements deep in a 20,000-row part; keep them green when
+changing any paged SQL. Estimates count rows exactly and multiply by
+the table's average row bytes and `WireCompressionRatio` — except key-set parts, whose estimate is the set's key count (an upper
+bound: the row-state filter and deletions apply per page).
+
+## Scopes: templates, provider queries and key sets (ADR-0029, ADR-0030)
+
+> A build of at least 10,000 keys runs `ANALYZE` on the key table when its statistics describe fewer rows than the new set (ADR-0035):
+> without statistics a fresh set is estimated at a few hundred rows and each page sorts every remaining key. The service role needs
+> ownership of the key tables or `MAINTAIN` (PostgreSQL 17+); otherwise event 7336 is logged and pulls stay correct but slower.
+
+**Two kinds of scope.** A SQL template (`{row}."SiteId" = @SiteId`) is bound per statement as before. A provider scope
+(`IG9SyncScopeProvider`, e.g. an EF Core query) yields a key query that is embedded as
+`EXISTS (SELECT 1 FROM (<keys>) AS g9s(g9k) WHERE g9s.g9k = t.key)` for row checks (deltas, fetches, push authorisation) — the
+row reference sits outside the provider's SQL, and the provider's parameters are renamed `p_f_<name>` in one regex pass that
+never touches declared parameters (`G9CPostgresSyncStore.Scopes.cs`). A resolved subscription builds each provider fragment
+once per request.
+
+**Why key sets.** Measured on a 1.28 M-pot copy of Agriwise (LES-0021, LES-0022):
+
+| Shape of a 2,000-row page | Large farm (144 k) | Small farm (560) |
+|---|---|---|
+| provider `EXISTS` inside `coalesce` (the v1 wrapper) | 2.4 s **per page** (whole key set rebuilt each time) | — |
+| provider `EXISTS`, bare | 14 ms first page, **724 ms** middle page | fast |
+| SQL template inside `coalesce` | fast | **182 ms per page** (whole primary key scanned) |
+| key set (built once) | ~0.3 s build + ~7 ms per page | ~4 ms build + ~4 ms per page |
+
+**Objects** (UNLOGGED, created with the capture objects): `g9sync.key_sets (set_id, table_id, identity, build_snapshot,
+row_count, build_ms, created_at, last_used_at)` and one `g9sync."<schema>__<table>_keys" (set_id, key)` per synced table.
+
+**Build** (`AcquireKeySetAsync`): a READ COMMITTED transaction takes `pg_advisory_xact_lock(identity)`; an existing set with the
+same identity is reused, otherwise ONE statement inserts the registry row with `pg_current_snapshot()` and
+`SELECT DISTINCT` keys of the scope. Identity = SHA-256(table, key type, part snapshot, key SQL, bound values; templates also the
+subscription key and auth hash). Template keys come from `SELECT t.key FROM base t WHERE (template)` — bare, so the planner can
+join from the scope's side.
+
+**Pages** (`ReadKeySetPageAsync`):
+
+```sql
+SELECT s.key,
+       (t.key IS NOT NULL AND coalesce((when), false)
+        AND (k.xid IS NULL OR pg_visible_in_snapshot(k.xid, @build))) AS visible,
+       t.key, coalesce(k.ver, 0), <columns>
+FROM (SELECT key FROM <table>_keys WHERE set_id = @set AND key > @after ORDER BY key LIMIT @page) AS s
+LEFT JOIN base t ON t.key = s.key
+LEFT JOIN tracking k ON k.key = t.key
+ORDER BY s.key
+```
+
+Keys are chosen first, so the statement is bounded by the page size whatever the statistics say. Only visible rows are sent;
+the page end is `keys read < page` and the continuation is the last key READ. The `@build` check leaves out rows changed after
+the build — invisible to the part's snapshot as well, so the next delta delivers them and evaluates the scope live.
+
+**Lifecycle.** A short page first checks the set still exists; if not (swept, released by another reader sharing it, lost in a
+crash) it is rebuilt and the page re-read from the same key. The set is released after the last page is handed over. Idle sets
+(`KeySets.IdleTimeout`, 15 min) are swept by the maintenance loop and, at most once a minute, by builders; last use is stamped at
+most every `KeySets.TouchInterval` (30 s). Metrics `g9sync.keyset.builds|reuses|rebuilds|released|swept|build_rows|build_duration`;
+log events 7330–7334 (7331 warns above `KeySets.WarnRows`).
 
 **Tombstone horizon.** Cleanup deletes deleted tracking rows older than `TombstoneRetention` and records the newest removed
 xid in `g9sync.tables.max_removed_xid` (M). A client snapshot S is still usable only if every purged tombstone is visible
@@ -106,14 +186,44 @@ One `READ COMMITTED` transaction per push:
 
 More than `MaxRejectionsPerPush` rejections fail the whole push with `G9S-REJ-TOO-MANY`.
 
+**Conflict rules** (ADR-0031, `G9CPostgresSyncStore.ConflictRules.cs`): when the table has rules, step 3's policy is replaced by
+`EvaluateConflictRulesAsync` — conflicting staged rows (`g9_conflict_mask IS NOT NULL`) are read with their masks, clock values and the
+server's current values (`ReadExpression`, so geometry arrives as text), rules are evaluated in C#, and the decisions are written back
+per action: rejections through `RejectRowsAsync`, `TakeClient` clears the conflict mask, `MergeColumns` runs the ColumnMerge statements
+for its keys, `ApplyColumns` sets `g9_apply_mask = g9_dirty_mask & mask` per distinct column set, `TakeServer` excludes with
+`G9S-CON-SERVER-WINS`/`G9S-CON-DELETED`.
+
+**Row writers** (ADR-0025): when an `IG9RowWriter` applies to the table, step 4's statements are replaced by a call to the writer with
+the batch's staged rows (`WriteThroughWriterAsync`: key, op, exists, and only the columns in `coalesce(g9_apply_mask, g9_dirty_mask)`
+for updates). Isolation catches `RowFailure` — a row-level `PostgresException` or `G9CRowRejectedException` anywhere in the exception
+chain — and bisects exactly as for SQL. Written rows are returned as canonical rows.
+
+**Commands** (ADR-0025, `G9CPostgresSyncStore.Commands.cs`) run between step 2 and step 3: outcomes already in
+`g9sync.commands (client_id, command_id, …, status, code, message, result, executed_at)` are returned as stored; every other command
+runs under savepoint `g9_cmd_<n>` and its outcome is inserted into the log in the same transaction. Then the keys changed by the
+commands (`tracking.xid = pg_current_xact_id()`, read before any pushed row is applied) and the keys the device touched are written as
+canonical frames per held table by `BuildVisibleCanonicalFrameAsync`: upsert when `OR(scope AND when)` over the device's subscriptions
+holds, tombstone otherwise. The log is purged after `CommandLogRetention` (90 days) by maintenance.
+
 ## Reconciliation (D-07)
 
 One `REPEATABLE READ` transaction, so digests, listings and the returned snapshot describe the same state:
 
 1. `pg_current_snapshot()` becomes the cursor returned in the summary.
 2. Per table: `SELECT bucket, count(*), bit_xor(row_hash) … WHERE scope AND when GROUP BY bucket` (hash SQL in
-   [04](04-Protocol.md)), compared with the client's 256 counts and digests.
-3. For mismatched buckets, `KeyVersions` pages (key, version, row hash) are streamed.
+   [04](04-Protocol.md)), compared with the client's 256 counts and digests. For scopes that use key tables the predicate is
+   emitted bare (no `coalesce`), so an `EXISTS` can become a join.
+2b. **With the digest cache** (`UseDigestCache`, ADR-0024 amendment, `G9CPostgresSyncStore.DigestCache.cs`): before step 2 the
+   store checks the view's entry OUT and proves it exact at this snapshot — same epoch; `max_removed_xid` of the view's tables
+   visible in the entry's snapshot; the relations of `EXPLAIN (VERBOSE, FORMAT JSON) SELECT 1 FROM base t WHERE (scope) AND
+   (when)` all synced and, apart from the view's table, without tracking changes since; at most `MaxIncrementalKeys` changed
+   keys of the view's table, each probed for current membership and version (`LATERAL … LIMIT 1`) and applied by XOR. On success
+   the buckets are compared in memory and mismatched keys are listed from the entry; otherwise the entry is derived with one
+   `SELECT key, version … WHERE scope AND when`. Entries are checked in only after the transaction commits.
+3. For mismatched buckets, `KeyVersions` pages (key, version, row hash) are streamed. For scopes that use key tables, and
+   only when some bucket differs, the scope's keys are first materialised into `g9_rk_<n>` (a temp table, `ON COMMIT DROP`, in
+   the same REPEATABLE READ transaction, so exactly its snapshot); pages then choose their keys from it first
+   (`bucket = ANY(@buckets) AND key > @after ORDER BY key LIMIT @page`) and join, as key-set pages do.
 4. The final item carries the snapshot and the mismatched buckets.
 
 ## Notifications

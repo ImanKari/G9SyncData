@@ -4,6 +4,8 @@
     Plan §12 spikes that a development machine can measure (S1 capture overhead, S2 server reads, S4 wire, S5 reconcile,
     and a desktop proxy for S3). Device numbers (DOOGEE S99) still need the app on the device.
       dotnet run -c Release project benchmarks/G9SyncData.Benchmarks, optionally passing the rows argument (default 144316)
+    v2 scope scenario (EF Core query vs SQL template on a copy of Agriwise data): pass the scopes argument with
+    G9SYNC_BENCH_SCOPES_PG set to a prepared g9bench* copy database; see AiGuides/12-Testing.md.
     Needs a disposable PostgreSQL (G9SYNC_BENCH_PG, default localhost:15433); it creates and drops its own database.
   -->
   <PropertyGroup>
@@ -17,12 +19,15 @@
 
   <ItemGroup>
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Include="ZstdSharp.Port" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\G9SyncData.Server.PostgreSql\G9SyncData.Server.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Server.EfCore\G9SyncData.Server.EfCore.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Testing\G9SyncData.Testing.csproj" />
   </ItemGroup>

@@ -3,7 +3,7 @@ using System.Text.Json;
 using G9SyncData.Client.Sqlite.Internal;
 using G9SyncData.Client.Storage;
 using G9SyncData.Protocol;
-using Microsoft.Data.Sqlite;
+using G9SyncData.Client.Sqlite.Native;
 
 namespace G9SyncData.Client.Sqlite;
 
@@ -46,6 +46,7 @@ public sealed partial class G9CSqliteSyncStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var durability = DownloadDurability(connection);
             using var transaction = connection.BeginTransaction(deferred: false);
             Exec(connection, transaction,
                 "INSERT OR REPLACE INTO g9_stage (run_id, seq, subscription_key, row_count, continuation_json, payload) VALUES ($r, $s, $k, $n, $c, $p)",
@@ -150,6 +151,22 @@ public sealed partial class G9CSqliteSyncStore
         var digest = new G9DtTableDigest { TableId = table.TableId, ComputedColumns = ComputedColumns(local, table) };
 
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        if (digest.ComputedColumns.Count == 0)
+        {
+            // The common case streams: bucket and hash straight from SQLite's bytes, nothing per row on the managed heap (a 500 k-row
+            // reconciliation allocated 227 MB on Android before).
+            using var members = MemberStatement(connection, local, subscriptionKey);
+            while (members?.Read() == true)
+            {
+                var key = members.ColumnBytes(0);
+                var bucket = G9CSyncDigest.GetBucket(key);
+                digest.Counts[bucket]++;
+                digest.Digests[bucket] ^= G9CSyncDigest.GetRowHash(key, members.ColumnInt64(1));
+            }
+
+            return digest;
+        }
+
         foreach (var entry in ReadMemberEntries(connection, local, table, subscriptionKey, digest.ComputedColumns))
         {
             digest.Counts[entry.Bucket]++;
@@ -157,6 +174,22 @@ public sealed partial class G9CSqliteSyncStore
         }
 
         return digest;
+    }
+
+    /// <summary>Key, version and dirty flag of every member row of a subscription, as a streaming statement; null for an unknown subscription.</summary>
+    private static SqliteRowStatement? MemberStatement(SqliteConnection connection, LocalTable local, string subscriptionKey)
+    {
+        var records = ReadSubscriptions(connection, null, subscriptionKey);
+        if (records.Count == 0) return null;
+        var record = records[0];
+        var statement = new SqliteRowStatement(connection, record.Ephemeral
+            ? "SELECT r.pk, r.server_ver, r.dirty FROM g9_rows r WHERE r.tid = ?1 AND r.deleted = 0 AND r.dirty <> 2 " +
+              "AND EXISTS (SELECT 1 FROM g9_ephemeral_rows e WHERE e.sub_key = ?2 AND e.tid = r.tid AND e.pk = r.pk)"
+            : "SELECT r.pk, r.server_ver, r.dirty FROM g9_rows r WHERE r.tid = ?1 AND r.deleted = 0 AND r.dirty <> 2 AND (r.subs & ?2) <> 0");
+        statement.BindInt64(1, local.Tid);
+        if (record.Ephemeral) statement.BindText(2, subscriptionKey);
+        else statement.BindInt64(2, SqliteSql.Bit(record.Slot));
+        return statement;
     }
 
     public async Task<IReadOnlyList<G9CLocalRowEntry>> ReadLocalEntriesAsync(string subscriptionKey, G9DtNegotiatedTable table, IReadOnlyCollection<int> buckets,
@@ -172,9 +205,26 @@ public sealed partial class G9CSqliteSyncStore
         var entries = new Dictionary<string, G9CLocalRowEntry>(StringComparer.Ordinal);
 
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var entry in ReadMemberEntries(connection, local, table, subscriptionKey, computed))
+        if (computed.Count == 0)
         {
-            if (bucketSet.Contains(entry.Bucket)) entries[entry.Key] = entry;
+            // Only rows of the mismatched buckets become entries; the rest are hashed from SQLite's bytes and dropped.
+            using var members = MemberStatement(connection, local, subscriptionKey);
+            while (members?.Read() == true)
+            {
+                var keyBytes = members.ColumnBytes(0);
+                var bucket = G9CSyncDigest.GetBucket(keyBytes);
+                if (!bucketSet.Contains(bucket)) continue;
+                var version = members.ColumnInt64(1);
+                var key = System.Text.Encoding.UTF8.GetString(keyBytes);
+                entries[key] = new G9CLocalRowEntry(key, bucket, version, G9CSyncDigest.GetRowHash(keyBytes, version), Member: true, Dirty: members.ColumnInt64(2) != 0);
+            }
+        }
+        else
+        {
+            foreach (var entry in ReadMemberEntries(connection, local, table, subscriptionKey, computed))
+            {
+                if (bucketSet.Contains(entry.Bucket)) entries[entry.Key] = entry;
+            }
         }
 
         var missing = serverKeys.Where(k => !entries.ContainsKey(k)).ToList();
@@ -248,13 +298,18 @@ public sealed partial class G9CSqliteSyncStore
             "sum(CASE WHEN r.dirty = 2 AND r.rejected = 0 THEN 1 ELSE 0 END), " +
             "sum(CASE WHEN r.rejected = 1 THEN 1 ELSE 0 END) " +
             "FROM g9_rows r JOIN g9_tables t ON t.tid = r.tid WHERE r.dirty <> 0 GROUP BY t.local_name ORDER BY t.local_name");
-        using var reader = command.ExecuteReader();
-        while (reader.Read()) tables.Add(new G9CPendingTable(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3)));
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read()) tables.Add(new G9CPendingTable(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3)));
+        }
+
+        var pendingCommands = Convert.ToInt32(Scalar(connection, null, "SELECT count(*) FROM g9_commands WHERE state = 0"), CultureInfo.InvariantCulture);
         return new G9CPendingSummary
         {
             Tables = tables,
             TotalRows = tables.Sum(t => t.Upserts + t.Deletes),
-            RejectedRows = tables.Sum(t => t.Rejected)
+            RejectedRows = tables.Sum(t => t.Rejected),
+            PendingCommands = pendingCommands
         };
     }
 
@@ -349,12 +404,8 @@ public sealed partial class G9CSqliteSyncStore
             foreach (var chunk in normalized.Chunk(5000))
             {
                 var json = JsonSerializer.Serialize(chunk.ToList(), G9SyncClientJsonContext.Default.ListString);
-                Exec(connection, transaction, "UPDATE g9_clock SET seq = seq + 1 WHERE id = 1");
-                Exec(connection, transaction, "INSERT OR IGNORE INTO g9_rows (tid, pk) SELECT $t, value FROM json_each($keys)", ("$t", table.Tid), ("$keys", json));
-                marked += Exec(connection, transaction,
-                    $"UPDATE g9_rows SET dirty = 1, dirty_mask = $mask, local_seq = {SqliteSql.Seq}, hlc_ms = {SqliteSql.NowMs}, rejected = 0, deleted = 0 " +
-                    "WHERE tid = $t AND pk IN (SELECT value FROM json_each($keys))",
-                    ("$mask", SqliteSql.AllColumnsMask(table.Model.Columns.Count)), ("$t", table.Tid), ("$keys", json));
+                marked += MarkPending(connection, transaction, table, "SELECT value AS pk FROM json_each($keys)", [("$keys", json)],
+                    "dirty = 1, dirty_mask = " + SqliteSql.Literal(SqliteSql.AllColumnsMask(table.Model.Columns.Count)));
             }
 
             transaction.Commit();
@@ -364,6 +415,29 @@ public sealed partial class G9CSqliteSyncStore
         {
             _writeLock.Release();
         }
+    }
+
+    /// <summary>
+    ///     Marks the rows <paramref name="keysSql" /> selects (one column named <c>pk</c>, canonical keys) as pending with <paramref name="set" />,
+    ///     giving EACH its own local sequence: a push stages rows by sequence, and rows that shared one failed the whole push with 23505
+    ///     (LES-0039). Keys unknown to the store get metadata first.
+    /// </summary>
+    private static int MarkPending(SqliteConnection connection, SqliteTransaction transaction, LocalTable table, string keysSql,
+        (string Name, object? Value)[] parameters, string set)
+    {
+        Exec(connection, transaction, "CREATE TEMP TABLE IF NOT EXISTS g9_mark (pk TEXT NOT NULL PRIMARY KEY, n INTEGER NOT NULL); DELETE FROM temp.g9_mark;");
+        var count = Exec(connection, transaction,
+            $"INSERT INTO temp.g9_mark (pk, n) SELECT pk, row_number() OVER (ORDER BY pk) FROM (SELECT DISTINCT pk FROM ({keysSql}) WHERE pk IS NOT NULL)", parameters);
+        if (count == 0) return 0;
+
+        var first = Convert.ToInt64(Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
+        Exec(connection, transaction, "INSERT OR IGNORE INTO g9_rows (tid, pk) SELECT $t, pk FROM temp.g9_mark", ("$t", table.Tid));
+        var marked = Exec(connection, transaction,
+            $"UPDATE g9_rows SET {set}, local_seq = $first + m.n, hlc_ms = {SqliteSql.NowMs}, rejected = 0, deleted = 0 " +
+            "FROM temp.g9_mark AS m WHERE g9_rows.tid = $t AND g9_rows.pk = m.pk",
+            ("$first", first), ("$t", table.Tid));
+        Exec(connection, transaction, "UPDATE g9_clock SET seq = seq + $n WHERE id = 1; DELETE FROM temp.g9_mark;", ("$n", count));
+        return marked;
     }
 
     public async Task<int> AdoptExistingRowsAsync(CancellationToken cancellationToken)

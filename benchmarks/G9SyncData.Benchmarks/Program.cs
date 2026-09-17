@@ -11,10 +11,39 @@ using G9SyncData.Protocol.RowBatch;
 using G9SyncData.Server;
 using G9SyncData.Server.Auth;
 using G9SyncData.Testing;
-using Microsoft.Data.Sqlite;
+using SQLitePCL;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+
+// The SQLite store never picks a native provider: the host does, once (ADR-0032).
+SQLitePCL.Batteries_V2.Init();
+
+if (args.Contains("--sqlite-apply", StringComparer.Ordinal))
+{
+    var variantsIndex = Array.IndexOf(args, "--variants");   // e.g. --variants B,D,E,M,N
+    var only = variantsIndex >= 0 && variantsIndex + 1 < args.Length ? args[variantsIndex + 1].Split(',', StringSplitOptions.RemoveEmptyEntries) : [];
+    await SqliteApplyBenchmark.RunAsync(Path.Combine(FindBenchmarksDirectory(), "results"), ReadIntArgument(args, "--rows", 500_000), only);
+    return;
+}
+
+if (args.Contains("--compression", StringComparer.Ordinal))
+{
+    CompressionBenchmark.Run(ReadIntArgument(args, "--rows", 500_000));
+    return;
+}
+
+if (args.Contains("--digest", StringComparer.Ordinal))
+{
+    DigestBenchmark.Run(ReadIntArgument(args, "--rows", 1_000_000));
+    return;
+}
+
+if (args.Contains("--scopes", StringComparer.Ordinal))
+{
+    await ScopeBenchmark.RunAsync(Path.Combine(FindBenchmarksDirectory(), "results"));
+    return;
+}
 
 var rows = ReadIntArgument(args, "--rows", 144_316);
 var adminConnection = Environment.GetEnvironmentVariable("G9SYNC_BENCH_PG") is { Length: > 0 } configured
@@ -149,13 +178,12 @@ try
         var delta = await RunAsync(client, new G9CSyncRequest { Priority = G9ESyncPriority.UserInteractive });
         report.Add("S3", $"1% delta sync ({delta.Result.Downloaded:N0} rows)", $"{BenchReport.Ms(delta.Elapsed)} · {delta.Phases}");
 
-        await using (var local = new SqliteConnection("Data Source=" + sqlitePath))
-        {
-            await local.OpenAsync();
-            await using var command = local.CreateCommand();
-            command.CommandText = "PRAGMA busy_timeout = 30000; UPDATE Pot SET Note = 'device' WHERE Col < 4";
-            await command.ExecuteNonQueryAsync();
-        }
+        // A device edit made by "the app", through the same SQLite stack the store uses (A-11).
+        raw.sqlite3_open_v2(sqlitePath, out var local, raw.SQLITE_OPEN_READWRITE, null);
+        raw.sqlite3_busy_timeout(local, 30_000);
+        raw.sqlite3_exec(local, "UPDATE Pot SET Note = 'device' WHERE Col < 4");
+        raw.sqlite3_close_v2(local);
+        local.Dispose();
 
         var push = await RunAsync(client, new G9CSyncRequest { Priority = G9ESyncPriority.UserInteractive });
         report.Add("S3", $"Push of 1% local edits ({push.Result.Pushed:N0} rows) + pull", $"{BenchReport.Ms(push.Elapsed)} · {push.Phases}");
@@ -166,6 +194,8 @@ try
         var reconcile = await RunAsync(client, new G9CSyncRequest { Priority = G9ESyncPriority.UserInteractive, ForceReconcile = true, Push = false });
         report.Add("S5", $"Forced reconciliation of {rows:N0} matching rows (digests both sides)", $"{BenchReport.Ms(reconcile.Elapsed)} · {reconcile.Phases}");
     }
+
+    await store.DisposeAsync();   // releases this store's pooled handles (its own pool only, LES-0030) so the file can be deleted
 
     var markdown = report.ToMarkdown();
     var resultsDirectory = Path.Combine(FindBenchmarksDirectory(), "results");
@@ -179,10 +209,16 @@ finally
 {
     if (services is not null) await services.DisposeAsync();
     await dataSource.DisposeAsync();
-    SqliteConnection.ClearAllPools();
     foreach (var file in new[] { sqlitePath, sqlitePath + "-wal", sqlitePath + "-shm" })
     {
-        if (File.Exists(file)) File.Delete(file);
+        try
+        {
+            if (File.Exists(file)) File.Delete(file);
+        }
+        catch (IOException)
+        {
+            // Still open after a failed run: a temp file, never worth hiding the benchmark's own error.
+        }
     }
 
     NpgsqlConnection.ClearAllPools();

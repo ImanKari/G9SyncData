@@ -77,10 +77,11 @@ public sealed partial class G9CSyncEngine
             foreach (var state in hello.Subscriptions) states[state.Key] = state;
 
             // ---------------------------------------------------------------- 2. push
-            if (request.Push && pending is { TotalRows: > 0 })
+            if (request.Push && (pending is { TotalRows: > 0 } || pending is { PendingCommands: > 0 }))
             {
-                tracker.Enter(G9ESyncPhase.Pushing, pending.TotalRows);
-                (pushed, rejected, conflicts) = await PushAllAsync(negotiated, subscriptions, tracker, changes, ct).ConfigureAwait(false);
+                tracker.Enter(G9ESyncPhase.Pushing, pending.TotalRows + pending.PendingCommands);
+                (pushed, rejected, conflicts) = await PushAllAsync(negotiated, subscriptions, hello.MaxPushRows, hello.MaxPushBytes, tracker, changes, ct)
+                    .ConfigureAwait(false);
             }
 
             if (request.Pull)
@@ -158,7 +159,8 @@ public sealed partial class G9CSyncEngine
                         ClientId = _clientId,
                         Subscriptions = plannable.Select(s => s.ToReference()).ToList(),
                         Tables = negotiated.Select(t => new G9DtTableColumns { TableId = t.TableId, Columns = t.Columns.Select(c => c.Name).ToList() }).ToList(),
-                        Backfills = backfills.ToList()
+                        Backfills = backfills.ToList(),
+                        FrameVersion = _options.MaxFrameVersion
                     }, token), ct).ConfigureAwait(false);
                     if (plan.Error is not null) throw plan.Error.ToException();
                     runId = Guid.NewGuid().ToString("N");
@@ -200,6 +202,9 @@ public sealed partial class G9CSyncEngine
                     Run = run, Changes = changes, Progress = new G9CInlineProgress<double>(tracker.ReportFraction)
                 }, ct).ConfigureAwait(false);
             }
+
+            // Rows retained after revocation by a RetainWhile rule are re-checked once per run (ADR-0026).
+            changes.RevokedDeleted += await _store.ReevaluateRetainedAsync(ct).ConfigureAwait(false);
 
             outcome = rejected > 0 || problems.Count > 0 ? G9ESyncOutcome.CompletedWithRejections : G9ESyncOutcome.Succeeded;
             tracker.Complete(G9ESyncPhase.Completed);
@@ -374,16 +379,35 @@ public sealed partial class G9CSyncEngine
     }
 
     private async Task<(int Pushed, int Rejected, int Conflicts)> PushAllAsync(IReadOnlyList<G9DtNegotiatedTable> negotiated,
-        IReadOnlyList<G9CSyncSubscriptionRecord> subscriptions, G9CSyncProgressTracker tracker, G9CApplyReport changes, CancellationToken ct)
+        IReadOnlyList<G9CSyncSubscriptionRecord> subscriptions, int serverMaxRows, long serverMaxBytes, G9CSyncProgressTracker tracker, G9CApplyReport changes,
+        CancellationToken ct)
     {
         int pushed = 0, rejected = 0, conflicts = 0;
         var references = subscriptions.Select(s => s.ToReference()).ToList();
+
+        // The server's limits win over the device's preference: a batch the server refuses would be refused on every retry. Bytes keep a
+        // margin for the frame header and compression variance (the budget is estimated from values before encoding).
+        var batchRows = serverMaxRows > 0 ? Math.Min(_options.PushBatchRows, serverMaxRows) : _options.PushBatchRows;
+        var batchBytes = serverMaxBytes > 0 ? (long)(serverMaxBytes * 0.9) : long.MaxValue;
         while (true)
         {
-            var batch = await _store.BuildPushBatchAsync(negotiated, _options.PushBatchRows, ct).ConfigureAwait(false);
+            var batch = await _store.BuildPushBatchAsync(negotiated, batchRows, batchBytes, ct).ConfigureAwait(false);
             if (batch is null) break;
+            rejected += batch.RejectedLocally;
+            if (batch.RowCount == 0 && batch.Commands.Count == 0) break;   // only rows that can never be uploaded were left
 
-            var request = new G9DtPushRequest { ClientId = _clientId, BatchId = batch.BatchId, Subscriptions = references, Tables = batch.Tables.ToList() };
+            var request = new G9DtPushRequest
+            {
+                ClientId = _clientId, BatchId = batch.BatchId, Subscriptions = references, Tables = batch.Tables.ToList(), Commands = batch.Commands.ToList(),
+                // Canonical rows come back in the columns the DEVICE holds, which include read-only and computed columns a push never
+                // carries: without them the frame cannot be applied (LES-0035). With commands, canonical rows can also be for tables
+                // the batch does not carry, so every table is described.
+                HeldTables = negotiated
+                    .Where(t => batch.Commands.Count > 0 || batch.Tables.Any(pushed => pushed.TableId == t.TableId))
+                    .Select(t => new G9DtTableColumns { TableId = t.TableId, Columns = t.Columns.Select(c => c.Name).ToList() })
+                    .ToList(),
+                FrameVersion = _options.MaxFrameVersion
+            };
             var result = await WithRetryAsync(token => _transport.PushAsync(request, ToChunks(batch), token), ct).ConfigureAwait(false);
             if (result.Error is not null) throw result.Error.ToException();
 
@@ -391,19 +415,19 @@ public sealed partial class G9CSyncEngine
             changes.Merge(report);
             if (report.Upserts + report.Deletes > 0) RaiseRowsApplied(report, G9ESyncPhase.Pushing);
 
-            pushed += batch.RowCount;
+            pushed += batch.RowCount + batch.Commands.Count;
             rejected += result.Rejections.Count;
             conflicts += result.Conflicts.Count;
             tracker.Report(pushed);
             LogPushed(_logger, batch.BatchId, batch.RowCount, result.Rejections.Count, result.Conflicts.Count, result.AlreadyApplied);
 
-            if (report.Accepted + report.Rejected + report.Conflicts == 0 && !result.AlreadyApplied)
+            if (report.Accepted + report.Rejected + report.Conflicts + report.CommandsCompleted == 0 && !result.AlreadyApplied)
             {
                 LogPushStalled(_logger, batch.BatchId);
                 break;
             }
 
-            if (batch.RowCount < _options.PushBatchRows && !result.AlreadyApplied) break;
+            if (batch.RowCount < batchRows && batch.Commands.Count < batchRows && !batch.Truncated && !result.AlreadyApplied) break;
         }
 
         return (pushed, rejected, conflicts);

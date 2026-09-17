@@ -18,9 +18,10 @@ public sealed partial class G9CSyncEngine
         var tables = definition.Tables
             .Select(name => negotiated.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase)))
             .OfType<G9DtNegotiatedTable>()
+            .Where(t => t.Direction != G9ESyncDirection.UploadOnly)   // the device's own rows: nothing on the server to compare them with
             .ToList();
 
-        var request = new G9DtReconcileRequest { ClientId = _clientId, Subscription = subscription.ToReference() };
+        var request = new G9DtReconcileRequest { ClientId = _clientId, Subscription = subscription.ToReference(), FrameVersion = _options.MaxFrameVersion };
         foreach (var table in tables) request.Tables.Add(await _store.ComputeDigestAsync(subscription.Key, table, ct).ConfigureAwait(false));
 
         var serverRows = new Dictionary<int, Dictionary<string, (long Version, long Hash)>>();
@@ -61,14 +62,20 @@ public sealed partial class G9CSyncEngine
             foreach (var (key, (_, hash)) in server)
             {
                 if (!localByKey.TryGetValue(key, out var entry)) fetch.Add(key);
-                else if (entry.Dirty) continue;
+                else if (entry.Dirty)
+                {
+                    // A pending local change is never overwritten here; a row visible again still gets its membership back.
+                    if (!entry.Member) addMembership.Add(key);
+                }
                 else if (entry.Hash != hash) fetch.Add(key);
                 else if (!entry.Member) addMembership.Add(key);
             }
 
             foreach (var entry in local)
             {
-                if (entry.Member && !entry.Dirty && buckets.Contains(entry.Bucket) && !server.ContainsKey(entry.Key)) moveOut.Add(entry.Key);
+                // Rows with pending changes are released too: the store's revocation policy decides (by default it quarantines them,
+                // so the app stops showing them and the user's change survives - ADR-0026).
+                if (entry.Member && buckets.Contains(entry.Bucket) && !server.ContainsKey(entry.Key)) moveOut.Add(entry.Key);
             }
 
             var frames = new List<byte[]>();
@@ -81,7 +88,8 @@ public sealed partial class G9CSyncEngine
                     Subscription = subscription.ToReference(),
                     TableId = table.TableId,
                     Keys = keys.ToList(),
-                    Columns = table.Columns.Select(c => c.Name).ToList()
+                    Columns = table.Columns.Select(c => c.Name).ToList(),
+                    FrameVersion = _options.MaxFrameVersion
                 };
                 await foreach (var chunk in _transport.FetchRowsAsync(fetchRequest, ct).ConfigureAwait(false))
                 {

@@ -1,4 +1,5 @@
 using G9SignalRSuperNetCore.Server;
+using G9SignalRSuperNetCore.Server.MessagePack;
 using G9SyncData.Protocol;
 using G9SyncData.Server.SignalR;
 using Microsoft.AspNetCore.Builder;
@@ -26,6 +27,7 @@ public static class G9SyncSignalRServerExtensions
         builder.Services.AddSingleton(Options.Options.Create(settings));
         builder.Services.AddSignalR()
             .AddJsonProtocol(protocol => protocol.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, G9SyncJsonContext.Default))
+            .AddG9MessagePackProtocol(G9SyncWireShapes.GeneratedTypeShapeProvider)
             .AddHubOptions<G9SyncHub>(hub => hub.MaximumReceiveMessageSize = settings.MaximumReceiveMessageSize);
         builder.Services.AddHostedService<G9CSyncPokeService>();
         return builder;
