@@ -128,6 +128,10 @@ internal static class SqliteSql
 
     public static string ColumnDefinition(G9CSyncClientColumn column, G9CSqliteSyncStoreOptions options) =>
         Quote(column.Name) + " " + ColumnType(column.Type, options) +
+        // A GUID is stored as canonical LOWER-case text. An application that writes the same id in another casing - through its own
+        // ORM, from a URL, out of a log - would then miss the row on a plain equality test, silently and only for some rows. The key
+        // column has always carried this; a foreign key such as Pot.RidgeId is compared just as often (ADR-0054).
+        (column.Type == G9ESyncColumnType.Guid ? " COLLATE NOCASE" : string.Empty) +
         (column.Nullable ? string.Empty : " NOT NULL DEFAULT " + DefaultLiteral(column.Type, options));
 
     public static string CreateTable(G9CSyncClientTable table, G9CSqliteSyncStoreOptions options)

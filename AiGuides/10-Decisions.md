@@ -1284,3 +1284,20 @@ rather than a count. It costs the index-deferral optimisation on large first syn
 than the default: deltas are unaffected either way. `ProgressiveApplyTests` pins that rows become visible before the pull finishes,
 that a sliced apply lands byte-for-byte what the atomic one lands, that an interrupted run keeps what landed and completes next
 time, that a pending local edit still survives, and that every changed key is announced across the slices.
+
+## ADR-0054 — Every GUID column is compared case-insensitively, not just the key
+
+**Status:** accepted (2026-09-17).
+
+**Context.** The store writes a GUID as canonical lower-case text. The primary key column has always carried `COLLATE NOCASE`, so a
+device could find a row by an id in any casing; the other GUID columns did not. A foreign key is compared just as often as a key -
+AgriPad reads `Pot.RidgeId`, `Pot.VarietyId` and `Pot.SiteId` on nearly every screen, and holds those ids as strings whose casing
+comes from its own ORM. A plain equality test against an upper-case id would match nothing, silently, and only for the rows this
+library wrote: exactly the kind of failure that looks like missing data rather than a bug.
+
+**Decision.** Every column of type `Guid` is declared `COLLATE NOCASE`, not only the key.
+
+**Consequences.** A lookup by foreign key behaves the same way as a lookup by primary key whatever case the caller holds, which is
+what an application that did not write the row expects. `GuidColumnCollationTests` pins both directions. The collation applies to
+tables this library creates; a table adopted from another engine keeps the collation it was created with, so a cut-over that adopts
+existing tables should check them.
