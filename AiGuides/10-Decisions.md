@@ -1129,3 +1129,123 @@ are materialised.
 **Consequences.** Emulator, 500,000 rows: initial sync 69 MB allocated with 4 GCs per generation (37 MB over MessagePack); reconciliation
 0 MB and 2.0 s instead of 3.6 s; digest 902 ms instead of 3,013 ms per 1,000,000 rows. `SqliteApplyValueTests` pins every stored value
 form across key types and storage options; `AbstractionsTests` pins `G9CMd5` against the RFC vectors and the platform MD5.
+
+## ADR-0046 — A staged pull is resumed only while it still describes the world it was planned for
+
+**Status:** accepted (2026-09-17).
+
+**Context.** A staged pull survives a process death on purpose: the download is expensive and resuming it is the point. Resuming was
+gated on age alone (`StagedPullMaxAge`, 90 minutes), and a complete stage never contacted the server again before being applied. The rows
+it holds, though, describe one epoch, one permission set and one set of negotiated columns, and its cursors carry the definition and auth
+hashes of that plan. Two reproductions: a row edited, pushed and acknowledged between the stage and the apply was reverted to the staged
+value, and a row whose subscription was revoked in between was restored after the revocation had removed it — the run's own earlier steps
+(push, reconcile) undone by its last one.
+
+**Decision.** Two independent guards. The engine stamps every stage with a **generation** — server epoch, each planned subscription's key
+with its definition and auth hash, and the negotiated table columns — and replans instead of resuming when it no longer matches. The
+store records the device clock at `BeginStagedPullAsync` and the staged apply protects every row whose `local_seq` is past it, pending or
+not: a row the device has moved on from is newer than the stage, whatever moved it.
+
+**Consequences.** A legitimate resume still resumes — the generation is equal and no row moved — which `StagedPullSafetyTests` pins by
+asserting the run makes no new plan or pull call. Each guard is pinned by its own test: without the generation the stale stage stamps old
+permissions back over the subscription, without the sequence it overwrites an acknowledged edit. A stage in flight across the upgrade is
+dropped rather than reinterpreted, because nothing recorded what it was planned for.
+
+## ADR-0047 — A device record belongs to the principal that claimed it
+
+**Status:** accepted (2026-09-17).
+
+**Context.** The server keeps the last push receipt on the client id so an interrupted push can be replayed safely. The client id is a
+value the caller supplies, the receipt was selected by it alone, and it was returned before any row authorisation; `TouchClientAsync`
+also reassigned `user_id` to whoever said hello last. Quoting another device's id and batch number returned that device's canonical rows.
+
+**Decision.** The first authenticated caller to use a client id claims it (`coalesce(clients.user_id, EXCLUDED.user_id)`, in the
+statement that locks the row), and every later use must match or the operation fails with `G9S-AUTH-401`. Both the push and the hello
+path enforce it. A deployment without authentication has no identity to bind to and keeps working unchanged.
+
+**Consequences.** A cross-principal replay is refused before the receipt is read; the owner's own replay is untouched, which is what
+makes the receipt worth keeping. The review also suggested fingerprinting the batch content: not adopted, because a legitimate retry
+carries *different* content by design — a row edited after the batch was formed drops out of it through `inflight_max_seq` — so comparing
+content would refuse the retries idempotency exists for. Identity, not content, is what the receipt was missing.
+
+## ADR-0048 — A forbidden subscription is a revocation, not a refresh failure
+
+**Status:** accepted (2026-09-17).
+
+**Context.** When hello answered `Forbidden`, the engine marked the subscription failed and skipped it. The rows it had already
+downloaded stayed on the device indefinitely: "I cannot refresh this" was being treated as if it were "I could not reach the server".
+
+**Decision.** `Forbidden` runs the same release the app's own unsubscribe runs — membership dropped, rows no other subscription holds
+disposed of by the subscription's move-out policy, pending work kept by the revocation policy — under a new reason,
+`G9ERevocationReason.AccessRevoked`, so the application can tell it from an ordinary move-out without reading error strings. The
+subscription record stays, cursor cleared, so regaining access refills it. The move-out policy is now kept per subscription, because a
+caller who has lost access is no longer told the definition, and defaulting to `Delete` there would discard data an app had declared
+`Keep`.
+
+**Consequences.** Revoked rows leave the device on the next run. An app that must keep them readable offline declares `MoveOut(Keep)` and
+hides them itself — `ForbiddenSubscriptionTests` pins that, along with rows held by a second subscription surviving, unsent work being
+quarantined with the new reason, and a regrant refilling. Only `Forbidden` does this: `Unknown` and `InvalidParameters` still only fail,
+because they are not statements about the caller's rights.
+
+## ADR-0049 — TRUNCATE is recorded as a removal point, not as tombstones
+
+**Status:** accepted (2026-09-17).
+
+**Context.** Capture installs INSERT/UPDATE/DELETE triggers and the logical decoder handles those three messages. `TRUNCATE` fires none
+of them and carries no row images, so in both capture modes it emptied a table on the server and left every device holding all of it.
+
+**Decision.** A statement-level `AFTER TRUNCATE` trigger on each captured table clears that table's tracking rows and sets its
+`max_removed_xid` to the truncating transaction. That is the same marker a tombstone purge sets, so every cursor older than it already
+takes the documented path — reconcile or resync — and the digest cache already invalidates on it. One marker, not one tombstone per row.
+
+**Consequences.** Truncation converges in both capture modes, including `CASCADE` across captured tables, and rolls back with its
+transaction. It costs one trigger that fires only on truncate. A device's unsent work is unaffected: it pushes before it pulls, so the
+edit reaches the emptied table as an insert.
+
+## ADR-0050 — A token signing key that cannot be used fails at startup
+
+**Status:** accepted (2026-09-17).
+
+**Context.** Pull tokens are HMAC-signed so any node holding the key can serve or resume a pull. A configured key shorter than 32 bytes
+was silently replaced with a random per-process key — the one case where the operator has said what they want and been ignored. Behind a
+load balancer that surfaces as nodes rejecting each other's tokens, under load, in production.
+
+**Decision.** No key stays a deliberate single-instance choice. A key that was configured but is too short throws at construction, naming
+the option and the length that was configured.
+
+**Consequences.** The misconfiguration is found at startup instead of in production. `TokenSigningKeyTests` pins the refusal, that no key
+still works, and that two services sharing a key accept each other's tokens while one without it does not.
+
+## ADR-0051 — A frame's declared body size is budgeted separately from its wire size
+
+**Status:** accepted (2026-09-17).
+
+**Context.** A frame header states the size its body decompresses to, and the reader rents exactly that before decompressing. The limit
+was the format ceiling, 576 MiB, so a 96-byte hostile or corrupt frame could ask the server for 576 MiB. `MaxPushBytes` bounds the wire,
+which says nothing about what a compressible frame becomes.
+
+**Decision.** `G9CRowBatchReader.Open` takes the largest decoded body the caller will allocate for and refuses a larger declaration
+before allocating. The server passes `MaxDecodedFrameBytes` (64 MiB) per frame and holds the push to `MaxDecodedPushBytes` (256 MiB) in
+total, counted from each frame's actual decoded size.
+
+**Consequences.** Decode amplification is bounded at ingress, in front of the allocation rather than after it. Frames the library
+produced for itself are unaffected — they are far below the budget — and the format ceiling still applies to everyone.
+
+## ADR-0052 — Work a committed push owes is recorded in its transaction, not run after it
+
+**Status:** accepted (2026-09-17).
+
+**Context.** `IG9PostCommitHandler` ran in-process after the push transaction committed, its exceptions were logged and swallowed, and a
+replayed batch skipped it entirely. Anything real behind it — a workflow transition, a cache invalidation, a derived projection — was
+lost by a handler that threw once, by a process that died after the commit, or by a client that retried its batch.
+
+**Decision.** `IG9EffectHandler` is a second, durable contract. An effect row is written to `{schema}.effects` **inside the push
+transaction**, so it exists exactly when the rows it describes committed, and a dispatcher delivers it afterwards with retry, a backoff,
+an attempt count and a terminal failed state that stays visible. Delivery is at-least-once and `G9CEffectContext.EffectId` is the
+idempotency key. The context deliberately carries no caller or auth context: by delivery time — minutes later, after a restart, on
+another node — that connection is gone; what survives is who pushed it and which rows were accepted. `IG9PostCommitHandler` stays, now
+documented as the best-effort notification it always was.
+
+**Consequences.** A replayed push no longer skips the work, because the record, not the call, is what makes it owed. Claiming uses
+`FOR UPDATE SKIP LOCKED` and moves the next attempt forward, so several nodes share one queue and a crashed worker's claims return on
+their own. Nothing is recorded when no effect handler applies to the table, so deployments that do not use it pay nothing.

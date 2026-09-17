@@ -52,6 +52,27 @@ public interface IG9SyncServerStore
     /// <summary>Yields batches of table ids whose changes committed. Completes or throws when the listener connection drops.</summary>
     IAsyncEnumerable<IReadOnlyList<int>> ListenForChangesAsync(CancellationToken cancellationToken);
 
+    // ------------------------------------------------ durable effects (ADR-0052)
+
+    /// <summary>
+    ///     Takes up to <paramref name="max" /> effects that are due, counting an attempt against each and putting the next one
+    ///     <paramref name="retryDelay" /> away, so a crashed worker's claims come back on their own and two workers never take the same
+    ///     effect.
+    /// </summary>
+    Task<IReadOnlyList<G9CPendingEffect>> ClaimEffectsAsync(int max, TimeSpan retryDelay, CancellationToken cancellationToken);
+
+    /// <summary>Marks an effect delivered; it is gone for good.</summary>
+    Task CompleteEffectAsync(Guid effectId, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     Records a failed delivery. Past <paramref name="maxAttempts" /> the effect stops being retried and stays visible as failed,
+    ///     rather than disappearing or retrying forever.
+    /// </summary>
+    Task FailEffectAsync(Guid effectId, string error, int maxAttempts, CancellationToken cancellationToken);
+
+    /// <summary>Effects that exhausted their attempts, for operators and health checks.</summary>
+    Task<IReadOnlyList<G9CPendingEffect>> GetFailedEffectsAsync(int max, CancellationToken cancellationToken);
+
     /// <summary>Deletes tombstones older than <paramref name="retention" /> and advances the horizon. Returns the number removed.</summary>
     Task<int> CleanupTombstonesAsync(TimeSpan retention, CancellationToken cancellationToken);
 
@@ -202,6 +223,15 @@ public sealed class G9CStorePushRequest
     public required int MaxRejections { get; init; }
     public required int MaxRows { get; init; }
 
+    /// <summary>
+    ///     The largest decoded body accepted from one pushed frame, and from the push as a whole. A frame's declared body length is what
+    ///     it is decompressed into, so these bound the memory a caller can ask the server for, whatever the frame weighed on the wire
+    ///     (ADR-0051).
+    /// </summary>
+    public required int MaxDecodedFrameBytes { get; init; }
+
+    public required long MaxDecodedPushBytes { get; init; }
+
     /// <summary>G9RowBatch body layout of the frames this request produces (<see cref="G9SyncData.Protocol.G9SyncProtocol.NegotiateFrameVersion" />).</summary>
     public int FrameVersion { get; init; } = 1;
 }
@@ -230,4 +260,22 @@ public sealed class G9CStoreReconcileItem
     public bool IsFinal { get; init; }
     public string? Snapshot { get; init; }
     public IReadOnlyList<G9DtTableBuckets> Mismatched { get; init; } = [];
+}
+
+/// <summary>An effect recorded by a committed push and not yet delivered (ADR-0052).</summary>
+public sealed class G9CPendingEffect
+{
+    public required Guid EffectId { get; init; }
+    public required int TableId { get; init; }
+    public required Guid ClientId { get; init; }
+    public required long BatchId { get; init; }
+    public required string? UserId { get; init; }
+    public required IReadOnlyList<string> UpsertedKeys { get; init; }
+    public required IReadOnlyList<string> DeletedKeys { get; init; }
+
+    /// <summary>How many deliveries have been attempted, this one included.</summary>
+    public required int Attempt { get; init; }
+
+    /// <summary>Why the last attempt failed, when one has.</summary>
+    public string? LastError { get; init; }
 }

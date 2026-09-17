@@ -4,6 +4,7 @@ using G9SyncData.Protocol;
 using G9SyncData.Server.Auth;
 using G9SyncData.Server.Diagnostics;
 using G9SyncData.Server.Engine;
+using G9SyncData.Server.Hosting;
 using G9SyncData.Server.Model;
 using G9SyncData.Server.Pipeline;
 using G9SyncData.Server.Storage;
@@ -375,6 +376,7 @@ public sealed partial class G9CSyncServerEngine
             DeleteHandlers = services.GetServices<IG9DeleteHandler>().ToArray(),
             ConflictResolvers = services.GetServices<IG9ConflictResolver>().ToArray(),
             PostCommitHandlers = services.GetServices<IG9PostCommitHandler>().ToArray(),
+            EffectHandlers = services.GetServices<IG9EffectHandler>().ToArray(),
             RowWriters = services.GetServices<IG9RowWriter>().ToArray(),
             CommandHandlers = services.GetServices<IG9CommandHandler>().ToArray()
         };
@@ -394,12 +396,20 @@ public sealed partial class G9CSyncServerEngine
             Services = services,
             MaxRejections = _options.MaxRejectionsPerPush,
             MaxRows = _options.MaxPushRows,
+            MaxDecodedFrameBytes = _options.MaxDecodedFrameBytes,
+            MaxDecodedPushBytes = _options.MaxDecodedPushBytes,
             FrameVersion = G9SyncProtocol.NegotiateFrameVersion(request.FrameVersion)
         }, cancellationToken).ConfigureAwait(false);
 
         if (!result.AlreadyApplied && result.Error is null && pipeline.PostCommitHandlers.Count > 0)
         {
             await RunPostCommitHandlersAsync(caller, auth, request, result, pipeline, services).ConfigureAwait(false);
+        }
+
+        // The effects are already durable; this only saves them waiting for the next poll (ADR-0052).
+        if (!result.AlreadyApplied && result.Error is null && pipeline.EffectHandlers.Count > 0 && result.Accepted.Count > 0)
+        {
+            services.GetService<G9CSyncEffectDispatcher>()?.Nudge();
         }
 
         var accepted = result.Accepted.Sum(a => a.Keys.Count);

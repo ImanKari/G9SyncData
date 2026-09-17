@@ -10,7 +10,13 @@ public enum G9ERevocationReason : byte
     Unsubscribed = 1,
 
     /// <summary>An ephemeral subscription expired.</summary>
-    Expired = 2
+    Expired = 2,
+
+    /// <summary>
+    ///     The server refused the subscription for this caller: not a failure to refresh it, but a statement that these rows are no longer
+    ///     theirs to hold (ADR-0048). The application can tell this apart from <see cref="LeftScope" /> without reading error strings.
+    /// </summary>
+    AccessRevoked = 3
 }
 
 /// <summary>What happens to a row no subscription holds any more.</summary>

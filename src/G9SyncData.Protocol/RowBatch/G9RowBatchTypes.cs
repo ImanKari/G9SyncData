@@ -49,5 +49,11 @@ internal static class G9RowBatchFormat
     public const int HeaderSize = 10;
     public const int MaxBodyBytes = 512 * 1024 * 1024;
 
+    /// <summary>
+    ///     The largest body any reader will decode: what a writer may produce, plus the column layout's allowance. It is the ceiling of
+    ///     the format, not a budget - a reader handling frames it did not produce passes its own, smaller one (ADR-0051).
+    /// </summary>
+    public const int MaxDecodedBytes = MaxBodyBytes + (64 * 1024 * 1024);
+
     public static bool HasValues(G9ERowBatchOp op) => op is G9ERowBatchOp.Upsert or G9ERowBatchOp.Backfill;
 }

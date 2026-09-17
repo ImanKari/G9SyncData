@@ -28,9 +28,15 @@ public sealed partial class G9CSqliteSyncStore
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using var transaction = connection.BeginTransaction(deferred: false);
             Exec(connection, transaction, "DELETE FROM g9_stage; DELETE FROM g9_stage_runs;");
-            Exec(connection, transaction, "INSERT INTO g9_stage_runs (run_id, plan_json, backfills_json, created_utc, complete) VALUES ($r, $p, $b, $c, 0)",
+
+            // Read inside the transaction that inserts the run: rows written after this point are newer than anything the stage will
+            // carry, and the apply must not roll them back (ADR-0046).
+            var stageSequence = Convert.ToInt64(Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
+            Exec(connection, transaction,
+                "INSERT INTO g9_stage_runs (run_id, plan_json, backfills_json, created_utc, complete, generation, stage_seq) VALUES ($r, $p, $b, $c, 0, $g, $s)",
                 ("$r", pull.RunId), ("$p", JsonSerializer.Serialize(pull.Plan, G9SyncJsonContext.Default.G9DtPullPlan)),
-                ("$b", JsonSerializer.Serialize(pull.Backfills.ToList(), G9SyncJsonContext.Default.ListG9DtBackfillRequest)), ("$c", ToUnixMs(pull.CreatedUtc)));
+                ("$b", JsonSerializer.Serialize(pull.Backfills.ToList(), G9SyncJsonContext.Default.ListG9DtBackfillRequest)), ("$c", ToUnixMs(pull.CreatedUtc)),
+                ("$g", pull.Generation), ("$s", stageSequence));
             transaction.Commit();
         }
         finally
@@ -128,7 +134,7 @@ public sealed partial class G9CSqliteSyncStore
 
     private static G9CStagedPull? ReadStagedRun(SqliteConnection connection, string runId)
     {
-        using var command = Command(connection, null, "SELECT plan_json, backfills_json, created_utc FROM g9_stage_runs WHERE run_id = $r");
+        using var command = Command(connection, null, "SELECT plan_json, backfills_json, created_utc, generation, stage_seq FROM g9_stage_runs WHERE run_id = $r");
         command.Parameters.AddWithValue("$r", runId);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
@@ -137,7 +143,9 @@ public sealed partial class G9CSqliteSyncStore
             RunId = runId,
             Plan = JsonSerializer.Deserialize(reader.GetString(0), G9SyncJsonContext.Default.G9DtPullPlan) ?? new G9DtPullPlan(),
             Backfills = reader.IsDBNull(1) ? [] : JsonSerializer.Deserialize(reader.GetString(1), G9SyncJsonContext.Default.ListG9DtBackfillRequest) ?? [],
-            CreatedUtc = FromUnixMs(reader.GetInt64(2))
+            CreatedUtc = FromUnixMs(reader.GetInt64(2)),
+            Generation = reader.IsDBNull(3) ? null : reader.GetString(3),
+            StageSequence = reader.GetInt64(4)
         };
     }
 

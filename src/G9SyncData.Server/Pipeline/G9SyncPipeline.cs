@@ -132,14 +132,56 @@ public sealed class G9CPostCommitContext
 }
 
 /// <summary>
-///     Runs after the push transaction committed. Runs at most once per (client, batch): a retried batch is acknowledged
-///     from the stored result and never reaches handlers again. A handler failure is logged; it does not fail the push.
+///     A best-effort notification, in-process, once the push transaction committed: for metrics, caches and UI hints. It runs at most
+///     once per (client, batch) - a retried batch is acknowledged from the stored result and never reaches it again - a failure is
+///     logged and does not fail the push, and a crash between the commit and the call loses it. Work that must not be lost belongs in
+///     an <see cref="IG9EffectHandler" />, which is recorded in the push transaction and delivered until it succeeds (ADR-0052).
 /// </summary>
 public interface IG9PostCommitHandler
 {
     bool AppliesTo(G9CSyncServerTable table);
 
     ValueTask HandleAsync(G9CPostCommitContext context, CancellationToken cancellationToken);
+}
+
+/// <summary>
+///     What a durable effect was recorded for. It is deliberately not the push's context: the effect is written in the push
+///     transaction and delivered afterwards - possibly minutes later, after a restart, or on another node - so the caller's connection
+///     and authorisation context are gone by then. What survives is who pushed it and which rows were accepted.
+/// </summary>
+public sealed class G9CEffectContext
+{
+    /// <summary>Stable across every delivery attempt: the idempotency key a handler should record against its own work.</summary>
+    public required Guid EffectId { get; init; }
+
+    public required G9CSyncServerTable Table { get; init; }
+    public required Guid ClientId { get; init; }
+    public required long BatchId { get; init; }
+
+    /// <summary>The authenticated user the push was accepted from, as recorded at commit.</summary>
+    public required string? UserId { get; init; }
+
+    public required IReadOnlyList<string> UpsertedKeys { get; init; }
+    public required IReadOnlyList<string> DeletedKeys { get; init; }
+
+    /// <summary>1 on the first delivery. A handler that is not idempotent can use it to tell a retry from a first attempt.</summary>
+    public required int Attempt { get; init; }
+
+    public required IServiceProvider Services { get; init; }
+}
+
+/// <summary>
+///     Work that must survive the push: recorded in the same transaction as the rows, then delivered by a worker with retry and a
+///     visible terminal-failure state (ADR-0052). Delivery is at-least-once - a handler that ran but could not be marked complete runs
+///     again - so handlers must be idempotent; <see cref="G9CEffectContext.EffectId" /> is the key to do that with. Unlike
+///     <see cref="IG9PostCommitHandler" />, a replayed push still delivers the effect, because the record, not the call, is what makes
+///     it owed.
+/// </summary>
+public interface IG9EffectHandler
+{
+    bool AppliesTo(G9CSyncServerTable table);
+
+    ValueTask HandleAsync(G9CEffectContext context, CancellationToken cancellationToken);
 }
 
 /// <summary>The hooks resolved for one push.</summary>
@@ -152,6 +194,7 @@ public sealed class G9CSyncPipeline
     public IReadOnlyList<IG9DeleteHandler> DeleteHandlers { get; init; } = [];
     public IReadOnlyList<IG9ConflictResolver> ConflictResolvers { get; init; } = [];
     public IReadOnlyList<IG9PostCommitHandler> PostCommitHandlers { get; init; } = [];
+    public IReadOnlyList<IG9EffectHandler> EffectHandlers { get; init; } = [];
     public IReadOnlyList<IG9RowWriter> RowWriters { get; init; } = [];
     public IReadOnlyList<IG9CommandHandler> CommandHandlers { get; init; } = [];
 }

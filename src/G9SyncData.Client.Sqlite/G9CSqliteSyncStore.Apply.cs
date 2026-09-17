@@ -34,7 +34,8 @@ public sealed partial class G9CSqliteSyncStore
             }
 
             using var transaction = connection.BeginTransaction(deferred: false);
-            using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, rowsApplied, staged.Backfills, SnapshotRowsByTable(staged.Plan));
+            using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, rowsApplied, staged.Backfills, SnapshotRowsByTable(staged.Plan),
+                changedAfterSequence: staged.StageSequence);
             using (var payloadCommand = Command(connection, transaction, "SELECT payload, subscription_key FROM g9_stage WHERE run_id = $r AND seq = $s"))
             {
                 payloadCommand.Parameters.AddWithValue("$r", runId);
@@ -126,8 +127,15 @@ public sealed partial class G9CSqliteSyncStore
 
     // ================================================================ engine
 
+    /// <summary>
+    ///     Opens an apply and decides which rows it may not touch. <c>dirtyAfterSequence</c> narrows that set to pending changes made
+    ///     after the given sequence; the rest were just pushed and are expecting their canonical rows. <c>changedAfterSequence</c>
+    ///     widens it with every row changed after the given sequence, pending or not (ADR-0046): a staged pull passes the sequence it
+    ///     was planned at, so a row the device has moved on from since - edited, pushed and acknowledged, revoked, or replaced by a
+    ///     newer server frame - is newer than the stage and the stage does not get to roll it back.
+    /// </summary>
     private ApplyContext BeginApply(SqliteConnection connection, SqliteTransaction transaction, long? dirtyAfterSequence, IProgress<long>? progress,
-        IReadOnlyList<G9DtBackfillRequest> backfills, IReadOnlyDictionary<int, long>? snapshotRows = null)
+        IReadOnlyList<G9DtBackfillRequest> backfills, IReadOnlyDictionary<int, long>? snapshotRows = null, long? changedAfterSequence = null)
     {
         // applying = 1 stays the rule that keeps library writes out of change capture. Skipping triggers below only saves evaluating
         // them: correctness never depends on it, so a connection where SQLite does not confirm the switch simply applies with triggers.
@@ -143,6 +151,14 @@ public sealed partial class G9CSqliteSyncStore
                        : "SELECT tid, pk FROM g9_rows WHERE dirty <> 0 AND local_seq > $m"))
         {
             if (dirtyAfterSequence is not null) command.Parameters.AddWithValue("$m", dirtyAfterSequence.Value);
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
+        }
+
+        if (changedAfterSequence is not null)
+        {
+            using var command = Command(connection, transaction, "SELECT tid, pk FROM g9_rows WHERE local_seq > $c");
+            command.Parameters.AddWithValue("$c", changedAfterSequence.Value);
             using var reader = command.ExecuteReader();
             while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
         }

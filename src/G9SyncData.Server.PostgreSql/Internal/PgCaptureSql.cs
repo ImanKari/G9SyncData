@@ -38,6 +38,20 @@ internal static class PgCaptureSql
             last_push_result bytea NULL,
             first_seen timestamptz NOT NULL DEFAULT now(),
             last_seen timestamptz NOT NULL DEFAULT now());
+        CREATE TABLE IF NOT EXISTS {{schema}}.effects (
+            effect_id uuid PRIMARY KEY,
+            table_id integer NOT NULL,
+            client_id uuid NOT NULL,
+            batch_id bigint NOT NULL,
+            user_id text NULL,
+            upserted text[] NOT NULL DEFAULT '{}',
+            deleted text[] NOT NULL DEFAULT '{}',
+            attempts integer NOT NULL DEFAULT 0,
+            next_attempt_at timestamptz NOT NULL DEFAULT now(),
+            last_error text NULL,
+            failed boolean NOT NULL DEFAULT false,
+            created_at timestamptz NOT NULL DEFAULT now());
+        CREATE INDEX IF NOT EXISTS {{PgNames.Quote("g9_effects_due")}} ON {{schema}}.effects (next_attempt_at) WHERE NOT failed;
         CREATE SEQUENCE IF NOT EXISTS {{schema}}.ver_seq;
         CREATE TABLE IF NOT EXISTS {{schema}}.wal_sync_points (
             nonce uuid PRIMARY KEY,
@@ -107,6 +121,8 @@ internal static class PgCaptureSql
         var mergeInsert = model.TracksColumnVersions ? $"{schema}.merge_col_vers(NULL, s.mask, s.ver, {physical})" : "NULL::bigint[]";
         var mergeConflict = model.TracksColumnVersions ? $"{schema}.merge_col_vers(k.col_vers, EXCLUDED.last_mask, EXCLUDED.ver, {physical})" : "NULL";
         var triggerPrefix = options.Schema;
+        var schemaLiteral = PgNames.Literal(model.Schema);
+        var nameLiteral = PgNames.Literal(model.Name);
 
         // WAL mode (ADR-0028): the triggers only record G9SyncData's own pushes, which set g9sync.origin; every other
         // writer is recorded by the WAL consumer. The WHEN clause keeps the cost for those writers at ~1% (measured),
@@ -201,6 +217,23 @@ internal static class PgCaptureSql
             END
             $g9$;
 
+            CREATE OR REPLACE FUNCTION {{schema}}.{{PgNames.Quote(bare + "__trunc")}}() RETURNS trigger LANGUAGE plpgsql AS $g9$
+            BEGIN
+                -- TRUNCATE removes every row and fires no row trigger, and the WAL decoder is given a statement, not row images
+                -- (ADR-0049). Recording it as this table's removal point puts every cursor older than it through the path a purged
+                -- tombstone already takes - reconcile, or resync - and invalidates cached digests, without writing one tombstone per
+                -- row. The tracking rows go with it: the keys they describe no longer exist, and a later delta must not offer them.
+                TRUNCATE {{tracking}};
+                UPDATE {{schema}}.tables SET max_removed_xid = pg_current_xact_id(), updated_at = now()
+                    WHERE schema_name = {{schemaLiteral}} AND table_name = {{nameLiteral}};
+                {{notify}}
+                RETURN NULL;
+            END
+            $g9$;
+
+            DROP TRIGGER IF EXISTS {{PgNames.Quote(triggerPrefix + "_trunc")}} ON {{table.BaseName}};
+            CREATE TRIGGER {{PgNames.Quote(triggerPrefix + "_trunc")}} AFTER TRUNCATE ON {{table.BaseName}}
+                FOR EACH STATEMENT EXECUTE FUNCTION {{schema}}.{{PgNames.Quote(bare + "__trunc")}}();
             DROP TRIGGER IF EXISTS {{PgNames.Quote(triggerPrefix + "_ins")}} ON {{table.BaseName}};
             CREATE TRIGGER {{PgNames.Quote(triggerPrefix + "_ins")}} AFTER INSERT ON {{table.BaseName}}
                 REFERENCING NEW TABLE AS g9_new FOR EACH STATEMENT{{guard}} EXECUTE FUNCTION {{schema}}.{{PgNames.Quote(bare + "__ins")}}();

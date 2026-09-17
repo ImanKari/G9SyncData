@@ -250,7 +250,8 @@ scope that reads other tables inside a **function** must be listed in `G9CPostgr
 | `IG9UploadTransformer` | after validation | rewrite staged values (the changed row returns to the device as canonical) |
 | `IG9DeleteHandler` | for delete rows | turn a delete into a soft delete or reject it |
 | `IG9ConflictResolver` | for `Custom` policy conflicts | pick or merge |
-| `IG9PostCommitHandler` | after the push transaction committed | side effects (never rolls back the push) |
+| `IG9PostCommitHandler` | in-process, right after the push transaction committed | best-effort notifications: metrics, caches, UI hints. A throw is logged, a replayed batch skips it, a crash loses it |
+| `IG9EffectHandler` | recorded IN the push transaction, delivered by a worker with retry | work that must not be lost: workflow transitions, projections, external calls. At-least-once, so make it idempotent on `EffectId` (ADR-0052) |
 
 ## Server options (`G9CSyncServerOptions`)
 

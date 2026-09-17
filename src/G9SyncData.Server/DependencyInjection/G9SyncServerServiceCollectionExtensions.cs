@@ -60,6 +60,7 @@ public static class G9SyncServerServiceCollectionExtensions
 
         services.TryAddSingleton<IG9SyncAuthContextProvider, G9CClaimsAuthContextProvider>();
         services.TryAddSingleton<G9CSyncChangeNotifier>();
+        services.TryAddSingleton<G9CSyncEffectDispatcher>();
         services.TryAddSingleton<G9CSyncServerEngine>();
         services.TryAddSingleton<IG9SyncServerChangeFeed, G9CSyncServerChangeFeed>();
         services.AddHostedService<G9CSyncServerHostedService>();
@@ -158,6 +159,17 @@ public sealed class G9CSyncServerBuilder
         where T : class, IG9PostCommitHandler
     {
         Services.AddScoped<IG9PostCommitHandler, T>();
+        return this;
+    }
+
+    /// <summary>
+    ///     Registers work that must survive the push: recorded in the push transaction and delivered with retry until it succeeds
+    ///     (ADR-0052). Handlers must be idempotent - delivery is at-least-once.
+    /// </summary>
+    public G9CSyncServerBuilder AddEffectHandler<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] T>()
+        where T : class, IG9EffectHandler
+    {
+        Services.AddScoped<IG9EffectHandler, T>();
         return this;
     }
 

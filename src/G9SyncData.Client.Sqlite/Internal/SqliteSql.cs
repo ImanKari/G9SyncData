@@ -53,13 +53,14 @@ internal static class SqliteSql
             auth_hash TEXT NULL,
             state INTEGER NOT NULL DEFAULT 0,
             error_code TEXT NULL,
+            move_out_policy INTEGER NULL,
             created_utc INTEGER NOT NULL,
             last_success_utc INTEGER NULL,
             last_reconcile_utc INTEGER NULL,
             last_access_utc INTEGER NULL) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS g9_ephemeral_rows (sub_key TEXT NOT NULL, tid INTEGER NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (sub_key, tid, pk)) WITHOUT ROWID;
         CREATE INDEX IF NOT EXISTS g9_ephemeral_rows_row ON g9_ephemeral_rows (tid, pk);
-        CREATE TABLE IF NOT EXISTS g9_stage_runs (run_id TEXT NOT NULL PRIMARY KEY, plan_json TEXT NOT NULL, backfills_json TEXT NULL, created_utc INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS g9_stage_runs (run_id TEXT NOT NULL PRIMARY KEY, plan_json TEXT NOT NULL, backfills_json TEXT NULL, created_utc INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0, generation TEXT NULL, stage_seq INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS g9_stage (run_id TEXT NOT NULL, seq INTEGER NOT NULL, subscription_key TEXT NULL, row_count INTEGER NOT NULL, continuation_json TEXT NULL, payload BLOB NULL, PRIMARY KEY (run_id, seq)) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS g9_rejections (
             tid INTEGER NOT NULL, pk TEXT NOT NULL, code TEXT NOT NULL, message TEXT NULL, sql_state TEXT NULL, constraint_name TEXT NULL,

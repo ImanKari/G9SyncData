@@ -35,20 +35,29 @@ public sealed partial class G9CPostgresSyncStore
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
 
-        await ExecuteAsync(connection, transaction,
-            $"INSERT INTO {_schema}.clients (client_id, user_id) VALUES (@g9_client, @g9_user) ON CONFLICT (client_id) DO UPDATE SET last_seen = now()",
-            cancellationToken, P("g9_client", NpgsqlDbType.Uuid, request.ClientId), P("g9_user", NpgsqlDbType.Text, request.Auth.UserId)).ConfigureAwait(false);
-
+        // Claim the device for this principal on first use and verify it on every later one, in the statement that locks the row: the
+        // receipt below is read by client id alone, and a client id is a value the caller supplies (ADR-0047).
         long lastBatch;
         byte[]? stored;
+        string? owner;
         await using (var command = Command(connection, transaction,
-                         $"SELECT last_push_batch, last_push_result FROM {_schema}.clients WHERE client_id = @g9_client FOR UPDATE"))
+                         $"INSERT INTO {_schema}.clients (client_id, user_id) VALUES (@g9_client, @g9_user) " +
+                         $"ON CONFLICT (client_id) DO UPDATE SET user_id = coalesce(clients.user_id, EXCLUDED.user_id), last_seen = now() " +
+                         "RETURNING user_id, last_push_batch, last_push_result"))
         {
             command.Parameters.Add(P("g9_client", NpgsqlDbType.Uuid, request.ClientId));
+            command.Parameters.Add(P("g9_user", NpgsqlDbType.Text, request.Auth.UserId));
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            lastBatch = reader.GetInt64(0);
-            stored = reader.IsDBNull(1) ? null : reader.GetFieldValue<byte[]>(1);
+            owner = reader.IsDBNull(0) ? null : reader.GetString(0);
+            lastBatch = reader.GetInt64(1);
+            stored = reader.IsDBNull(2) ? null : reader.GetFieldValue<byte[]>(2);
+        }
+
+        if (!string.Equals(owner, request.Auth.UserId, StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            throw new G9CSyncException(G9SyncErrorCodes.Unauthorized, "This device belongs to a different user.");
         }
 
         if (request.BatchId <= lastBatch)
@@ -91,11 +100,19 @@ public sealed partial class G9CPostgresSyncStore
     {
         var work = new Dictionary<int, PushWork>();
         var total = 0;
+        var decoded = 0L;
         for (var frameIndex = 0; frameIndex < request.Frames.Count; frameIndex++)
         {
             try
             {
-                using var reader = G9CRowBatchReader.Open(request.Frames[frameIndex]);
+                using var reader = G9CRowBatchReader.Open(request.Frames[frameIndex], request.MaxDecodedFrameBytes);
+                decoded += reader.BodyBytes;
+                if (decoded > request.MaxDecodedPushBytes)
+                {
+                    throw new G9CSyncException(G9SyncErrorCodes.RejectTooMany,
+                        $"The push decodes to more than {request.MaxDecodedPushBytes} bytes; send smaller batches.");
+                }
+
                 var sectionIndex = -1;
                 while (reader.NextSection())
                 {
@@ -389,7 +406,7 @@ public sealed partial class G9CPostgresSyncStore
         {
             foreach (var (frameIndex, sectionIndex) in work.Sections)
             {
-                using var reader = G9CRowBatchReader.Open(request.Frames[frameIndex]);
+                using var reader = G9CRowBatchReader.Open(request.Frames[frameIndex], request.MaxDecodedFrameBytes);
                 for (var i = 0; i <= sectionIndex; i++) reader.NextSection();
                 while (reader.ReadRow())
                 {
@@ -843,6 +860,26 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         if (accepted.Keys.Count > 0) result.Accepted.Add(accepted);
+
+        // In this transaction, not after it: an effect that exists describes rows that committed, and rows that committed owe an effect
+        // (ADR-0052). A crash between here and delivery loses nothing, and a replayed push does not need to run anything again.
+        if (accepted.Keys.Count > 0 && request.Pipeline.EffectHandlers.Any(h => h.AppliesTo(table.Model)))
+        {
+            var deletedKeys = new List<string>();
+            for (var i = 0; i < accepted.Keys.Count; i++)
+            {
+                if (i < accepted.Deleted.Count && accepted.Deleted[i]) deletedKeys.Add(accepted.Keys[i]);
+            }
+
+            await ExecuteAsync(connection, transaction,
+                $"INSERT INTO {_schema}.effects (effect_id, table_id, client_id, batch_id, user_id, upserted, deleted) " +
+                "VALUES (@g9_effect, @g9_table, @g9_client, @g9_batch, @g9_user, @g9_upserted, @g9_deleted)", ct,
+                P("g9_effect", NpgsqlDbType.Uuid, Guid.NewGuid()), P("g9_table", NpgsqlDbType.Integer, table.TableId),
+                P("g9_client", NpgsqlDbType.Uuid, request.ClientId), P("g9_batch", NpgsqlDbType.Bigint, request.BatchId),
+                P("g9_user", NpgsqlDbType.Text, request.Auth.UserId),
+                P("g9_upserted", NpgsqlDbType.Array | NpgsqlDbType.Text, upserted.ToArray()),
+                P("g9_deleted", NpgsqlDbType.Array | NpgsqlDbType.Text, deletedKeys.ToArray())).ConfigureAwait(false);
+        }
 
         await using (var command = Command(connection, transaction,
                          $"SELECT g9_key::text, g9_code, g9_message, g9_sqlstate, g9_constraint, g9_column, g9_details FROM {stage} " +

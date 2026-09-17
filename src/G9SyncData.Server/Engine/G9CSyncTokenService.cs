@@ -17,7 +17,16 @@ internal sealed class G9CSyncTokenService
 
     public G9CSyncTokenService(byte[]? key, TimeSpan lifetime)
     {
-        _key = key is { Length: >= 32 } ? key : RandomNumberGenerator.GetBytes(32);
+        // No key is a deliberate choice: one instance, tokens that need not outlive the process. A key that was configured but is too
+        // short to use is not - silently signing with a random one instead leaves every node rejecting the others' tokens, discovered
+        // only in production behind a load balancer (ADR-0050).
+        if (key is not null && key.Length < 32)
+        {
+            throw new ArgumentException(
+                $"{nameof(G9CSyncServerOptions.TokenSigningKey)} must be at least 32 bytes; {key.Length} were configured.", nameof(key));
+        }
+
+        _key = key ?? RandomNumberGenerator.GetBytes(32);
         _lifetime = lifetime;
     }
 

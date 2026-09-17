@@ -62,13 +62,23 @@ public sealed class G9CRowBatchReader : IDisposable
     public long RowHash { get; private set; }
     public bool HasValues { get; private set; }
 
+    /// <summary>The decoded size of this frame's body: what reading it actually cost, for callers keeping an aggregate budget.</summary>
+    public int BodyBytes => _bodyLength;
+
     private ReadOnlySpan<byte> Body => _body.AsSpan(_bodyStart, _bodyLength);
 
     /// <summary>Validates, decompresses when needed, and opens a frame.</summary>
-    /// <exception cref="FormatException">The frame is malformed.</exception>
-    public static G9CRowBatchReader Open(byte[] frame)
+    /// <param name="frame">The frame bytes.</param>
+    /// <param name="maxBodyBytes">
+    ///     The largest decoded body this caller will allocate for. The body length comes from the frame's own header and is what a
+    ///     compressed frame is decompressed into, so a small hostile or corrupt frame can otherwise ask for hundreds of megabytes
+    ///     before a single byte is decompressed (ADR-0051). Callers reading frames they did not produce should pass their own budget.
+    /// </param>
+    /// <exception cref="FormatException">The frame is malformed, or its body exceeds <paramref name="maxBodyBytes" />.</exception>
+    public static G9CRowBatchReader Open(byte[] frame, int maxBodyBytes = G9RowBatchFormat.MaxDecodedBytes)
     {
         ArgumentNullException.ThrowIfNull(frame);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBodyBytes);
         if (frame.Length < G9RowBatchFormat.HeaderSize ||
             frame[0] != (byte)'G' || frame[1] != (byte)'9' || frame[2] != (byte)'R' || frame[3] != (byte)'B')
         {
@@ -83,7 +93,11 @@ public sealed class G9CRowBatchReader : IDisposable
 
         var compression = (G9ECompression)frame[5];
         var bodyLength = BinaryPrimitives.ReadInt32LittleEndian(frame.AsSpan(6, 4));
-        if (bodyLength < 4 || bodyLength > G9RowBatchFormat.MaxBodyBytes + (64 * 1024 * 1024)) throw new FormatException("Invalid body length.");
+        if (bodyLength < 4 || bodyLength > G9RowBatchFormat.MaxDecodedBytes) throw new FormatException("Invalid body length.");
+        if (bodyLength > maxBodyBytes)
+        {
+            throw new FormatException($"The frame declares a {bodyLength}-byte body; this reader accepts at most {maxBodyBytes} bytes.");
+        }
 
         switch (compression)
         {

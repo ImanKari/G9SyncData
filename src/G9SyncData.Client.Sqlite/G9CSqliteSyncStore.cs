@@ -57,6 +57,23 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
                     Exec(connection, transaction, "ALTER TABLE g9_ctx ADD COLUMN command_id TEXT NULL");
                 }
 
+                if (Convert.ToInt64(Scalar(connection, transaction, "SELECT count(*) FROM pragma_table_info('g9_stage_runs') WHERE name = 'generation'"),
+                        CultureInfo.InvariantCulture) == 0)
+                {
+                    // Stores created before stages were validated on resume (ADR-0046). A stage already in flight cannot be described in
+                    // the new terms after the fact - nothing recorded when it began - so it is dropped and replanned, not guessed at.
+                    Exec(connection, transaction, "ALTER TABLE g9_stage_runs ADD COLUMN generation TEXT NULL");
+                    Exec(connection, transaction, "ALTER TABLE g9_stage_runs ADD COLUMN stage_seq INTEGER NOT NULL DEFAULT 0");
+                    Exec(connection, transaction, "DELETE FROM g9_stage; DELETE FROM g9_stage_runs;");
+                }
+
+                if (Convert.ToInt64(Scalar(connection, transaction, "SELECT count(*) FROM pragma_table_info('g9_subscriptions') WHERE name = 'move_out_policy'"),
+                        CultureInfo.InvariantCulture) == 0)
+                {
+                    // Stores created before the move-out policy was kept per subscription (ADR-0048); the next Hello fills it in.
+                    Exec(connection, transaction, "ALTER TABLE g9_subscriptions ADD COLUMN move_out_policy INTEGER NULL");
+                }
+
                 if (Meta(connection, transaction, "client_id") is null) SetMeta(connection, transaction, "client_id", Guid.NewGuid().ToString("D"));
                 if (Meta(connection, transaction, "next_batch_id") is null) SetMeta(connection, transaction, "next_batch_id", "1");
 
@@ -227,6 +244,14 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             SetMeta(connection, transaction, "definitions_json", JsonSerializer.Serialize(hello.Definitions, G9SyncJsonContext.Default.ListG9DtSubscriptionDefinition));
             SetMeta(connection, transaction, "tables_json", JsonSerializer.Serialize(hello.Tables, G9SyncJsonContext.Default.ListG9DtNegotiatedTable));
 
+            // Kept per subscription, not only in the definition list: a caller who loses access stops being told the definition, and the
+            // rows still have to be disposed of the way the server said to dispose of them (ADR-0048).
+            foreach (var definition in hello.Definitions)
+            {
+                Exec(connection, transaction, "UPDATE g9_subscriptions SET move_out_policy = $p WHERE name = $n",
+                    ("$p", (long)definition.MoveOutPolicy), ("$n", definition.Name));
+            }
+
             var updates = new List<(LocalTable Table, G9DtNegotiatedTable Negotiated, List<string> Synced)>();
             foreach (var negotiated in hello.Tables)
             {
@@ -351,9 +376,20 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
     }
 
     public Task RemoveSubscriptionAsync(string key, G9EMoveOutPolicy policy, CancellationToken cancellationToken) =>
-        RemoveSubscriptionAsync(key, policy, G9ERevocationReason.Unsubscribed, cancellationToken);
+        RemoveSubscriptionAsync(key, policy, G9ERevocationReason.Unsubscribed, keepSubscription: false, cancellationToken);
 
-    private async Task RemoveSubscriptionAsync(string key, G9EMoveOutPolicy policy, G9ERevocationReason reason, CancellationToken cancellationToken)
+    public async Task<G9CApplyReport> ReleaseSubscriptionRowsAsync(string key, CancellationToken cancellationToken)
+    {
+        // The policy comes from the last definition the server announced for this subscription, kept on the record: a caller who has just
+        // lost access is not told the definition any more, and falling back to Delete there would quietly discard retained data.
+        var report = new G9CApplyReport();
+        await RemoveSubscriptionAsync(key, policy: null, G9ERevocationReason.AccessRevoked, keepSubscription: true, cancellationToken, report)
+            .ConfigureAwait(false);
+        return report;
+    }
+
+    private async Task RemoveSubscriptionAsync(string key, G9EMoveOutPolicy? policy, G9ERevocationReason reason, bool keepSubscription,
+        CancellationToken cancellationToken, G9CApplyReport? report = null)
     {
         var model = EnsureInitialized();
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -364,6 +400,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             var records = ReadSubscriptions(connection, transaction, key);
             if (records.Count == 0) return;
             var record = records[0];
+            var effective = policy ?? record.MoveOutPolicy ?? G9EMoveOutPolicy.Delete;
 
             Exec(connection, transaction, "UPDATE g9_ctx SET applying = 1 WHERE id = 1");
             Exec(connection, transaction, "DROP TABLE IF EXISTS temp.g9_affected; CREATE TEMP TABLE g9_affected (tid INTEGER NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (tid, pk)) WITHOUT ROWID");
@@ -383,7 +420,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
                 Exec(connection, transaction, "UPDATE g9_rows SET subs = subs & $n WHERE (subs & $b) <> 0", ("$n", ~bit), ("$b", bit));
             }
 
-            if (policy == G9EMoveOutPolicy.Delete)
+            if (effective == G9EMoveOutPolicy.Delete)
             {
                 // Rows no other subscription holds go through the revocation policy (ADR-0026), pending changes included.
                 var released = new List<(long Tid, string Key)>();
@@ -399,14 +436,18 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
                 foreach (var (tid, rowKey) in released)
                 {
                     var table = _byLocal.Values.FirstOrDefault(t => t.Tid == tid);
-                    if (table is not null && DisposeReleasedRow(connection, transaction, table, rowKey, reason, key, ++sequence, report: null)) removed++;
+                    if (table is not null && DisposeReleasedRow(connection, transaction, table, rowKey, reason, key, ++sequence, report)) removed++;
                 }
 
                 Exec(connection, transaction, "UPDATE g9_clock SET seq = $s WHERE id = 1", ("$s", sequence));
                 LogSubscriptionRemoved(_logger, key, removed);
             }
 
-            Exec(connection, transaction, "DELETE FROM g9_subscriptions WHERE key = $k", ("$k", key));
+            Exec(connection, transaction,
+                keepSubscription
+                    // Access can come back; the subscription stays so a regrant refills it, and without a cursor it refills from scratch.
+                    ? "UPDATE g9_subscriptions SET cursor = NULL, last_success_utc = NULL, last_reconcile_utc = NULL WHERE key = $k"
+                    : "DELETE FROM g9_subscriptions WHERE key = $k", ("$k", key));
             Exec(connection, transaction, "DROP TABLE temp.g9_affected; UPDATE g9_ctx SET applying = 0 WHERE id = 1");
             transaction.Commit();
             _ = model;
@@ -484,7 +525,10 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             while (reader.Read()) expired.Add(reader.GetString(0));
         }
 
-        foreach (var key in expired) await RemoveSubscriptionAsync(key, G9EMoveOutPolicy.Delete, G9ERevocationReason.Expired, cancellationToken).ConfigureAwait(false);
+        foreach (var key in expired)
+        {
+            await RemoveSubscriptionAsync(key, G9EMoveOutPolicy.Delete, G9ERevocationReason.Expired, keepSubscription: false, cancellationToken).ConfigureAwait(false);
+        }
         return expired.Count;
     }
 
@@ -564,7 +608,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
         var records = new List<G9CSyncSubscriptionRecord>();
         using var command = Command(connection, transaction,
             "SELECT key, name, params, slot, ephemeral, ttl_seconds, cursor, definition_hash, auth_hash, state, error_code, created_utc, " +
-            "last_success_utc, last_reconcile_utc, last_access_utc FROM g9_subscriptions" + (key is null ? string.Empty : " WHERE key = $k") + " ORDER BY created_utc");
+            "last_success_utc, last_reconcile_utc, last_access_utc, move_out_policy FROM g9_subscriptions" + (key is null ? string.Empty : " WHERE key = $k") + " ORDER BY created_utc");
         if (key is not null) command.Parameters.AddWithValue("$k", key);
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -586,7 +630,8 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
                 CreatedUtc = FromUnixMs(reader.GetInt64(11)),
                 LastSuccessUtc = reader.IsDBNull(12) ? null : FromUnixMs(reader.GetInt64(12)),
                 LastReconcileUtc = reader.IsDBNull(13) ? null : FromUnixMs(reader.GetInt64(13)),
-                LastAccessUtc = reader.IsDBNull(14) ? null : FromUnixMs(reader.GetInt64(14))
+                LastAccessUtc = reader.IsDBNull(14) ? null : FromUnixMs(reader.GetInt64(14)),
+                MoveOutPolicy = reader.IsDBNull(15) ? null : (G9EMoveOutPolicy)reader.GetInt32(15)
             });
         }
 

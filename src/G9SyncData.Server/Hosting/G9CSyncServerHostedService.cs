@@ -13,6 +13,7 @@ internal sealed partial class G9CSyncServerHostedService(
     G9CSyncServerEngine engine,
     IG9SyncServerStore store,
     G9CSyncChangeNotifier notifier,
+    G9CSyncEffectDispatcher effects,
     IOptions<G9CSyncServerOptions> options,
     ILogger<G9CSyncServerHostedService> logger) : BackgroundService
 {
@@ -26,7 +27,8 @@ internal sealed partial class G9CSyncServerHostedService(
 
         var listen = settings.EnableChangeNotifications ? ListenLoopAsync(stoppingToken) : Task.CompletedTask;
         var cleanup = CleanupLoopAsync(settings, stoppingToken);
-        await Task.WhenAll(listen, cleanup).ConfigureAwait(false);
+        var dispatch = effects.RunAsync(settings, stoppingToken);
+        await Task.WhenAll(listen, cleanup, dispatch).ConfigureAwait(false);
     }
 
     private async Task ListenLoopAsync(CancellationToken stoppingToken)

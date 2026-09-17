@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using G9SyncData.Client.Progress;
 using G9SyncData.Client.Runs;
 using G9SyncData.Client.Storage;
@@ -99,6 +101,20 @@ public sealed partial class G9CSyncEngine
                         {
                             State = G9ESubscriptionState.Failed, ErrorCode = ActionCode(state.Action)
                         }, ct).ConfigureAwait(false);
+
+                        // Forbidden is the server stating these rows are no longer this caller's to hold - not a failure to refresh them.
+                        // Leaving them in place would keep revoked data readable on the device indefinitely (ADR-0048).
+                        if (state.Action == G9ESubscriptionAction.Forbidden)
+                        {
+                            var released = await _store.ReleaseSubscriptionRowsAsync(subscription.Key, ct).ConfigureAwait(false);
+                            changes.Merge(released);
+                            if (released.Total > 0)
+                            {
+                                LogSubscriptionRevoked(_logger, subscription.Key, released.RevokedDeleted, released.RevokedQuarantined, released.RevokedRetained);
+                                RaiseRowsApplied(released, G9ESyncPhase.Reconciling);
+                            }
+                        }
+
                         continue;
                     }
 
@@ -142,9 +158,11 @@ public sealed partial class G9CSyncEngine
                 var plannable = usable.Where(s => !failedKeys.Contains(s.Key) && current.ContainsKey(s.Key)).Select(s => current[s.Key]).ToList();
 
                 var staged = await _store.GetStagedPullAsync(ct).ConfigureAwait(false);
+                var generation = StageGeneration(hello, plannable, states, negotiated);
                 G9DtPullPlan plan;
                 string runId;
-                if (staged is not null && staged.CreatedUtc > DateTime.UtcNow - _options.StagedPullMaxAge)
+                if (staged is not null && staged.CreatedUtc > DateTime.UtcNow - _options.StagedPullMaxAge &&
+                    string.Equals(staged.Generation, generation, StringComparison.Ordinal))
                 {
                     plan = staged.Plan;
                     runId = staged.RunId;
@@ -152,7 +170,14 @@ public sealed partial class G9CSyncEngine
                 }
                 else
                 {
-                    if (staged is not null) await _store.DiscardStagedPullAsync(staged.RunId, ct).ConfigureAwait(false);
+                    if (staged is not null)
+                    {
+                        // Age alone never made a stage safe: the rows it holds describe the epoch, permissions and columns of the run that
+                        // planned it, and applying them under different ones undoes whatever replaced them since (ADR-0046).
+                        if (!string.Equals(staged.Generation, generation, StringComparison.Ordinal)) LogStaleStage(_logger, staged.RunId);
+                        await _store.DiscardStagedPullAsync(staged.RunId, ct).ConfigureAwait(false);
+                    }
+
                     var backfills = await _store.GetPendingBackfillsAsync(ct).ConfigureAwait(false);
                     plan = await WithRetryAsync(token => _transport.PlanPullAsync(new G9DtPullRequest
                     {
@@ -164,7 +189,8 @@ public sealed partial class G9CSyncEngine
                     }, token), ct).ConfigureAwait(false);
                     if (plan.Error is not null) throw plan.Error.ToException();
                     runId = Guid.NewGuid().ToString("N");
-                    await _store.BeginStagedPullAsync(new G9CStagedPull { RunId = runId, Plan = plan, CreatedUtc = DateTime.UtcNow, Backfills = backfills }, ct)
+                    await _store.BeginStagedPullAsync(
+                            new G9CStagedPull { RunId = runId, Plan = plan, CreatedUtc = DateTime.UtcNow, Backfills = backfills, Generation = generation }, ct)
                         .ConfigureAwait(false);
                 }
 
@@ -314,6 +340,33 @@ public sealed partial class G9CSyncEngine
         if (request.ForceReconcile) return true;
         return definitions.TryGetValue(subscription.Name, out var definition) && definition.ReconcileIntervalMinutes > 0 &&
                (subscription.LastReconcileUtc ?? subscription.LastSuccessUtc ?? subscription.CreatedUtc) < now.AddMinutes(-definition.ReconcileIntervalMinutes);
+    }
+
+    /// <summary>
+    ///     Everything a staged pull's rows depend on, so that a resumed stage can be proven to still describe the world it was planned
+    ///     for (ADR-0046): the server's epoch, the exact set of subscriptions and their definition and authorisation hashes, and the
+    ///     negotiated columns the frames were encoded against. A change in any of them replans instead of applying stale rows.
+    /// </summary>
+    private static string StageGeneration(G9DtHelloResult hello, IReadOnlyList<G9CSyncSubscriptionRecord> plannable,
+        Dictionary<string, G9DtSubscriptionState> states, IReadOnlyList<G9DtNegotiatedTable> negotiated)
+    {
+        var builder = new StringBuilder();
+        builder.Append(hello.Epoch.ToString("N")).Append('\n');
+        foreach (var subscription in plannable.OrderBy(s => s.Key, StringComparer.Ordinal))
+        {
+            // The server's view when it exists; the stored one otherwise, so a subscription the server did not report still takes part.
+            var state = states.GetValueOrDefault(subscription.Key);
+            builder.Append(subscription.Key).Append('').Append(state?.DefinitionHash ?? subscription.DefinitionHash)
+                .Append('').Append(state?.AuthHash ?? subscription.AuthHash).Append('\n');
+        }
+
+        builder.Append('\n');
+        foreach (var table in negotiated.OrderBy(t => t.TableId))
+        {
+            builder.Append(table.TableId).Append('').Append(string.Join(',', table.Columns.Select(c => c.Name))).Append('\n');
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
     }
 
     private static string ActionCode(G9ESubscriptionAction action) => action switch
@@ -581,4 +634,12 @@ public sealed partial class G9CSyncEngine
 
     [LoggerMessage(EventId = 20016, Level = LogLevel.Warning, Message = "The server does not know these client tables (they will not sync): {Tables}")]
     private static partial void LogUnknownTables(ILogger logger, string tables);
+
+    [LoggerMessage(EventId = 20018, Level = LogLevel.Warning,
+        Message = "Subscription {SubscriptionKey} is forbidden; released its rows ({Deleted} deleted, {Quarantined} quarantined, {Retained} retained)")]
+    private static partial void LogSubscriptionRevoked(ILogger logger, string subscriptionKey, long deleted, long quarantined, long retained);
+
+    [LoggerMessage(EventId = 20017, Level = LogLevel.Information,
+        Message = "Staged pull {StagedRunId} was planned for a different epoch, permission set or schema; replanning")]
+    private static partial void LogStaleStage(ILogger logger, string stagedRunId);
 }

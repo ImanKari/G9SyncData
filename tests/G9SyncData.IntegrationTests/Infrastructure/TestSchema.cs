@@ -10,7 +10,8 @@ internal sealed record ServerModelOptions(
     G9ESyncDirection SiteDirection = G9ESyncDirection.Bidirectional,
     Action<G9CConflictRulesBuilder>? PotConflictRules = null,
     bool PotNoteReadOnly = false,
-    string? PotWriteRule = null);
+    string? PotWriteRule = null,
+    G9EMoveOutPolicy PotMoveOut = G9EMoveOutPolicy.Delete);
 
 /// <summary>
 ///     A small farm domain that exercises the hard parts: a partial unique index (the Dotmim 25P02 case), a row-state
@@ -65,6 +66,7 @@ internal static class TestSchema
         .Subscription("site-pots", s => s
             .Parameter("SiteId", G9ESyncColumnType.Guid)
             .Include("farm.Pot", "{row}.\"SiteId\" = @SiteId", "NOT {row}.\"IsDeleted\"")
+            .MoveOut(options.PotMoveOut)
             .DependsOn("sites"))
         .Subscription("allowed-pots", s => s
             .ServerParameter("AllowedSites", G9ESyncColumnType.Guid, isList: true)

@@ -32,6 +32,13 @@ public interface IG9SyncClientStore : IAsyncDisposable
     /// <summary>Removes a subscription and its membership; rows no other subscription holds follow <paramref name="policy" />.</summary>
     Task RemoveSubscriptionAsync(string key, G9EMoveOutPolicy policy, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Releases the rows a subscription holds because the server refused it for this caller, following the move-out policy last
+    ///     announced for it (ADR-0048). The subscription itself stays, cursor cleared, so regaining access refills it; rows another
+    ///     subscription still holds are untouched.
+    /// </summary>
+    Task<G9CApplyReport> ReleaseSubscriptionRowsAsync(string key, CancellationToken cancellationToken);
+
     Task UpdateSubscriptionAsync(string key, G9CSubscriptionUpdate update, CancellationToken cancellationToken);
 
     /// <summary>Deletes ephemeral subscriptions unused longer than their TTL. Returns how many were removed.</summary>
@@ -172,6 +179,10 @@ public sealed class G9CSyncSubscriptionRecord
     public required bool Ephemeral { get; init; }
     public TimeSpan? Ttl { get; init; }
     public string? Cursor { get; init; }
+
+    /// <summary>The move-out policy the server last announced for this subscription; kept so it still applies once access is gone.</summary>
+    public G9EMoveOutPolicy? MoveOutPolicy { get; init; }
+
     public string? DefinitionHash { get; init; }
     public string? AuthHash { get; init; }
     public G9ESubscriptionState State { get; init; }
@@ -240,6 +251,19 @@ public sealed class G9CStagedPull
 
     /// <summary>The backfills requested with the plan: they give backfill sections their column order and are marked synced on apply.</summary>
     public IReadOnlyList<G9DtBackfillRequest> Backfills { get; init; } = [];
+
+    /// <summary>
+    ///     What the world looked like when the plan was made - server epoch, subscription definition and authorisation hashes, negotiated
+    ///     columns (ADR-0046). A run only resumes a stage whose generation still matches; otherwise the stage describes a world that no
+    ///     longer exists and applying it would undo whatever replaced it.
+    /// </summary>
+    public string? Generation { get; init; }
+
+    /// <summary>
+    ///     The device clock at the moment the stage began, assigned by the store; the value given here is ignored. Rows changed after it
+    ///     are newer than anything the stage carries, so the apply leaves them alone.
+    /// </summary>
+    public long StageSequence { get; init; }
 }
 
 public sealed record G9CResumePoint(G9DtPullContinuation? Continuation, long StagedRows, long StagedBytes, bool Complete);

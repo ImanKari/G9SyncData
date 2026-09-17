@@ -609,15 +609,26 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
         }
     }
 
+    /// <summary>
+    ///     Records the device and binds it to the caller. The first authenticated use claims it; later uses must match, because handing a
+    ///     device record to whoever quotes its id would hand over the push receipt stored on it too (ADR-0047).
+    /// </summary>
     public async Task TouchClientAsync(Guid clientId, string? userId, string? appVersion, CancellationToken cancellationToken)
     {
         EnsureInitialized();
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await ExecuteAsync(connection, null,
+        await using var command = Command(connection, null,
             $"INSERT INTO {_schema}.clients (client_id, user_id, app_version) VALUES (@g9_client, @g9_user, @g9_version) " +
-            "ON CONFLICT (client_id) DO UPDATE SET user_id = EXCLUDED.user_id, app_version = EXCLUDED.app_version, last_seen = now()",
-            cancellationToken, P("g9_client", NpgsqlDbType.Uuid, clientId), P("g9_user", NpgsqlDbType.Text, userId),
-            P("g9_version", NpgsqlDbType.Text, appVersion)).ConfigureAwait(false);
+            "ON CONFLICT (client_id) DO UPDATE SET user_id = coalesce(clients.user_id, EXCLUDED.user_id), app_version = EXCLUDED.app_version, " +
+            "last_seen = now() RETURNING user_id");
+        command.Parameters.Add(P("g9_client", NpgsqlDbType.Uuid, clientId));
+        command.Parameters.Add(P("g9_user", NpgsqlDbType.Text, userId));
+        command.Parameters.Add(P("g9_version", NpgsqlDbType.Text, appVersion));
+        var owner = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        if (!string.Equals(owner, userId, StringComparison.Ordinal))
+        {
+            throw new G9CSyncException(G9SyncErrorCodes.Unauthorized, "This device belongs to a different user.");
+        }
     }
 
     // ================================================================ shared helpers
