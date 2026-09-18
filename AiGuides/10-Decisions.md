@@ -1301,3 +1301,25 @@ library wrote: exactly the kind of failure that looks like missing data rather t
 what an application that did not write the row expects. `GuidColumnCollationTests` pins both directions. The collation applies to
 tables this library creates; a table adopted from another engine keeps the collation it was created with, so a cut-over that adopts
 existing tables should check them.
+
+## ADR-0055 — A consumer can ask the store where its change feed currently ends
+
+**Status:** accepted (2026-09-18).
+
+**Context.** `ReadChangeFeedAsync` lets an application keep a derived projection in step with the store: AgriPad rebuilds an ArcGIS
+geodatabase from it, and a cache or a search index would do the same. Such a consumer holds a watermark into the feed, and that
+watermark is only meaningful against the store it came from. Nothing exposed where the feed currently ends, so a consumer could not
+tell a watermark it had written from one belonging to a store that no longer exists - a reinstall, a reset, a restore, or a
+cut-over from another engine whose watermark was in a different unit entirely. A watermark above every sequence the feed will ever
+return is not merely stale: the projection sits past the end of the feed and goes silently, permanently blind.
+
+**Decision.** `GetChangeSequenceAsync()` on the store and on the engine returns the highest sequence `ReadChangeFeedAsync` can
+return today - the store's own clock. A consumer compares its watermark with it before resuming: a watermark ABOVE it belongs to a
+store that is gone, and the projection must be rebuilt rather than resumed.
+
+**Consequences.** The sequence is shared by every table, so ONE watermark covers a projection built from several of them, and a
+table can be added to such a projection without anything having to be kept in step with it. AgriPad's geo pass had previously kept
+a timestamp per tracking table and had to max across exactly the tables it read; getting that set wrong once put the watermark
+above the computed max, which reset the projection on every pass. The cut-over case is the one that motivated this: a watermark
+written by the engine AgriPad migrated from is a `yyyyMMddHHmmssfff` timestamp, astronomically above any sequence, and is caught
+once and corrected rather than resetting for ever.

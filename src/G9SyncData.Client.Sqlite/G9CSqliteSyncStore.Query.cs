@@ -337,6 +337,13 @@ public sealed partial class G9CSqliteSyncStore
         return entries;
     }
 
+    public async Task<long> GetChangeSequenceAsync(CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        return Convert.ToInt64(Scalar(connection, null, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
+    }
+
     public async Task<IReadOnlyList<G9CSyncRejection>> GetRejectionsAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);

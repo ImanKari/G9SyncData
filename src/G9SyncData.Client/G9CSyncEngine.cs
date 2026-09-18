@@ -272,6 +272,24 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
         return await _store.RestoreQuarantinedAsync(localTable, key, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     Throws away a staged pull that has not been applied, so the next run plans afresh instead of resuming it. Returns whether
+    ///     there was one.
+    /// </summary>
+    /// <remarks>
+    ///     For an operator repairing a device that appears stuck. It cannot lose local work: a stage holds DOWNLOADED rows on their
+    ///     way in, never anything the device wrote - pending changes live in the tables themselves and are untouched. The cost of
+    ///     discarding is re-downloading, nothing more.
+    /// </remarks>
+    public async Task<bool> DiscardStagedPullAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        if (await _store.GetStagedPullAsync(cancellationToken).ConfigureAwait(false) is not { } staged) return false;
+
+        await _store.DiscardStagedPullAsync(staged.RunId, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task<int> DiscardQuarantinedAsync(string? localTable = null, string? key = null, CancellationToken cancellationToken = default)
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -297,6 +315,17 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
         return await _store.ReadChangeFeedAsync(localTable, afterSequence, limit, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The highest sequence <see cref="ReadChangeFeedAsync" /> can return today.</summary>
+    /// <remarks>
+    ///     Compare a stored feed watermark against this before resuming from it: a watermark above the current sequence belongs to a
+    ///     store that no longer exists, and resuming from it would leave the projection permanently stale.
+    /// </remarks>
+    public async Task<long> GetChangeSequenceAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.GetChangeSequenceAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Registers local rows written before capture existed, so a subscription can adopt them without a download.</summary>

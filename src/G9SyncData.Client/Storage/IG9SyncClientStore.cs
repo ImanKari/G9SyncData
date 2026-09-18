@@ -129,7 +129,22 @@ public interface IG9SyncClientStore : IAsyncDisposable
     /// <summary>Recorded commands, newest first; filtered by state when given.</summary>
     Task<IReadOnlyList<G9CLocalCommand>> GetCommandsAsync(G9ELocalCommandState? state, int limit, CancellationToken cancellationToken);
 
+    /// <summary>Change-feed entries for one table after a sequence, oldest first.</summary>
+    /// <remarks>
+    ///     The sequence is the store's own clock and is shared by every table, so ONE watermark covers a projection built from
+    ///     several of them.
+    /// </remarks>
     Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit, CancellationToken cancellationToken);
+
+    /// <summary>The store's current change sequence: the highest value <see cref="ReadChangeFeedAsync" /> can return today.</summary>
+    /// <remarks>
+    ///     A consumer that keeps a derived projection (a cache, a map layer, a search index) holds a watermark into the feed, and
+    ///     that watermark is only meaningful against the store it came from. Compare it with this: a watermark ABOVE the current
+    ///     sequence means the store was rebuilt underneath the projection - a reinstall, a reset, a restore - and the projection has
+    ///     to be rebuilt rather than resumed. Without it the consumer would sit above every row the feed will ever return and go
+    ///     silently, permanently stale.
+    /// </remarks>
+    Task<long> GetChangeSequenceAsync(CancellationToken cancellationToken);
 
     Task<IReadOnlyList<G9CSyncRejection>> GetRejectionsAsync(CancellationToken cancellationToken);
 
