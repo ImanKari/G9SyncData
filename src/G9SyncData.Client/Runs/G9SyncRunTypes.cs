@@ -80,6 +80,17 @@ public sealed class G9CSyncRunResult
     public long Downloaded { get; init; }
     public long Applied { get; init; }
     public TimeSpan Duration { get; init; }
+
+    /// <summary>
+    ///     Milliseconds spent in each <see cref="G9ESyncPhase" /> of this run, keyed by phase name.
+    /// </summary>
+    /// <remarks>
+    ///     The run report has always recorded this; nothing exposed it to the caller, so an application could see that a sync took
+    ///     forty seconds but not whether that was the network, the server planning the pull, or its own storage applying rows -
+    ///     which are three different problems with three different fixes. A caller deciding whether to overlap other work with a
+    ///     sync needs precisely this split: time spent Downloading is time its own CPU is idle.
+    /// </remarks>
+    public IReadOnlyDictionary<string, long> PhaseMs { get; init; } = new Dictionary<string, long>(StringComparer.Ordinal);
     public IReadOnlyList<string> Subscriptions { get; init; } = [];
 
     /// <summary>Subscriptions that could not sync, with the server's reason.</summary>

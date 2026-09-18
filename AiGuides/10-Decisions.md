@@ -1348,3 +1348,21 @@ defers that table's indexes and does NOT slice; otherwise it slices as before. O
 to watch - still arrives in slices. Applications that rely on `RowsApplied` must not assume a slice per N rows: a snapshot pull now
 raises a single final slice, which is what the event already promised (`IsFinal`) but which nothing had exercised. Setting
 `RebuildIndexesAfterRows = 0` restores the old behaviour for a caller that would rather always slice.
+
+## ADR-0057 — A run reports how long each phase took
+
+**Status:** accepted (2026-09-18).
+
+**Context.** The run report has always recorded per-phase durations, but nothing exposed them to the caller. An application could
+see that a sync took forty seconds and had no way to tell whether that was the network, the server planning the pull, or its own
+storage applying rows - three different problems with three different owners. AgriPad hit this while deciding whether map work
+could be overlapped with a sync: the answer depends entirely on how much of the run the device spends idle waiting on the server,
+and that number existed but was unreachable.
+
+**Decision.** `G9CSyncRunResult.PhaseMs` carries the same per-phase milliseconds the run report stores.
+
+**Consequences.** A caller can attribute a slow sync without instrumenting the library, and can decide whether to schedule its own
+CPU work against a run (time in `Downloading` and `Planning` is time the device is idle). It is a read-only view of what was
+already recorded, so it costs nothing and cannot drift from the report. AgriPad logs it per scope; the measurement it produced -
+13 s planning, 8 s downloading, 18 s applying on a 449,758-row first pull - is what showed that a first open has no overlap to win
+on the client at all.

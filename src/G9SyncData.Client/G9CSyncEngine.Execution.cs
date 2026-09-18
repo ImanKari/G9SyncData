@@ -284,7 +284,8 @@ public sealed partial class G9CSyncEngine
             Duration = stopwatch.Elapsed,
             Subscriptions = synced,
             Problems = problems,
-            Changes = changes
+            Changes = changes,
+            PhaseMs = tracker.Durations.ToDictionary(d => d.Key, d => (long)d.Value, StringComparer.Ordinal)
         };
 
         try
