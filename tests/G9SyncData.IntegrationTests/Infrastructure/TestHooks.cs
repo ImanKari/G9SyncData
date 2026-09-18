@@ -36,6 +36,20 @@ internal sealed class HookRecorder
     public void CountResolverCall() => Interlocked.Increment(ref _resolverCalls);
 }
 
+/// <summary>
+///     An app upload hook that throws, standing in for a bug in one. Used to prove a failing push cannot stop the device
+///     receiving data.
+/// </summary>
+internal sealed class ThrowingPotValidator : IG9UploadValidator
+{
+    public const string Message = "the app's own upload hook threw";
+
+    public bool AppliesTo(G9CSyncServerTable table) => table.LogicalName == "farm.Pot";
+
+    public ValueTask ValidateAsync(G9CUploadStepContext context, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(Message);
+}
+
 internal sealed class NegativeStatusValidator : IG9UploadValidator
 {
     public const string Code = "APP-STATUS-NEGATIVE";

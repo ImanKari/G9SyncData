@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -79,11 +80,32 @@ public sealed partial class G9CSyncEngine
             foreach (var state in hello.Subscriptions) states[state.Key] = state;
 
             // ---------------------------------------------------------------- 2. push
+            //
+            // ⛔ A FAILED PUSH MUST NOT COST THE PULL. This used to be a bare await, so anything the push threw left the method
+            // before `if (request.Pull)` and the device stopped RECEIVING data as well as sending it. A push retries, so the
+            // failure repeated every run and the device stayed dark until someone changed the server.
+            //
+            // That is not hypothetical: a server-side upload hook that threw on ONE unresolvable row - an observation whose tree
+            // no longer had a current placement - took a tablet off the air completely, downloads included. The pull does not
+            // depend on the push (it reads the negotiation and subscription states from the same hello), so there is no
+            // correctness reason to skip it.
+            //
+            // The failure is re-thrown after the pull, NOT swallowed: the run still reports Failed, the rows stay pending, and
+            // the caller retries exactly as before. All that changes is that the device keeps receiving while it does.
+            ExceptionDispatchInfo? pushFailure = null;
             if (request.Push && (pending is { TotalRows: > 0 } || pending is { PendingCommands: > 0 }))
             {
                 tracker.Enter(G9ESyncPhase.Pushing, pending.TotalRows + pending.PendingCommands);
-                (pushed, rejected, conflicts) = await PushAllAsync(negotiated, subscriptions, hello.MaxPushRows, hello.MaxPushBytes, tracker, changes, ct)
-                    .ConfigureAwait(false);
+                try
+                {
+                    (pushed, rejected, conflicts) = await PushAllAsync(negotiated, subscriptions, hello.MaxPushRows, hello.MaxPushBytes, tracker, changes, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (!ct.IsCancellationRequested)
+                {
+                    LogPushFailedPullContinues(_logger, exception, run.RunId);
+                    pushFailure = ExceptionDispatchInfo.Capture(exception);
+                }
             }
 
             if (request.Pull)
@@ -237,6 +259,9 @@ public sealed partial class G9CSyncEngine
 
             // Rows retained after revocation by a RetainWhile rule are re-checked once per run (ADR-0026).
             changes.RevokedDeleted += await _store.ReevaluateRetainedAsync(ct).ConfigureAwait(false);
+
+            // The pull has been applied and its cursors committed; now let the push failure decide the run's fate.
+            pushFailure?.Throw();
 
             outcome = rejected > 0 || problems.Count > 0 ? G9ESyncOutcome.CompletedWithRejections : G9ESyncOutcome.Succeeded;
             tracker.Complete(G9ESyncPhase.Completed);
@@ -626,6 +651,10 @@ public sealed partial class G9CSyncEngine
 
     [LoggerMessage(EventId = 20011, Level = LogLevel.Warning, Message = "Run {RunId} failed with {Code}")]
     private static partial void LogRunFailed(ILogger logger, Exception exception, Guid runId, string code);
+
+    [LoggerMessage(EventId = 20013, Level = LogLevel.Warning,
+        Message = "Run {RunId}: the push failed; continuing to the pull so the device keeps receiving, then reporting the failure")]
+    private static partial void LogPushFailedPullContinues(ILogger logger, Exception exception, Guid runId);
 
     [LoggerMessage(EventId = 20012, Level = LogLevel.Information, Message = "Resuming staged pull {StagedRunId} ({Rows} rows planned)")]
     private static partial void LogResumingPull(ILogger logger, string stagedRunId, long rows);

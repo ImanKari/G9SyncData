@@ -36,6 +36,39 @@ public sealed class ServerPipelineTests(ITestOutputHelper output)
         Assert.Equal(1, pending.RejectedRows);
     }
 
+    /// <summary>
+    ///     ⛔ A push that throws must not cost the device its DOWNLOADS. The push is attempted first in a run, so an app upload
+    ///     hook that throws used to leave the run before the pull ever started - and because a push retries, the device stayed
+    ///     dark for as long as the bug lived on the server. The failure must still be reported and the rows must stay pending;
+    ///     only the pull's independence changes.
+    /// </summary>
+    [PostgresFact]
+    public async Task A_push_that_throws_still_lets_the_pull_deliver_server_changes()
+    {
+        await using var harness = await SyncHarness.CreateAsync(output, server: s => s.AddValidator<ThrowingPotValidator>());
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await using var client = await harness.CreateSubscribedClientAsync(site);
+
+        // Something to send (which the hook will throw on) and something to receive.
+        var local = Guid.NewGuid();
+        await client.ExecAsync(InsertPot, Key(local), Key(site), "LOCAL", 1);
+
+        var fromServer = Guid.NewGuid();
+        await harness.ExecServerAsync(
+            """INSERT INTO farm."Pot" ("Id", "SiteId", "Code", "Status") VALUES ($1, $2, 'FROM-SERVER', 1)""", fromServer, site);
+
+        var result = await client.SyncAsync();
+
+        // The run reports the failure: nothing is swallowed and the local row is still pending.
+        Assert.Equal(G9ESyncOutcome.Failed, result.Outcome);
+        Assert.Equal(1, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
+        Assert.Equal(0L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Pot" WHERE "Id" = $1""", local));
+
+        // ...and the device received the server's row anyway.
+        Assert.True(await client.ExistsAsync("Pot", fromServer), "the server's row should have arrived despite the failed push");
+    }
+
     [PostgresFact]
     public async Task A_transformer_rewrites_uploaded_values_and_the_device_receives_the_canonical_row()
     {
