@@ -969,7 +969,7 @@ conflict policy decides where the server row changed meanwhile (as for `MarkDirt
 
 **Context.** The JSON hub protocol base64-encodes `G9DtSyncChunk.Payload` (+33%) and parses text. Microsoft's MessagePack protocol is
 reflection-based and not supported under Native AOT. Nerdbank.MessagePack builds serializers from PolyType type shapes generated at
-compile time. Measured on the Android emulator (500,000 rows, AgriPad-shaped schema, alternating runs, LES-0041):
+compile time. Measured on the Android emulator (500,000 rows, a wide denormalised schema, alternating runs, LES-0041):
 
 | | JSON | MessagePack |
 |---|---|---|
@@ -998,7 +998,7 @@ supported`); nothing is deployed with such a server. NativeAOT sample verified: 
 
 **Context.** In a row-wise body every row interleaves a random key, a version, a null bitmap and each column's value, so Brotli's window
 sees few repeats. Grouping the same bytes by field puts GUID references, timestamps and varint versions next to their own kind. Measured
-on 500,000 AgriPad-shaped pots (2,000 per page, Brotli q4):
+on 500,000 wide denormalised rows (2,000 per page, Brotli q4):
 
 | | Layout 1 (row-wise) | Layout 2 (column-grouped) |
 |---|---|---|
@@ -1079,7 +1079,7 @@ design, not the skip.
 **Status:** accepted (2026-09-17).
 
 **Context.** Frames are Brotli q4 (window 22). Zstandard is not inbox in .NET 10 (announced for .NET 11); `ZstdSharp.Port` is a managed
-port. Measured on 500,000 AgriPad-shaped pots, 250 pages, compression on the server and decompression on the emulator:
+port. Measured on 500,000 wide denormalised rows, 250 pages, compression on the server and decompression on the emulator:
 
 | Codec | Bytes | Server compress (desktop) | Device decompress (emulator) |
 |---|---|---|---|
@@ -1257,7 +1257,8 @@ their own. Nothing is recorded when no effect handler applies to the table, so d
 **Context.** A staged pull downloads every chunk to disk and then applies all of them in one transaction. That is what makes it
 atomic, and it is also why a device shows nothing at all for the length of a large sync and then everything at once: on a
 500,000-row site, ten seconds of a spinner followed by a map that fills in a single frame. The application cannot show progress it
-can read, because until the final commit there is nothing to read. AgriPad wants pots and trees to appear as they arrive.
+can read, because until the final commit there is nothing to read. An application rendering a large data set wants its rows to
+appear as they arrive.
 
 Applying each chunk as it downloads would give that, and would also give up the property the staging exists for. The question is
 what the atomic unit actually has to be.
@@ -1291,7 +1292,7 @@ time, that a pending local edit still survives, and that every changed key is an
 
 **Context.** The store writes a GUID as canonical lower-case text. The primary key column has always carried `COLLATE NOCASE`, so a
 device could find a row by an id in any casing; the other GUID columns did not. A foreign key is compared just as often as a key -
-AgriPad reads `Pot.RidgeId`, `Pot.VarietyId` and `Pot.SiteId` on nearly every screen, and holds those ids as strings whose casing
+An application typically reads foreign keys on nearly every screen, and may hold those ids as strings whose casing
 comes from its own ORM. A plain equality test against an upper-case id would match nothing, silently, and only for the rows this
 library wrote: exactly the kind of failure that looks like missing data rather than a bug.
 
@@ -1306,8 +1307,8 @@ existing tables should check them.
 
 **Status:** accepted (2026-09-18).
 
-**Context.** `ReadChangeFeedAsync` lets an application keep a derived projection in step with the store: AgriPad rebuilds an ArcGIS
-geodatabase from it, and a cache or a search index would do the same. Such a consumer holds a watermark into the feed, and that
+**Context.** `ReadChangeFeedAsync` lets an application keep a derived projection in step with the store - a spatial index, a cache, a
+search index, a denormalised read model. Such a consumer holds a watermark into the feed, and that
 watermark is only meaningful against the store it came from. Nothing exposed where the feed currently ends, so a consumer could not
 tell a watermark it had written from one belonging to a store that no longer exists - a reinstall, a reset, a restore, or a
 cut-over from another engine whose watermark was in a different unit entirely. A watermark above every sequence the feed will ever
@@ -1318,11 +1319,11 @@ return today - the store's own clock. A consumer compares its watermark with it 
 store that is gone, and the projection must be rebuilt rather than resumed.
 
 **Consequences.** The sequence is shared by every table, so ONE watermark covers a projection built from several of them, and a
-table can be added to such a projection without anything having to be kept in step with it. AgriPad's geo pass had previously kept
-a timestamp per tracking table and had to max across exactly the tables it read; getting that set wrong once put the watermark
-above the computed max, which reset the projection on every pass. The cut-over case is the one that motivated this: a watermark
-written by the engine AgriPad migrated from is a `yyyyMMddHHmmssfff` timestamp, astronomically above any sequence, and is caught
-once and corrected rather than resetting for ever.
+table can be added to such a projection without anything having to be kept in step with it. A consumer that instead keeps one
+watermark per source table has to max across exactly the tables it reads, and getting that set wrong puts its watermark above the
+computed max - which resets the projection on every pass. The cut-over case is the one that motivated this: a watermark inherited
+from a previous sync engine is in that engine's unit (a `yyyyMMddHHmmssfff` timestamp, astronomically above any sequence), and is
+caught once and corrected rather than resetting for ever.
 
 ## ADR-0056 — A plan chooses between index deferral and sliced apply; it cannot have both
 
@@ -1337,9 +1338,9 @@ so every read the application makes against them would be a scan.
 The code resolved that conflict by letting slicing win whenever it was enabled at all. That is the wrong way round for the load
 where it matters most. A FIRST pull is a snapshot of everything a subscription holds; nobody is watching individual rows land,
 because there is no prior content to interleave them with - and paying per-row index maintenance across hundreds of thousands of
-rows is the most expensive thing an apply can do. Measured in AgriPad on a 449,758-row first pull: the same load that slicing had
-made progressive was materially slower, and the JOIN the application ran immediately afterwards was slower again, because it met
-indexes built one random insert at a time instead of one sorted build.
+rows is the most expensive thing an apply can do. Measured on a 449,758-row first pull: the same load that slicing had made
+progressive was materially slower, and the multi-table JOIN the application ran immediately afterwards was slower again, because it
+met indexes built one random insert at a time instead of one sorted build (7.3 s against 3.7 s).
 
 **Decision.** The plan decides. When any table in the plan takes a SNAPSHOT of at least `RebuildIndexesAfterRows` rows, the apply
 defers that table's indexes and does NOT slice; otherwise it slices as before. One line, at the top of the apply.
@@ -1355,14 +1356,15 @@ raises a single final slice, which is what the event already promised (`IsFinal`
 
 **Context.** The run report has always recorded per-phase durations, but nothing exposed them to the caller. An application could
 see that a sync took forty seconds and had no way to tell whether that was the network, the server planning the pull, or its own
-storage applying rows - three different problems with three different owners. AgriPad hit this while deciding whether map work
-could be overlapped with a sync: the answer depends entirely on how much of the run the device spends idle waiting on the server,
-and that number existed but was unreachable.
+storage applying rows - three different problems with three different owners. The case that forced it: an application deciding
+whether its own heavy post-sync work could be overlapped with a run. That answer depends entirely on how much of the run the device
+spends idle waiting on the server, and the number existed but was unreachable.
 
 **Decision.** `G9CSyncRunResult.PhaseMs` carries the same per-phase milliseconds the run report stores.
 
 **Consequences.** A caller can attribute a slow sync without instrumenting the library, and can decide whether to schedule its own
 CPU work against a run (time in `Downloading` and `Planning` is time the device is idle). It is a read-only view of what was
-already recorded, so it costs nothing and cannot drift from the report. AgriPad logs it per scope; the measurement it produced -
-13 s planning, 8 s downloading, 18 s applying on a 449,758-row first pull - is what showed that a first open has no overlap to win
-on the client at all.
+already recorded, so it costs nothing and cannot drift from the report. The first measurement it produced - 13 s planning, 8 s
+downloading, 18 s applying on a 449,758-row first pull - showed that such a run leaves the device idle for over half its duration,
+but that ALL of that idle falls before any row has been applied, so a consumer whose work depends on the applied rows has no
+overlap to win.
