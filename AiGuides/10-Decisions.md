@@ -1323,3 +1323,28 @@ a timestamp per tracking table and had to max across exactly the tables it read;
 above the computed max, which reset the projection on every pass. The cut-over case is the one that motivated this: a watermark
 written by the engine AgriPad migrated from is a `yyyyMMddHHmmssfff` timestamp, astronomically above any sequence, and is caught
 once and corrected rather than resetting for ever.
+
+## ADR-0056 — A plan chooses between index deferral and sliced apply; it cannot have both
+
+**Status:** accepted (2026-09-18).
+
+**Context.** Two apply optimisations exist and they are mutually exclusive. Index deferral (ADR-0034) drops a table's plain indexes,
+fills it from empty and builds each index once inside the same transaction - 1.8x faster at 500 k rows. Sliced apply (ADR-0053)
+commits every `ApplySliceRows` rows so the application can show data while the rest is still arriving. Deferral cannot survive a
+committed slice: the slice publishes rows to the application, and they would be published with the table's indexes still missing,
+so every read the application makes against them would be a scan.
+
+The code resolved that conflict by letting slicing win whenever it was enabled at all. That is the wrong way round for the load
+where it matters most. A FIRST pull is a snapshot of everything a subscription holds; nobody is watching individual rows land,
+because there is no prior content to interleave them with - and paying per-row index maintenance across hundreds of thousands of
+rows is the most expensive thing an apply can do. Measured in AgriPad on a 449,758-row first pull: the same load that slicing had
+made progressive was materially slower, and the JOIN the application ran immediately afterwards was slower again, because it met
+indexes built one random insert at a time instead of one sorted build.
+
+**Decision.** The plan decides. When any table in the plan takes a SNAPSHOT of at least `RebuildIndexesAfterRows` rows, the apply
+defers that table's indexes and does NOT slice; otherwise it slices as before. One line, at the top of the apply.
+
+**Consequences.** A first pull is as fast as it can be and lands atomically; a delta - which is what an application actually wants
+to watch - still arrives in slices. Applications that rely on `RowsApplied` must not assume a slice per N rows: a snapshot pull now
+raises a single final slice, which is what the event already promised (`IsFinal`) but which nothing had exercised. Setting
+`RebuildIndexesAfterRows = 0` restores the old behaviour for a caller that would rather always slice.

@@ -36,7 +36,18 @@ public sealed partial class G9CSqliteSyncStore
 
             // Slicing only pays for itself when someone is listening for the slices (ADR-0053).
             var sliceRows = slices is null ? 0 : _options.ApplySliceRows;
-            var progressive = sliceRows > 0 && sequences.Count > 1;
+            var snapshotRows = SnapshotRowsByTable(staged.Plan);
+
+            // ⛔ Slicing and index deferral are MUTUALLY EXCLUSIVE, so the plan has to choose between them (ADR-0056).
+            // Deferral drops a table's plain indexes, fills it, and builds them once - 1.8x faster at 500 k rows - but it cannot
+            // survive a committed slice, because that would publish rows to the application with the indexes still missing.
+            // Slicing therefore used to win by default, and that is the wrong way round for the load where it matters most: a
+            // FIRST pull is a snapshot of everything, nobody is watching individual rows land, and paying per-row index
+            // maintenance across it is the single most expensive thing the apply can do. A delta is the opposite - small, and
+            // the one the application actually wants to watch. Let the size of the snapshot decide.
+            var defersIndexes = _options.RebuildIndexesAfterRows > 0
+                                && snapshotRows.Values.Any(rows => rows >= _options.RebuildIndexesAfterRows);
+            var progressive = sliceRows > 0 && sequences.Count > 1 && !defersIndexes;
 
             // Read ONCE, before any slice commits. A row an earlier slice applied carries a local_seq past the stage sequence, so
             // recomputing this per slice would make the run protect its own work from itself and silently drop later frames for
@@ -74,7 +85,7 @@ public sealed partial class G9CSqliteSyncStore
                 // Index deferral drops indexes for the load and rebuilds them at the end. Across committed slices that would leave
                 // them missing exactly while the application is reading the rows it was just shown, so slicing does without it.
                 using var context = BeginApply(connection, transaction, dirtyAfterSequence: null, rowsApplied, staged.Backfills,
-                    progressive ? null : SnapshotRowsByTable(staged.Plan), changedAfterSequence: staged.StageSequence,
+                    progressive ? null : snapshotRows, changedAfterSequence: staged.StageSequence,
                     protectedRows: protectedRows);
 
                 using (var payloadCommand = Command(connection, transaction, "SELECT payload, subscription_key FROM g9_stage WHERE run_id = $r AND seq = $s"))
