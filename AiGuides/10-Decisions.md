@@ -224,9 +224,19 @@ suppression and connectivity), behind the run that pre-empted it; identical requ
 
 **Consequences.** Pokes are never silently lost to pre-emption; proven by `A_user_run_preempts_a_background_run_which_is_queued_again`.
 
-## ADR-0021 — Change capture reads the WAL by default; triggers become the fallback
+## ADR-0021 — Both capture modes ship; WAL is the recommended one, triggers are the default
 
-**Status:** accepted (2026-09-16, v2 A-06 / Q-01)
+**Status:** accepted (2026-09-16, v2 A-06 / Q-01); **amended 2026-09-19** — the shipped DEFAULT is
+`Triggers`, not WAL.
+
+⛔ **What actually ships.** `G9CPostgresSyncOptions.CaptureMode` defaults to
+`G9EPostgresCaptureMode.Triggers`, because triggers need nothing from the database server and a library must
+start on a database it was pointed at, not refuse it. `WriteAheadLog` is the mode to CHOOSE for any database
+that can run `wal_level=logical` — everything below about why it is better still holds — but it is opt-in,
+and selecting it without the prerequisites in
+[`20-Infrastructure-PostgreSQL.md`](20-Infrastructure-PostgreSQL.md) fails at startup with a message saying
+so. The title of this ADR said "by default" for three days and the code never did; the wording below is the
+reasoning, this note is the behaviour.
 
 **Context.** v1 captures with statement-level triggers. Measured cost: **+147%** on a bulk insert, **+166%** on a bulk
 update, **+0.072 ms** per single-row statement, plus a tracking table per synced table. Triggers also see only the writers
