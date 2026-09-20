@@ -12,7 +12,8 @@
 #
 #  1. ubuntu-latest, not windows-latest. Every project here targets net10.0 (netstandard2.0 for the
 #     generator) — there is no MAUI workload and no net10.0-windows target — and the integration
-#     tests need a PostgreSQL SERVICE CONTAINER, which is a Linux-agent feature.
+#     tests need a real PostgreSQL, which is started with docker on the agent (see the note above
+#     `jobs:` for why it is NOT an Azure `services:` container).
 #
 #  2. Tests run, and they gate the publish. G9MAUIControls has none; this library's correctness is
 #     not eyeballable, so a package is only allowed out after the unit suite and the end-to-end
@@ -77,24 +78,22 @@ variables:
   # there is exactly one place to read "does this run make anything public?".
   isRelease: $[ and( eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest') ) ]
 
-resources:
-  containers:
-    - container: postgres
-      image: postgres:18-alpine
-      ports:
-        - 5432:5432
-      env:
-        POSTGRES_PASSWORD: g9sync-tests
-        POSTGRES_DB: postgres
-      options: >-
-        --health-cmd="pg_isready -U postgres" --health-interval=5s --health-timeout=5s --health-retries=30
+# ⛔ PostgreSQL is started by hand, NOT as a `services:` container, and that is not a style choice.
+#
+#    The WAL capture backend needs `wal_level=logical`, which postgres takes as a SERVER ARGUMENT (the
+#    image passes its command through to postgres). An Azure `container:` resource has no way to supply
+#    one: `options` is spliced into `docker create` BEFORE the image name, so it can set flags but never
+#    arguments, and `wal_level` is not something POSTGRES_INITDB_ARGS can reach either.
+#
+#    On the default `wal_level=replica` the 16 `[PostgresLogicalFact]` tests in WalCaptureModeTests and
+#    LogicalReplicationChangeSourceTests SKIP - reported as skipped, not failed, so the capture mode the
+#    guides recommend had zero coverage and a regression in it would have passed CI. The guard step
+#    below makes that failure loud instead.
 
 jobs:
   - job: build_test_publish
     displayName: Build, test, pack and publish
     timeoutInMinutes: 90
-    services:
-      postgres: postgres
     steps:
 
       # ────────────────────────────────────────────────────────────────────────────────────────
@@ -186,6 +185,37 @@ jobs:
             git remote -v
 
       # ────────────────────────────────────────────────────────────────────────────────────────
+      # ──────────────────────────────────────────────────────────────────────────────────────────
+      # max_replication_slots / max_wal_senders match the image defaults; they are stated because the
+      # suite CREATES slots, and a run that leaked one would otherwise fail much later with an error
+      # about exhausting them rather than about the leak.
+      - script: |
+          set -euo pipefail
+          docker run -d --name g9sync-pg -p 5432:5432             -e POSTGRES_PASSWORD=g9sync-tests             -e POSTGRES_DB=postgres             postgres:18-alpine             -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10
+          echo "waiting for postgres to accept connections..."
+          for i in $(seq 1 60); do
+            if docker exec g9sync-pg pg_isready -U postgres -q; then echo "ready after ${i}s"; exit 0; fi
+            sleep 1
+          done
+          echo "##vso[task.logissue type=error]PostgreSQL did not become ready in 60s"
+          docker logs g9sync-pg || true
+          exit 1
+        displayName: 'Start PostgreSQL (wal_level=logical)'
+
+      # ⛔ The whole point of the step above. Without this the 16 logical-replication tests go back to
+      # SKIPPING silently the moment the container config drifts, and a green pipeline would mean
+      # nothing for the WAL capture mode. Assert the setting rather than trusting it.
+      - script: |
+          set -euo pipefail
+          level=$(docker exec g9sync-pg psql -U postgres -tAc "SELECT current_setting('wal_level')")
+          echo "wal_level = $level"
+          if [ "$level" != "logical" ]; then
+            echo "##vso[task.logissue type=error]wal_level is '$level', not 'logical' - the 16 [PostgresLogicalFact] tests would SKIP rather than run."
+            exit 1
+          fi
+        displayName: 'Assert wal_level=logical (guards against silent skips)'
+
+      # ──────────────────────────────────────────────────────────────────────────────────────────
       # One solution build; every later step runs --no-build against it. TreatWarningsAsErrors is on
       # family-wide, so a warning fails here rather than shipping into a package.
       - script: dotnet build G9SyncData.slnx -c $(buildConfiguration)
@@ -205,6 +235,27 @@ jobs:
         displayName: 'Integration tests (PostgreSQL)'
         env:
           G9SYNC_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=g9sync-tests;Database=postgres
+
+      # Slots survive a dropped database, so a leak here wedges the NEXT run rather than this one.
+      # Reported, not failed: a leak is worth seeing, and failing a green test run over cleanup would
+      # bury the result that matters.
+      - script: |
+          set +e
+          slots=$(docker exec g9sync-pg psql -U postgres -tAc "SELECT count(*) FROM pg_replication_slots")
+          echo "replication slots left behind: $slots"
+          if [ "$slots" != "0" ]; then
+            docker exec g9sync-pg psql -U postgres -c "SELECT slot_name, active FROM pg_replication_slots"
+            echo "##vso[task.logissue type=warning]The suite left $slots replication slot(s) behind."
+          fi
+        displayName: 'Check for leaked replication slots'
+        condition: succeededOrFailed()
+
+      - script: |
+          set +e
+          docker rm -f g9sync-pg >/dev/null 2>&1
+          echo "postgres container removed"
+        displayName: 'Stop PostgreSQL'
+        condition: always()
 
       - task: PublishTestResults@2
         displayName: 'Publish test results'

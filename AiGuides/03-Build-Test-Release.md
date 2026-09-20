@@ -50,9 +50,22 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 ## Releasing
 
-`azure-pipelines.yml` builds, tests, packs, mirrors to GitHub and publishes to nuget.org. It runs on **ubuntu-latest**
-with a PostgreSQL service container, because every project targets `net10.0` (`netstandard2.0` for the generator) and
-the end-to-end suite needs a real server.
+`azure-pipelines.yml` builds, tests, packs, mirrors to GitHub and publishes to nuget.org. It runs on **ubuntu-latest**,
+because every project targets `net10.0` (`netstandard2.0` for the generator) and the end-to-end suite needs a real
+PostgreSQL.
+
+⛔ **PostgreSQL is started with `docker run`, not as an Azure `services:` container**, and that is load-bearing. The WAL
+backend needs `wal_level=logical`, which postgres takes as a server ARGUMENT; an Azure `container:` resource splices
+its `options` into `docker create` *before* the image name, so it can pass flags but never arguments, and
+`POSTGRES_INITDB_ARGS` cannot reach `wal_level` either. On the default `wal_level=replica` the 16
+`[PostgresLogicalFact]` tests (`WalCaptureModeTests`, `LogicalReplicationChangeSourceTests`) **skip** — reported as
+skipped, not failed — so the capture mode these guides recommend had zero coverage and a regression in it would have
+passed CI. That is exactly what happened on the first green run (build 461: 149 passed, **16 skipped**).
+
+A dedicated step now asserts `current_setting('wal_level') = 'logical'` and **fails the build** if it is not, so the
+tests can never silently go back to skipping. A later step reports any replication slot the suite left behind — as a
+warning, not a failure, because a slot survives a dropped database and wedges the NEXT run, which is worth seeing
+without burying a good test result.
 
 **The pipeline computes no version.** Bump `G9SyncDataVersion` by hand, with release notes, and let it publish. A
 re-run without a bump republishes nothing — the skip-duplicate flag makes that a no-op rather than a failure.
