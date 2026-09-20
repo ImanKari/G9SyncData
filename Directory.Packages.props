@@ -48,6 +48,17 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
 
+    <!--
+      Packaging only: SourceLink, referenced with PrivateAssets=all from Directory.Build.props so it
+      never reaches a consumer's dependency graph.
+
+      10.0.401, NOT 8.0.0. CVE-2026-62900 (GHSA-23fw-v26w-5fgq, 2026-09-08) affects
+      Microsoft.Build.Tasks.Git 8.0.0, which SourceLink 8.0.0 depends on and which has no patched 8.x
+      release. 10.0.401 is stable and outside every affected range. Build-time only, so nothing about
+      the shipped assemblies changes.
+    -->
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.401" />
+
     <!-- Tests and samples only -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
     <!-- Model-only EF Core provider for the extractor tests: builds an IModel with real relational metadata

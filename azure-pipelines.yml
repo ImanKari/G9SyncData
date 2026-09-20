@@ -1,8 +1,34 @@
-# G9SyncData CI — build, unit tests, end-to-end tests against a PostgreSQL service container, then pack.
+# ==============================================================================================
+#  G9SyncData — build, test, pack, mirror to GitHub, publish to nuget.org
+# ==============================================================================================
 #
-# NOT YET RUN: this pipeline has never executed in Azure DevOps. Create it (Pipelines → New → Azure Repos Git → existing
-# YAML), run it once and fix what the agent environment disagrees with, then delete this note.
-# The integration tests create and drop their own databases, so the container's superuser is what they need.
+#  Requires three SECRET pipeline variables (Pipeline → Edit → Variables, "Keep this value secret"):
+#
+#      AzureDevOps.PAT   Code (Read) on g9tm      — clones this repo for the GitHub mirror
+#      Github.PAT        repo scope               — creates/pushes github.com/ImanKari/G9SyncData
+#      NuGetApiKey       Push scope on nuget.org  — publishes the eleven packages
+#
+#  Shape, and why it differs from the G9MAUIControls pipeline it is modelled on:
+#
+#  1. ubuntu-latest, not windows-latest. Every project here targets net10.0 (netstandard2.0 for the
+#     generator) — there is no MAUI workload and no net10.0-windows target — and the integration
+#     tests need a PostgreSQL SERVICE CONTAINER, which is a Linux-agent feature.
+#
+#  2. Tests run, and they gate the publish. G9MAUIControls has none; this library's correctness is
+#     not eyeballable, so a package is only allowed out after the unit suite and the end-to-end
+#     suite against a real PostgreSQL have both passed.
+#
+#  3. The GitHub mirror runs BEFORE the NuGet push, exactly as it does there. The packages carry
+#     SourceLink pointing at github.com at a specific commit; publishing first would put packages on
+#     nuget.org whose source links 404 until the mirror step happens to succeed.
+#
+#  The pipeline deliberately does NOT compute a version. G9SyncDataVersion in Directory.Build.props
+#  is the single source of truth and is bumped by hand with release notes. A re-run without a bump
+#  republishes nothing — the skip-duplicate flag makes that a no-op rather than a failure.
+#
+#  A PULL-REQUEST build runs everything up to and including pack, and publishes the packages as a
+#  build artifact, but never mirrors and never pushes to nuget.org. That is the point: a PR proves
+#  the packages can be produced without making any of it public.
 
 trigger:
   branches:
@@ -14,10 +40,42 @@ pr:
     include:
       - main
 
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+  # The eleven redistributable libraries, in dependency order so the first failure is the root one.
+  # tests/, samples/ and benchmarks/ inherit IsPackable=false and are deliberately absent.
+  - name: libraries
+    type: object
+    default:
+      - 'src/G9SyncData.Abstractions/G9SyncData.Abstractions.csproj'
+      - 'src/G9SyncData.Protocol/G9SyncData.Protocol.csproj'
+      - 'src/G9SyncData.SourceGenerators/G9SyncData.SourceGenerators.csproj'
+      - 'src/G9SyncData.Client/G9SyncData.Client.csproj'
+      - 'src/G9SyncData.Client.Sqlite/G9SyncData.Client.Sqlite.csproj'
+      - 'src/G9SyncData.Client.SignalR/G9SyncData.Client.SignalR.csproj'
+      - 'src/G9SyncData.Server/G9SyncData.Server.csproj'
+      - 'src/G9SyncData.Server.PostgreSql/G9SyncData.Server.PostgreSql.csproj'
+      - 'src/G9SyncData.Server.EfCore/G9SyncData.Server.EfCore.csproj'
+      - 'src/G9SyncData.Server.SignalR/G9SyncData.Server.SignalR.csproj'
+      - 'src/G9SyncData.Testing/G9SyncData.Testing.csproj'
+  - name: repositoryName
+    type: string
+    default: 'G9SyncData'
+  - name: githubOwner
+    type: string
+    default: 'ImanKari'
+
 variables:
-  configuration: Release
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  buildConfiguration: 'Release'
+  packageOutput: '$(Build.ArtifactStagingDirectory)/nuget'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  CI: 'true'   # switches on ContinuousIntegrationBuild and the SourceLink `github` remote
+  # True only for a real release build. Every mirror/publish step hangs off this one expression so
+  # there is exactly one place to read "does this run make anything public?".
+  isRelease: $[ and( eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['Build.Reason'], 'PullRequest') ) ]
 
 resources:
   containers:
@@ -32,45 +90,245 @@ resources:
         --health-cmd="pg_isready -U postgres" --health-interval=5s --health-timeout=5s --health-retries=30
 
 jobs:
-  - job: build_and_test
-    displayName: Build and test
-    pool:
-      vmImage: ubuntu-latest
+  - job: build_test_publish
+    displayName: Build, test, pack and publish
+    timeoutInMinutes: 90
     services:
       postgres: postgres
     steps:
+
+      # ────────────────────────────────────────────────────────────────────────────────────────
       - task: UseDotNet@2
-        displayName: .NET SDK
+        displayName: 'Install .NET SDK 10'
         inputs:
           packageType: sdk
-          version: 10.0.x
+          version: '10.0.x'
 
-      - script: dotnet build G9SyncData.slnx -c $(configuration)
-        displayName: Build (warnings are errors)
+      # Only meaningful on a release run; a PR build has no use for any of the three secrets and
+      # must not fail because a fork build cannot see them.
+      - task: PowerShell@2
+        displayName: 'Validate credentials'
+        condition: and(succeeded(), eq(variables.isRelease, true))
+        env:
+          GITHUB_PAT: $(Github.PAT)
+          AZDO_PAT: $(AzureDevOps.PAT)
+          NUGET_KEY: $(NuGetApiKey)
+        inputs:
+          targetType: 'inline'
+          script: |
+            $ErrorActionPreference = 'Continue'
+            $failed = @()
+
+            # GitHub: /user round-trips the token and proves the scope is live.
+            try {
+                $u = Invoke-RestMethod -Uri 'https://api.github.com/user' -Method Get -Headers @{
+                    Authorization = "token $env:GITHUB_PAT"
+                    Accept        = 'application/vnd.github.v3+json'
+                    'User-Agent'  = 'g9-pipeline'
+                }
+                Write-Host "[ok]   GitHub PAT valid (authenticated as $($u.login))"
+            } catch {
+                $failed += "GitHub PAT rejected: $($_.Exception.Response.StatusCode.value__)"
+            }
+
+            # Azure DevOps: listing projects proves Code(Read) will work for the mirror clone.
+            try {
+                $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$env:AZDO_PAT"))
+                Invoke-RestMethod -Uri 'https://dev.azure.com/g9tm/_apis/projects?api-version=7.1' `
+                    -Method Get -Headers @{ Authorization = "Basic $basic" } | Out-Null
+                Write-Host "[ok]   Azure DevOps PAT valid"
+            } catch {
+                $failed += "Azure DevOps PAT rejected: $($_.Exception.Response.StatusCode.value__)"
+            }
+
+            # NuGet: there is NO endpoint that validates a push key without pushing. Anything that
+            # claims otherwise is checking a public URL and always passes. Report honestly: presence
+            # and shape only. A bad key surfaces at the push step, which is where it can be believed.
+            if ([string]::IsNullOrWhiteSpace($env:NUGET_KEY)) {
+                $failed += "NuGetApiKey is not set"
+            } elseif ($env:NUGET_KEY.Length -lt 32) {
+                $failed += "NuGetApiKey is present but implausibly short ($($env:NUGET_KEY.Length) chars)"
+            } else {
+                Write-Host "[note] NuGetApiKey present ($($env:NUGET_KEY.Length) chars). NOT verified —"
+                Write-Host "       nuget.org offers no key-validation endpoint. Verified at push time."
+            }
+
+            if ($failed.Count) {
+                $failed | ForEach-Object { Write-Host "##vso[task.logissue type=error]$_" }
+                throw "Credential validation failed."
+            }
+
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # SourceLink reads the `github` remote (GitRepositoryRemoteName in Directory.Build.props, set
+      # because CI=true above). It only has to EXIST and be correct — nothing is pushed here and the
+      # URL carries no token — so it is added on PR builds too, where it keeps pack honest.
+      - task: PowerShell@2
+        displayName: 'Add github remote for SourceLink'
+        inputs:
+          targetType: 'inline'
+          workingDirectory: '$(Build.SourcesDirectory)'
+          script: |
+            # Continue, not Stop: git writes routine progress to stderr, and under Stop any native
+            # command doing so becomes a terminating error. $LASTEXITCODE is the real success signal.
+            $ErrorActionPreference = 'Continue'
+
+            $url = "https://github.com/${{ parameters.githubOwner }}/${{ parameters.repositoryName }}.git"
+
+            # `git remote` lists and exits 0 whether or not anything matches — unlike `remote remove`,
+            # which errors when there is nothing to remove, the normal case on a fresh clone.
+            if ((git remote) -contains 'github') {
+                git remote set-url github $url
+            } else {
+                git remote add github $url
+            }
+            if ($LASTEXITCODE -ne 0) { throw "could not configure the github remote ($LASTEXITCODE)" }
+
+            git remote -v
+
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # One solution build; every later step runs --no-build against it. TreatWarningsAsErrors is on
+      # family-wide, so a warning fails here rather than shipping into a package.
+      - script: dotnet build G9SyncData.slnx -c $(buildConfiguration)
+        displayName: 'Build (warnings are errors)'
 
       - script: >-
-          dotnet test tests/G9SyncData.Tests/G9SyncData.Tests.csproj -c $(configuration) --no-build
+          dotnet test tests/G9SyncData.Tests/G9SyncData.Tests.csproj -c $(buildConfiguration) --no-build
           --logger trx --results-directory $(Agent.TempDirectory)/testresults
-        displayName: Unit tests
+        displayName: 'Unit tests'
 
+      # The suite creates and drops its OWN databases, which is why the container superuser is what
+      # it connects as. It must leave nothing behind — in WAL mode that includes replication slots,
+      # which survive a dropped database and would wedge the next run.
       - script: >-
-          dotnet test tests/G9SyncData.IntegrationTests/G9SyncData.IntegrationTests.csproj -c $(configuration) --no-build
+          dotnet test tests/G9SyncData.IntegrationTests/G9SyncData.IntegrationTests.csproj -c $(buildConfiguration) --no-build
           --logger trx --results-directory $(Agent.TempDirectory)/testresults
-        displayName: Integration tests (PostgreSQL)
+        displayName: 'Integration tests (PostgreSQL)'
         env:
           G9SYNC_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=g9sync-tests;Database=postgres
 
       - task: PublishTestResults@2
-        displayName: Publish test results
+        displayName: 'Publish test results'
         condition: succeededOrFailed()
         inputs:
           testResultsFormat: VSTest
           testResultsFiles: $(Agent.TempDirectory)/testresults/*.trx
           failTaskOnFailedTests: true
 
-      - script: dotnet pack G9SyncData.slnx -c $(configuration) --no-build
-        displayName: Pack
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # Packed per project rather than per solution so a failure names one package. --no-build
+      # reuses the build the tests just proved; packing the solution instead would also drag in the
+      # samples, each of which logs a "packaging has been disabled" warning that means nothing.
+      - ${{ each lib in parameters.libraries }}:
+        - script: dotnet pack "${{ lib }}" -c $(buildConfiguration) --no-build -o "$(packageOutput)"
+          displayName: 'Pack ${{ lib }}'
 
-      - publish: artifacts/pack
-        displayName: Publish packages
-        artifact: packages
+      - task: PowerShell@2
+        displayName: 'List produced packages'
+        inputs:
+          targetType: 'inline'
+          script: |
+            $pkgs = Get-ChildItem "$(packageOutput)" -Filter *.nupkg -ErrorAction SilentlyContinue
+            if (-not $pkgs) { throw "No .nupkg produced — nothing to publish." }
+            $pkgs | ForEach-Object { Write-Host ("  {0}  ({1:N0} KB)" -f $_.Name, ($_.Length / 1KB)) }
+            Write-Host "$($pkgs.Count) package(s), $((Get-ChildItem "$(packageOutput)" -Filter *.snupkg).Count) symbol package(s)"
+            # The source generator ships analyzers/dotnet/cs only and carries no lib/ assembly, so it
+            # is the one package with no .snupkg. Expect one fewer symbol package than packages.
+
+      - task: PublishBuildArtifacts@1
+        displayName: 'Publish packages as build artifact'
+        inputs:
+          PathtoPublish: '$(packageOutput)'
+          ArtifactName: 'nuget'
+
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      # Mirror BEFORE publishing, so the commit the packages' SourceLink points at is already public.
+      - task: PowerShell@2
+        displayName: 'Mirror Azure DevOps repo to GitHub'
+        condition: and(succeeded(), eq(variables.isRelease, true))
+        env:
+          GITHUB_PAT: $(Github.PAT)
+          AZDO_PAT: $(AzureDevOps.PAT)
+        inputs:
+          targetType: 'inline'
+          script: |
+            # Stop for the REST calls (their failures are real and must halt), relaxed to Continue
+            # around the git invocations, which report progress on stderr.
+            $ErrorActionPreference = 'Stop'
+            $owner = '${{ parameters.githubOwner }}'
+            $repo  = '${{ parameters.repositoryName }}'
+            $headers = @{
+                Authorization = "token $env:GITHUB_PAT"
+                Accept        = 'application/vnd.github.v3+json'
+                'User-Agent'  = 'g9-pipeline'
+            }
+
+            # Create the GitHub repo on first run. PUBLIC: these are MIT packages whose SourceLink and
+            # PackageProjectUrl point here, and both are dead links against a private repo.
+            try {
+                Invoke-RestMethod -Uri "https://api.github.com/repos/$owner/$repo" -Headers $headers | Out-Null
+                Write-Host "GitHub repo $owner/$repo exists"
+            } catch {
+                if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
+                Write-Host "Creating $owner/$repo ..."
+                $body = @{
+                    name        = $repo
+                    private     = $false
+                    auto_init   = $false
+                    description = 'Offline-first sync for .NET: PostgreSQL capture, SQLite clients, resumable chunked transfer. NativeAOT-friendly.'
+                    homepage    = "https://www.nuget.org/packages/$repo.Client"
+                } | ConvertTo-Json
+                Invoke-RestMethod -Uri 'https://api.github.com/user/repos' -Headers $headers `
+                    -Method Post -Body $body -ContentType 'application/json' | Out-Null
+            }
+
+            $work = Join-Path $env:AGENT_TEMPDIRECTORY 'mirror'
+            if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+            New-Item -ItemType Directory -Path $work | Out-Null
+
+            $source = "https://$env:AZDO_PAT@g9tm.visualstudio.com/$repo/_git/$repo"
+            $dest   = "https://$($owner):$env:GITHUB_PAT@github.com/$owner/$repo.git"
+
+            $ErrorActionPreference = 'Continue'
+            git clone --mirror $source "$work/$repo.git"
+            if ($LASTEXITCODE -ne 0) { throw "mirror clone failed" }
+
+            Push-Location "$work/$repo.git"
+            try {
+                # --mirror makes GitHub match Azure exactly, which is what "mirror" has to mean:
+                # a branch deleted here must not linger there. Azure stays the source of truth.
+                git push --mirror $dest
+                if ($LASTEXITCODE -ne 0) { throw "mirror push failed" }
+            } finally {
+                Pop-Location
+                Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            Write-Host "Mirrored to https://github.com/$owner/$repo"
+
+      # ────────────────────────────────────────────────────────────────────────────────────────
+      - task: PowerShell@2
+        displayName: 'Publish packages to nuget.org'
+        condition: and(succeeded(), eq(variables.isRelease, true))
+        env:
+          NUGET_KEY: $(NuGetApiKey)
+        inputs:
+          targetType: 'inline'
+          script: |
+            $ErrorActionPreference = 'Continue'   # dotnet nuget push reports on stderr
+            $failures = @()
+
+            # .snupkg is pushed by nuget alongside its .nupkg automatically, so only glob .nupkg —
+            # pushing symbols explicitly double-pushes and reports a spurious conflict.
+            foreach ($pkg in Get-ChildItem "$(packageOutput)" -Filter *.nupkg) {
+                Write-Host "── $($pkg.Name)"
+                dotnet nuget push $pkg.FullName `
+                    --api-key $env:NUGET_KEY `
+                    --source https://api.nuget.org/v3/index.json `
+                    --skip-duplicate
+                if ($LASTEXITCODE -ne 0) { $failures += $pkg.Name }
+            }
+
+            if ($failures.Count) {
+                $failures | ForEach-Object { Write-Host "##vso[task.logissue type=error]Push failed: $_" }
+                throw "$($failures.Count) package(s) failed to publish."
+            }
+            Write-Host "All packages published (or already present — skip-duplicate)."

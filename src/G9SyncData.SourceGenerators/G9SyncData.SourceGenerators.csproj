@@ -17,6 +17,14 @@
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <DevelopmentDependency>true</DevelopmentDependency>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <!--
+      No symbol package for an analyzer. Directory.Build.props turns IncludeSymbols on for the whole
+      family, which is right for every library that ships a lib/ assembly. This one ships ONLY
+      analyzers/dotnet/cs, so the .snupkg has nothing to carry and pack fails the build with NU5017
+      ("no dependencies nor content") AFTER writing a perfectly good .nupkg - a non-zero exit with a
+      correct package on disk, which is the confusing shape of that failure.
+    -->
+    <IncludeSymbols>false</IncludeSymbols>
     <Description>G9SyncData source generator: turns [G9AttrSyncTable] entity classes (sqlite-net attributes honoured) into the client sync model at compile time, with build errors for keyless tables, unsupported types and oversized tables. No runtime reflection (NativeAOT-safe).</Description>
   </PropertyGroup>
 

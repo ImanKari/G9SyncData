@@ -29,12 +29,68 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 ## Versioning and packing
 
-- One version for the family: `<Version>` in `Directory.Build.props` (currently `0.1.0`).
-- `IsPackable` is false by default and true only through `build/G9SyncData.Library.props` and the generator csproj, so
-  tests and samples never pack.
-- The source generator packs as an analyzer-only development dependency (`analyzers/dotnet/cs`).
+- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.0.0`). `<Version>` only
+  consumes it. The indirection exists so a consuming repository can pin the family from one property — in an
+  application project `$(Version)` means "the app's version", not "the version of the packages it references".
+- ⛔ **The family releases TOGETHER and must never be mixed.** The protocol frame layout is negotiated across
+  Client/Server/Protocol, so a client from one version against a server from another is exactly the mismatch the
+  version is there to prevent.
+- `IsPackable` is false by default and true only through `build/G9SyncData.Library.props` and two csprojs, so tests,
+  samples and benchmarks never pack. Eleven packages come out of a full pack; ten have a `.snupkg`.
+- The source generator packs as an analyzer-only development dependency (`analyzers/dotnet/cs`) and sets
+  `IncludeSymbols=false`. ⛔ It has no `lib/` assembly, so a symbol package would have nothing to carry and pack fails
+  with **NU5017** *after* writing a perfectly good `.nupkg` — a non-zero exit with a correct package on disk, which is
+  a confusing shape to debug. Do not "fix" that by turning symbols back on.
+- The generator **also ships inside `G9SyncData.Client`** (`analyzers/dotnet/cs`), which is what lets a consumer get it
+  with no extra reference. Verified 2026-09-20 against AgriPad in package mode: `G9SyncGeneratedModel.g.cs` is emitted
+  from a plain `PackageReference` to `G9SyncData.Client.Sqlite`. ⛔ A consumer must therefore NOT also reference
+  `G9SyncData.SourceGenerators` — the generator would load twice and every generated partial would collide.
 - Before a release: both suites green, AOT publish clean, `AnalyzerReleases.Unshipped.md` rules moved to `Shipped.md`,
   [17-Known-Limitations.md](17-Known-Limitations.md) reviewed.
+
+## Releasing
+
+`azure-pipelines.yml` builds, tests, packs, mirrors to GitHub and publishes to nuget.org. It runs on **ubuntu-latest**
+with a PostgreSQL service container, because every project targets `net10.0` (`netstandard2.0` for the generator) and
+the end-to-end suite needs a real server.
+
+**The pipeline computes no version.** Bump `G9SyncDataVersion` by hand, with release notes, and let it publish. A
+re-run without a bump republishes nothing — the skip-duplicate flag makes that a no-op rather than a failure.
+
+Three SECRET pipeline variables are required:
+
+| Variable | Scope | Used for |
+|---|---|---|
+| `AzureDevOps.PAT` | Code (Read) on g9tm | clones this repo for the GitHub mirror |
+| `Github.PAT` | repo | creates/pushes `github.com/ImanKari/G9SyncData` |
+| `NuGetApiKey` | Push on nuget.org | publishes the packages |
+
+Order that matters, and why:
+
+1. **The `github` remote is added before pack.** SourceLink maps only `github.com` remotes, and this repo's `origin` is
+   the private Azure DevOps one. `GitRepositoryRemoteName=github` (set when `CI=true`) tells the Git task which remote
+   to read. Left on `origin` it would emit no `source-link.json` at all; pointed at Azure it would emit links that 403
+   for every consumer, which is worse than none.
+2. **The mirror runs before the NuGet push.** The packages' SourceLink points at github.com at a specific commit;
+   publishing first would put packages on nuget.org whose source links 404 until the mirror happens to succeed.
+
+A **pull-request** build runs everything up to and including pack and publishes the packages as a build artifact, but
+never mirrors and never pushes. That is the point: a PR proves the packages can be produced without making any of it
+public.
+
+### Verifying a version locally before publishing
+
+`dotnet pack` writes to `artifacts/pack`. Point a consumer at that folder as a package source and the exact package the
+pipeline would publish can be built against first:
+
+```bash
+dotnet pack G9SyncData.slnx -c Release          # -> artifacts/pack
+dotnet restore <consumer.csproj> --configfile <a config listing artifacts/pack as a source>
+```
+
+⛔ Do NOT pass the folder with `dotnet restore -s <path>` from Git Bash — MSYS rewrites the `https://` sources
+alongside it into local paths and restore fails with `NU1301` naming a nonsense directory. A `--configfile` avoids the
+rewrite entirely.
 
 ## Restore errors already met (and the fix that holds)
 

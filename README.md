@@ -9,12 +9,44 @@ resumable, observable and **NativeAOT-compatible** from the first line.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 0.1.0 preview.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.0.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 106 unit and 130 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
-> emulator, and the NativeAOT client publishes without warnings. Benchmarks are in
-> [AiGuides/19-Performance.md](AiGuides/19-Performance.md); the physical-device run (DOOGEE S99) is still open. Read
+> emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
+> field application, which replaced a Dotmim.Sync fork with it outright. Benchmarks are in
+> [AiGuides/19-Performance.md](AiGuides/19-Performance.md). Read
 > [AiGuides/17-Known-Limitations.md](AiGuides/17-Known-Limitations.md) before adopting.
+>
+> **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
+> across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
+> mismatch the version pins.
+
+## Packages
+
+Pick by role. Each pulls what it needs, so a device app normally names only the two client packages and a server only
+the server ones.
+
+| Package | Take it when |
+|---|---|
+| `G9SyncData.Client.Sqlite` | a device/client app storing into SQLite |
+| `G9SyncData.Client.SignalR` | that client talks over SignalR (the supported transport) |
+| `G9SyncData.Server.PostgreSql` | the server whose PostgreSQL is the source of truth |
+| `G9SyncData.Server.SignalR` | that server hosts the sync hub |
+| `G9SyncData.Server.EfCore` | derive the sync model from an existing EF Core `IModel` |
+| `G9SyncData.Testing` | test helpers for building suites against the engine |
+| `G9SyncData.Client` / `.Server` / `.Abstractions` / `.Protocol` | pulled in for you; name directly only when writing your own store or transport |
+| `G9SyncData.SourceGenerators` | **normally not referenced** — see below |
+
+```bash
+dotnet add package G9SyncData.Client.Sqlite
+dotnet add package G9SyncData.Client.SignalR
+```
+
+> The client model **source generator ships inside `G9SyncData.Client`** (`analyzers/dotnet/cs`), so a client gets it
+> with no extra reference. Do **not** also reference `G9SyncData.SourceGenerators`: the generator would load twice and
+> every generated partial would collide. The standalone package exists for tooling that wants the analyzer alone.
+
+⛔ All packages in the family carry one version and must be kept on it together.
 
 ## Why
 

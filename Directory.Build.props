@@ -32,15 +32,88 @@
 
   <!-- ############### Shared package metadata ############### -->
   <PropertyGroup>
-    <Version>0.1.0</Version>
+    <!--
+      G9SyncDataVersion is the SINGLE definition; <Version> only consumes it.
+
+      The indirection exists so a consuming repository can pin the family from one property without
+      reading $(Version) back - in an application project $(Version) means "the app's version", not
+      "the version of the packages it references". Every package in this family releases TOGETHER and
+      must not be mixed: the protocol frame layout is negotiated across Client/Server/Protocol, so a
+      client from one version against a server from another is exactly the mismatch the version is
+      there to prevent (ADR-0010 in G9MAUIControls; the same rule applies here).
+
+      Bump this BY HAND, with release notes, and let the pipeline publish. The pipeline deliberately
+      computes nothing: a re-run without a bump republishes nothing, and the pipeline's skip-duplicate flag makes
+      that a no-op rather than a failure.
+    -->
+    <G9SyncDataVersion>1.0.0</G9SyncDataVersion>
+    <Version>$(G9SyncDataVersion)</Version>
+
     <Authors>Iman Kari</Authors>
     <Company>G9</Company>
     <Product>G9SyncData</Product>
     <Copyright>Copyright (c) Iman Kari</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>sync;offline-first;postgresql;sqlite;signalr;maui;nativeaot</PackageTags>
+    <PackageProjectUrl>https://github.com/ImanKari/G9SyncData</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageOutputPath>$(MSBuildThisFileDirectory)artifacts/pack</PackageOutputPath>
+
+    <!--
+      Opt-IN packaging. Everything under tests/, samples/ and benchmarks/ inherits this false and stays
+      unpublished; a redistributable library flips it true by importing build/G9SyncData.Library.props
+      (or, where it cannot honestly claim AOT compatibility, by setting it explicitly and saying why).
+    -->
     <IsPackable>false</IsPackable>
+
+    <!-- Symbols ship separately so a consumer can step into this code without the .nupkg carrying PDBs. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!--
+      SourceLink records the exact commit a package was built from, which is what makes step-into
+      debugging work for a consumer. Deterministic + ContinuousIntegrationBuild make the output
+      byte-reproducible.
+    -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <!--
+      ⛔ SourceLink must resolve against the PUBLIC GitHub mirror, not against `origin`.
+
+      This repository's origin is the private Azure DevOps repo; GitHub is a mirror the pipeline pushes
+      with identical commit SHAs. Microsoft.SourceLink.GitHub maps only github.com remotes, so left on
+      origin it would emit no source-link.json at all - and pointing it at Azure instead would emit
+      links that 403 for every consumer, which is worse than none. GitRepositoryRemoteName tells the
+      Git task which remote to read; the pipeline adds a `github` remote before packing.
+
+      Set only under CI: a local `dotnet pack` has no such remote, and demanding one would break every
+      developer's build to serve a link nobody follows from a local package.
+    -->
+    <GitRepositoryRemoteName Condition="'$(CI)' == 'true'">github</GitRepositoryRemoteName>
   </PropertyGroup>
+
+  <!-- ############### What every package carries ############### -->
+  <!--
+      README.md is packed at the package ROOT, which is where <PackageReadmeFile> requires it. It is
+      included only for projects that actually produce a package, so an unpackable project does not
+      carry a stray item, and Visible=false keeps one repository-root file out of eleven solution trees.
+  -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <!--
+      SourceLink itself. PrivateAssets=all: this is a BUILD-time dependency that must never appear in a
+      consumer's dependency graph.
+
+      Pinned to 10.0.401 rather than 8.0.0 deliberately - CVE-2026-62900 (GHSA-23fw-v26w-5fgq) affects
+      Microsoft.Build.Tasks.Git 8.0.0, which SourceLink 8.0.0 pulls in and for which there is no patched
+      8.x release. 10.0.401 is stable, outside every affected range and in the same band as the pinned SDK.
+  -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
+  </ItemGroup>
 
 </Project>
