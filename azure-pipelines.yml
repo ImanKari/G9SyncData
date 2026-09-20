@@ -85,10 +85,13 @@ variables:
 #    one: `options` is spliced into `docker create` BEFORE the image name, so it can set flags but never
 #    arguments, and `wal_level` is not something POSTGRES_INITDB_ARGS can reach either.
 #
-#    On the default `wal_level=replica` the 16 `[PostgresLogicalFact]` tests in WalCaptureModeTests and
-#    LogicalReplicationChangeSourceTests SKIP - reported as skipped, not failed, so the capture mode the
-#    guides recommend had zero coverage and a regression in it would have passed CI. The guard step
-#    below makes that failure loud instead.
+#    On the default `wal_level=replica` the 11 `[PostgresLogicalFact]` tests (6 in WalCaptureModeTests,
+#    5 in LogicalReplicationChangeSourceTests) SKIP - reported as skipped, not failed, so the capture
+#    mode the guides recommend had zero coverage and a regression in it would have passed CI. The guard
+#    step below makes that failure loud instead.
+#
+#    The 5 AndroidDeviceTests that also skip here are a DIFFERENT thing and are expected to: they need a
+#    real device or emulator, which a hosted agent does not have. Do not chase those to zero.
 
 jobs:
   - job: build_test_publish
@@ -210,7 +213,7 @@ jobs:
           level=$(docker exec g9sync-pg psql -U postgres -tAc "SELECT current_setting('wal_level')")
           echo "wal_level = $level"
           if [ "$level" != "logical" ]; then
-            echo "##vso[task.logissue type=error]wal_level is '$level', not 'logical' - the 16 [PostgresLogicalFact] tests would SKIP rather than run."
+            echo "##vso[task.logissue type=error]wal_level is '$level', not 'logical' - the 11 [PostgresLogicalFact] tests would SKIP rather than run."
             exit 1
           fi
         displayName: 'Assert wal_level=logical (guards against silent skips)'

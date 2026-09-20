@@ -57,10 +57,14 @@ PostgreSQL.
 ⛔ **PostgreSQL is started with `docker run`, not as an Azure `services:` container**, and that is load-bearing. The WAL
 backend needs `wal_level=logical`, which postgres takes as a server ARGUMENT; an Azure `container:` resource splices
 its `options` into `docker create` *before* the image name, so it can pass flags but never arguments, and
-`POSTGRES_INITDB_ARGS` cannot reach `wal_level` either. On the default `wal_level=replica` the 16
-`[PostgresLogicalFact]` tests (`WalCaptureModeTests`, `LogicalReplicationChangeSourceTests`) **skip** — reported as
-skipped, not failed — so the capture mode these guides recommend had zero coverage and a regression in it would have
-passed CI. That is exactly what happened on the first green run (build 461: 149 passed, **16 skipped**).
+`POSTGRES_INITDB_ARGS` cannot reach `wal_level` either. On the default `wal_level=replica` the **11**
+`[PostgresLogicalFact]` tests (6 in `WalCaptureModeTests`, 5 in `LogicalReplicationChangeSourceTests`) **skip** —
+reported as skipped, not failed — so the capture mode these guides recommend had zero coverage and a regression in it
+would have passed CI. That is exactly what happened on the first green run (build 461: 149 passed, 16 skipped).
+
+Build 462, with the argument set: **160 passed, 5 skipped** — all 11 WAL tests now run. ⛔ The 5 that remain are
+`AndroidDeviceTests` and are SUPPOSED to skip on a hosted agent: they need a real device or emulator. Do not chase
+that number to zero, and do not let it hide a WAL regression — that is what the assert step is for.
 
 A dedicated step now asserts `current_setting('wal_level') = 'logical'` and **fails the build** if it is not, so the
 tests can never silently go back to skipping. A later step reports any replication slot the suite left behind — as a
