@@ -73,6 +73,16 @@ public interface IG9SyncServerStore
     /// <summary>Effects that exhausted their attempts, for operators and health checks.</summary>
     Task<IReadOnlyList<G9CPendingEffect>> GetFailedEffectsAsync(int max, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Puts effects that exhausted their attempts back in the queue: due now, attempts reset (ADR-0065). Null requeues every failed
+    ///     effect. Returns how many were requeued. Until this existed a handler bug that was later fixed left every effect it had failed
+    ///     marked failed for good - the fix reached the next state change, never the ones already lost.
+    /// </summary>
+    Task<int> RequeueFailedEffectsAsync(IReadOnlyCollection<Guid>? effectIds, CancellationToken cancellationToken) => Task.FromResult(0);
+
+    /// <summary>How many effects wait and how many failed for good, and how long the oldest waiting one has waited (ADR-0065).</summary>
+    Task<G9CEffectQueueStatus> GetEffectQueueStatusAsync(CancellationToken cancellationToken) => Task.FromResult(new G9CEffectQueueStatus(0, 0, null));
+
     /// <summary>Deletes tombstones older than <paramref name="retention" /> and advances the horizon. Returns the number removed.</summary>
     Task<int> CleanupTombstonesAsync(TimeSpan retention, CancellationToken cancellationToken);
 
@@ -263,6 +273,12 @@ public sealed class G9CStoreReconcileItem
 }
 
 /// <summary>An effect recorded by a committed push and not yet delivered (ADR-0052).</summary>
+/// <summary>The state of the durable effect queue.</summary>
+/// <param name="Pending">Effects still to be delivered (including those waiting out a retry delay).</param>
+/// <param name="Failed">Effects that exhausted their attempts and are no longer retried.</param>
+/// <param name="OldestPendingAge">How long the oldest pending effect has existed; null when nothing is pending.</param>
+public sealed record G9CEffectQueueStatus(long Pending, long Failed, TimeSpan? OldestPendingAge);
+
 public sealed class G9CPendingEffect
 {
     public required Guid EffectId { get; init; }

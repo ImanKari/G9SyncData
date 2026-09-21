@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using G9SyncData.Server.Model;
 
@@ -11,6 +12,21 @@ namespace G9SyncData.Server.PostgreSql.Internal;
 internal static class PgCaptureSql
 {
     public const int SchemaVersion = 1;
+
+    /// <summary>
+    ///     The version of THIS assembly, written to <c>install.library_version</c> on every initialisation: which build last set the schema
+    ///     up is the first thing support asks. It was the literal '0.1.0' through every release up to 1.0.0, so the column said nothing.
+    ///     Letters, digits, dots and dashes only by construction - the first other character (the '+commit' suffix) ends it - because
+    ///     it is spliced into the script and must never be able to carry a quote.
+    /// </summary>
+    public static string LibraryVersion { get; } = ReadLibraryVersion();
+
+    private static string ReadLibraryVersion()
+    {
+        var informational = typeof(PgCaptureSql).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        var version = new string((informational ?? string.Empty).TakeWhile(c => char.IsAsciiDigit(c) || c is '.' or '-' || char.IsAsciiLetter(c)).ToArray());
+        return version.Length is > 0 and <= 40 ? version : typeof(PgCaptureSql).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+    }
     private const string Origin = "nullif(current_setting('g9sync.origin', true), '')::uuid";
 
     public static string Base(string schema) => $$"""
@@ -104,8 +120,9 @@ internal static class PgCaptureSql
             PRIMARY KEY (client_id, command_id));
         CREATE INDEX IF NOT EXISTS commands_executed_at ON {{schema}}.commands (executed_at);
         INSERT INTO {{schema}}.install (id, epoch, schema_version, library_version, database_oid)
-            VALUES (1, gen_random_uuid(), {{SchemaVersion}}, '0.1.0', (SELECT oid::bigint FROM pg_database WHERE datname = current_database()))
+            VALUES (1, gen_random_uuid(), {{SchemaVersion}}, '{{LibraryVersion}}', (SELECT oid::bigint FROM pg_database WHERE datname = current_database()))
             ON CONFLICT (id) DO NOTHING;
+        UPDATE {{schema}}.install SET library_version = '{{LibraryVersion}}' WHERE id = 1 AND library_version IS DISTINCT FROM '{{LibraryVersion}}';
         """;
 
     public static string Capture(PgTable table, string schema, G9CPostgresSyncOptions options)

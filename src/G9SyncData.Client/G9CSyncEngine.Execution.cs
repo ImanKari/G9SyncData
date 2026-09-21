@@ -27,6 +27,7 @@ public sealed partial class G9CSyncEngine
         var stopwatch = Stopwatch.StartNew();
         var changes = new G9CApplyReport();
         var problems = new List<G9DtSubscriptionState>();
+        List<G9CSyncModelProblem> modelProblems = [];
         var synced = new List<string>();
         int pushed = 0, rejected = 0, conflicts = 0;
         long downloaded = 0, downloadedBytes = 0, reconciled = 0;
@@ -73,6 +74,28 @@ public sealed partial class G9CSyncEngine
             if (hello.Error is not null) throw hello.Error.ToException();
             await _store.SaveHelloAsync(hello, ct).ConfigureAwait(false);
             if (hello.UnknownTables.Count > 0) LogUnknownTables(_logger, string.Join(", ", hello.UnknownTables));
+
+            // A column declared with the wrong type is dropped from the negotiation and syncs in NEITHER direction (ADR-0061). That used
+            // to happen without a word anywhere, and it has cost production data: say it, on every run's result, and once per distinct
+            // set in the log - it is a build defect, not an event.
+            modelProblems = hello.Tables
+                .SelectMany(table => table.TypeMismatchColumns.Select(column =>
+                    new G9CSyncModelProblem(G9SyncErrorCodes.ModelTypeMismatch, table.Name, column.Name, column.ClientType, column.ServerType)))
+                .ToList();
+            if (modelProblems.Count > 0)
+            {
+                var described = string.Join("; ", modelProblems.Select(p => p.ToString()));
+                if (!string.Equals(Interlocked.Exchange(ref _reportedModelProblems, described), described, StringComparison.Ordinal))
+                {
+                    LogModelTypeMismatch(_logger, modelProblems.Count, described);
+                }
+
+                if (_options.FailOnTypeMismatch)
+                {
+                    throw new G9CSyncException(G9SyncErrorCodes.ModelTypeMismatch,
+                        "The client model declares column types the server does not have; those columns would not sync: " + described);
+                }
+            }
 
             var negotiated = hello.Tables;
             var definitions = hello.Definitions.ToDictionary(d => d.Name, StringComparer.Ordinal);
@@ -179,12 +202,20 @@ public sealed partial class G9CSyncEngine
                 var current = (await _store.GetSubscriptionsAsync(ct).ConfigureAwait(false)).ToDictionary(s => s.Key, StringComparer.Ordinal);
                 var plannable = usable.Where(s => !failedKeys.Contains(s.Key) && current.ContainsKey(s.Key)).Select(s => current[s.Key]).ToList();
 
-                var staged = await _store.GetStagedPullAsync(ct).ConfigureAwait(false);
+                // A stage is kept PER GENERATION (ADR-0060). The generation names the subscription set, so a run for other
+                // subscriptions simply does not see this one - it used to find "a stage of a different generation" and delete it,
+                // which for an application that syncs one scope per run meant an interrupted site download never survived the next
+                // sync of anything else. Age alone never made a stage safe (ADR-0046): what makes one resumable is that the epoch,
+                // permissions, columns AND the cursors it was planned from are all still exactly what they were.
                 var generation = StageGeneration(hello, plannable, states, negotiated);
+                var pruned = await _store.PruneStagedPullsAsync(DateTime.UtcNow - _options.StagedPullMaxAge, _options.StagedPullsMaxBytes, generation, ct)
+                    .ConfigureAwait(false);
+                if (pruned > 0) LogStagesPruned(_logger, pruned);
+
+                var staged = await _store.GetStagedPullAsync(generation, ct).ConfigureAwait(false);
                 G9DtPullPlan plan;
                 string runId;
-                if (staged is not null && staged.CreatedUtc > DateTime.UtcNow - _options.StagedPullMaxAge &&
-                    string.Equals(staged.Generation, generation, StringComparison.Ordinal))
+                if (staged is not null && staged.CreatedUtc > DateTime.UtcNow - _options.StagedPullMaxAge)
                 {
                     plan = staged.Plan;
                     runId = staged.RunId;
@@ -192,14 +223,6 @@ public sealed partial class G9CSyncEngine
                 }
                 else
                 {
-                    if (staged is not null)
-                    {
-                        // Age alone never made a stage safe: the rows it holds describe the epoch, permissions and columns of the run that
-                        // planned it, and applying them under different ones undoes whatever replaced them since (ADR-0046).
-                        if (!string.Equals(staged.Generation, generation, StringComparison.Ordinal)) LogStaleStage(_logger, staged.RunId);
-                        await _store.DiscardStagedPullAsync(staged.RunId, ct).ConfigureAwait(false);
-                    }
-
                     var backfills = await _store.GetPendingBackfillsAsync(ct).ConfigureAwait(false);
                     plan = await WithRetryAsync(token => _transport.PlanPullAsync(new G9DtPullRequest
                     {
@@ -212,7 +235,11 @@ public sealed partial class G9CSyncEngine
                     if (plan.Error is not null) throw plan.Error.ToException();
                     runId = Guid.NewGuid().ToString("N");
                     await _store.BeginStagedPullAsync(
-                            new G9CStagedPull { RunId = runId, Plan = plan, CreatedUtc = DateTime.UtcNow, Backfills = backfills, Generation = generation }, ct)
+                            new G9CStagedPull
+                            {
+                                RunId = runId, Plan = plan, CreatedUtc = DateTime.UtcNow, Backfills = backfills, Generation = generation,
+                                PlannedFromCursors = plannable.ToDictionary(s => s.Key, s => s.Cursor, StringComparer.Ordinal)
+                            }, ct)
                         .ConfigureAwait(false);
                 }
 
@@ -309,6 +336,7 @@ public sealed partial class G9CSyncEngine
             Duration = stopwatch.Elapsed,
             Subscriptions = synced,
             Problems = problems,
+            ModelProblems = modelProblems,
             Changes = changes,
             PhaseMs = tracker.Durations.ToDictionary(d => d.Key, d => (long)d.Value, StringComparer.Ordinal)
         };
@@ -388,6 +416,10 @@ public sealed partial class G9CSyncEngine
         {
             // The server's view when it exists; the stored one otherwise, so a subscription the server did not report still takes part.
             var state = states.GetValueOrDefault(subscription.Key);
+            // The cursor is deliberately NOT part of it (ADR-0060). A cursor is a database snapshot and moves on practically every
+            // pull, and a dependency (a site list every site subscription depends on) is pulled by other runs all the time: with the
+            // cursor in the hash no stage that has a dependency would ever match again. What a moved cursor needs is handled where
+            // it matters, at apply: the stage records the cursors it was planned from and never moves one that has moved since.
             builder.Append(subscription.Key).Append('').Append(state?.DefinitionHash ?? subscription.DefinitionHash)
                 .Append('').Append(state?.AuthHash ?? subscription.AuthHash).Append('\n');
         }
@@ -472,7 +504,8 @@ public sealed partial class G9CSyncEngine
 
         // The server's limits win over the device's preference: a batch the server refuses would be refused on every retry. Bytes keep a
         // margin for the frame header and compression variance (the budget is estimated from values before encoding).
-        var batchRows = serverMaxRows > 0 ? Math.Min(_options.PushBatchRows, serverMaxRows) : _options.PushBatchRows;
+        var targetRows = Math.Max(1, serverMaxRows > 0 ? Math.Min(_options.PushBatchRows, serverMaxRows) : _options.PushBatchRows);
+        var batchRows = targetRows;
         var batchBytes = serverMaxBytes > 0 ? (long)(serverMaxBytes * 0.9) : long.MaxValue;
         while (true)
         {
@@ -493,8 +526,23 @@ public sealed partial class G9CSyncEngine
                     .ToList(),
                 FrameVersion = _options.MaxFrameVersion
             };
-            var result = await WithRetryAsync(token => _transport.PushAsync(request, ToChunks(batch), token), ct).ConfigureAwait(false);
-            if (result.Error is not null) throw result.Error.ToException();
+            G9DtPushResult result;
+            try
+            {
+                result = await WithRetryAsync(token => _transport.PushAsync(request, ToChunks(batch), token), ct).ConfigureAwait(false);
+                if (result.Error is not null) throw result.Error.ToException();
+            }
+            catch (G9CSyncException exception) when (exception.Code == G9SyncErrorCodes.RejectTooMany && batchRows > 1 && batch.RowCount > 1)
+            {
+                // The server rolled the WHOLE push back: more rows were rejected than it accepts in one push. Sent again unchanged it
+                // fails the same way on every run, forever - one bad import and the device never uploads anything again (ADR-0063).
+                // Halve and send the smaller prefix under the same batch id (nothing of it was committed, so the server has not seen
+                // it). Below the server's rejection limit a push cannot hit that limit at all: the bad rows are then rejected one by
+                // one and parked, and everything else finally goes up.
+                batchRows = Math.Max(1, Math.Min(batchRows, batch.RowCount) / 2);
+                LogPushSplit(_logger, batch.BatchId, batch.RowCount, batchRows);
+                continue;
+            }
 
             var report = await _store.ApplyPushResultAsync(batch, result, ct).ConfigureAwait(false);
             changes.Merge(report);
@@ -513,6 +561,10 @@ public sealed partial class G9CSyncEngine
             }
 
             if (batch.RowCount < batchRows && batch.Commands.Count < batchRows && !batch.Truncated && !result.AlreadyApplied) break;
+
+            // A batch that went through after a split: grow back towards the normal size, so a queue with one bad patch in it does not
+            // crawl to the end in tiny pushes. Another bad patch simply halves it again.
+            if (batchRows < targetRows) batchRows = Math.Min(targetRows, batchRows * 2);
         }
 
         return (pushed, rejected, conflicts);
@@ -614,6 +666,17 @@ public sealed partial class G9CSyncEngine
             Subscriptions = result.Subscriptions.ToList()
         };
         foreach (var (phase, ms) in durations) report.PhaseMs[phase] = (long)ms;
+
+        // Which of the large-download optimisations engaged (ADR-0058): without this a run report says an apply took 16 s and
+        // cannot say whether that was the hardware or a trigger that silently kept every optimisation off.
+        var diagnostics = result.Changes.Diagnostics;
+        report.TriggersSkipped = diagnostics.TriggersSkipped;
+        report.ForeignTriggers = diagnostics.ForeignTriggers.ToList();
+        report.ApplyTransactions = diagnostics.Transactions;
+        report.IndexesDeferred = diagnostics.DeferredIndexCount;
+        report.IndexRebuildMs = diagnostics.IndexRebuildMs;
+        report.LiveIndexReasons = new Dictionary<string, string>(diagnostics.LiveIndexReasons, StringComparer.OrdinalIgnoreCase);
+        report.UnchangedRows = result.Changes.UnchangedRows;
         await _store.SaveRunReportAsync(report, _options.KeepRunReports, CancellationToken.None).ConfigureAwait(false);
 
         if (!result.IsSuccess) return;
@@ -652,7 +715,8 @@ public sealed partial class G9CSyncEngine
     [LoggerMessage(EventId = 20011, Level = LogLevel.Warning, Message = "Run {RunId} failed with {Code}")]
     private static partial void LogRunFailed(ILogger logger, Exception exception, Guid runId, string code);
 
-    [LoggerMessage(EventId = 20013, Level = LogLevel.Warning,
+    // 20019, not 20013: the two messages shared an id until ADR-0058, and an operator filtering on "transient retry" got push failures too.
+    [LoggerMessage(EventId = 20019, Level = LogLevel.Warning,
         Message = "Run {RunId}: the push failed; continuing to the pull so the device keeps receiving, then reporting the failure")]
     private static partial void LogPushFailedPullContinues(ILogger logger, Exception exception, Guid runId);
 
@@ -665,6 +729,10 @@ public sealed partial class G9CSyncEngine
     [LoggerMessage(EventId = 20014, Level = LogLevel.Debug, Message = "Pushed batch {BatchId}: {Rows} rows, {Rejected} rejected, {Conflicts} conflicts, replayed {AlreadyApplied}")]
     private static partial void LogPushed(ILogger logger, long batchId, int rows, int rejected, int conflicts, bool alreadyApplied);
 
+    [LoggerMessage(EventId = 20023, Level = LogLevel.Warning,
+        Message = "Push batch {BatchId} of {Rows} rows was rolled back for too many rejections; sending it again as {SmallerRows} rows so the valid rows get through")]
+    private static partial void LogPushSplit(ILogger logger, long batchId, int rows, int smallerRows);
+
     [LoggerMessage(EventId = 20015, Level = LogLevel.Warning, Message = "Push batch {BatchId} changed no row state; stopping the push loop for this run")]
     private static partial void LogPushStalled(ILogger logger, long batchId);
 
@@ -675,7 +743,12 @@ public sealed partial class G9CSyncEngine
         Message = "Subscription {SubscriptionKey} is forbidden; released its rows ({Deleted} deleted, {Quarantined} quarantined, {Retained} retained)")]
     private static partial void LogSubscriptionRevoked(ILogger logger, string subscriptionKey, long deleted, long quarantined, long retained);
 
-    [LoggerMessage(EventId = 20017, Level = LogLevel.Information,
-        Message = "Staged pull {StagedRunId} was planned for a different epoch, permission set or schema; replanning")]
-    private static partial void LogStaleStage(ILogger logger, string stagedRunId);
+    // 20017 ("Staged pull {StagedRunId} was planned for a different epoch, permission set or schema; replanning") is retired with
+    // ADR-0060: a stage of another generation is no longer found and discarded, it is simply not this run's. The id is not reused.
+    [LoggerMessage(EventId = 20022, Level = LogLevel.Warning,
+        Message = "The client model declares {Count} column(s) with a type the server does not have; they sync in NEITHER direction until the model is fixed: {Columns}")]
+    private static partial void LogModelTypeMismatch(ILogger logger, int count, string columns);
+
+    [LoggerMessage(EventId = 20021, Level = LogLevel.Information, Message = "Removed {Count} staged pull(s) past their age or the byte cap")]
+    private static partial void LogStagesPruned(ILogger logger, int count);
 }

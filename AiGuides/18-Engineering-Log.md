@@ -423,3 +423,28 @@ G9SignalRSuperNetCore 2.6 generates client code with the client twins. The same 
 only as a string literal (`=> Route` produced `/ClassName`) and that `AddSignalRSuperNetCoreCore()` registered services once per
 process, so a second host ran without the hub filter. Lesson: two handlers for one SignalR method must agree on their parameter types,
 and "the upload completed" says nothing about a progress path.
+
+## LES-0043 — 2026-09-21 · "Rebuild the indexes whenever the download is large" was wrong, and only a measurement said so
+
+The performance plan proposed extending index deferral from empty tables to any large download. Experiment 2
+(`benchmarks/results/sqlite-apply-experiments-2026-09.md`) loaded 50,000-500,000 rows into a table already holding 500,000: dropping
+and rebuilding the indexes was up to 2x SLOWER than leaving them live until the download was roughly as large as the table, because
+the rebuild re-sorts every row already there. The rule that shipped is a growth ratio (`RebuildIndexesMinimumGrowth`, ADR-0058).
+Lesson: an optimisation proven on an empty table says nothing about a full one; measure the case you are extending it to.
+
+## LES-0044 — 2026-09-21 · A resume key that includes a moving value resumes nothing
+
+The first fix for "one staged pull per store" put the subscription cursors into the stage's generation hash, so a stage could only
+be resumed from the exact state it was planned against. Cursors are database snapshots and move on practically every pull, and
+scopes share dependencies, so the hash would have differed between any two runs - a resume feature that never matches, which no
+test of "interrupt, then resume immediately" would have caught. Reverted before it shipped; the cursor is now CHECKED when the final
+slice lands (`WHERE cursor IS $from`) instead of being part of the key (ADR-0060). Lesson: put in a cache or resume key only what
+must be equal for reuse to be CORRECT; validate everything else at the point of use.
+
+## LES-0045 — 2026-09-21 · The fast path had an off switch nobody could see
+
+`SQLITE_DBCONFIG_ENABLE_TRIGGER` is only switched off when every trigger in the database is the library's own. One foreign trigger
+anywhere - a leftover from a previous sync library on an upgraded device - disabled it silently, and with it index deferral: 12.5 s
+instead of 2.3 s for 500,000 rows, with nothing in any log to say why. The apply now names the triggers that stopped it (event 20112,
+`G9CApplyDiagnostics.ForeignTriggers`). Lesson: an optimisation with a precondition must report when the precondition fails, or its
+absence is indistinguishable from slow hardware.

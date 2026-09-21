@@ -13,9 +13,10 @@ namespace G9SyncData.Server.Engine;
 internal sealed class G9CSyncTokenService
 {
     private readonly byte[] _key;
+    private readonly byte[][] _previousKeys;
     private readonly TimeSpan _lifetime;
 
-    public G9CSyncTokenService(byte[]? key, TimeSpan lifetime)
+    public G9CSyncTokenService(byte[]? key, TimeSpan lifetime, IReadOnlyList<byte[]>? previousKeys = null, bool requireKey = false)
     {
         // No key is a deliberate choice: one instance, tokens that need not outlive the process. A key that was configured but is too
         // short to use is not - silently signing with a random one instead leaves every node rejecting the others' tokens, discovered
@@ -26,9 +27,33 @@ internal sealed class G9CSyncTokenService
                 $"{nameof(G9CSyncServerOptions.TokenSigningKey)} must be at least 32 bytes; {key.Length} were configured.", nameof(key));
         }
 
+        // A host that says it needs one and has none fails HERE, at startup, not at the first deploy that cuts a field worker's
+        // half-downloaded site off (ADR-0064): with a random key every restart invalidates every pull in flight.
+        if (key is null && requireKey)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(G9CSyncServerOptions.RequireTokenSigningKey)} is set and no {nameof(G9CSyncServerOptions.TokenSigningKey)} is configured. " +
+                "Configure at least 32 random bytes from the secret store: without it every restart invalidates the pulls in flight.");
+        }
+
+        foreach (var previous in previousKeys ?? [])
+        {
+            if (previous is null || previous.Length < 32)
+            {
+                throw new ArgumentException(
+                    $"Every key in {nameof(G9CSyncServerOptions.PreviousTokenSigningKeys)} must be at least 32 bytes; {previous?.Length ?? 0} were configured.",
+                    nameof(previousKeys));
+            }
+        }
+
+        IsEphemeralKey = key is null;
         _key = key ?? RandomNumberGenerator.GetBytes(32);
+        _previousKeys = previousKeys is null ? [] : [.. previousKeys];
         _lifetime = lifetime;
     }
+
+    /// <summary>True when no key was configured and this process signs with a random one: tokens do not survive a restart or another instance.</summary>
+    public bool IsEphemeralKey { get; }
 
     public string Create(G9DtPullTokenPayload payload)
     {
@@ -56,7 +81,7 @@ internal sealed class G9CSyncTokenService
             throw Invalid("Malformed pull token.");
         }
 
-        if (!CryptographicOperations.FixedTimeEquals(HMACSHA256.HashData(_key, json), mac)) throw Invalid("Pull token signature is invalid.");
+        if (!IsSignedByAKnownKey(json, mac)) throw Invalid("Pull token signature is invalid.");
 
         var payload = JsonSerializer.Deserialize(json, G9SyncServerJsonContext.Default.G9DtPullTokenPayload) ?? throw Invalid("Empty pull token.");
         if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > payload.ExpiresUnixMs)
@@ -65,6 +90,18 @@ internal sealed class G9CSyncTokenService
         }
 
         return payload;
+    }
+
+    /// <summary>
+    ///     The current key or any previous one (ADR-0064). Tokens are only ever SIGNED with the current key; the previous ones exist so
+    ///     that rotating the key does not invalidate the pulls that were planned a minute before. Every key is tried, without an early
+    ///     exit, so the time taken does not say which one matched - or whether any did.
+    /// </summary>
+    private bool IsSignedByAKnownKey(byte[] json, byte[] mac)
+    {
+        var known = CryptographicOperations.FixedTimeEquals(HMACSHA256.HashData(_key, json), mac);
+        foreach (var previous in _previousKeys) known |= CryptographicOperations.FixedTimeEquals(HMACSHA256.HashData(previous, json), mac);
+        return known;
     }
 
     private static G9CSyncException Invalid(string message) => new(G9SyncErrorCodes.TokenInvalid, message);

@@ -28,6 +28,8 @@ public sealed partial class G9CSyncServerEngine
     private readonly IG9SyncConnectGate[] _gates;
     private readonly ILogger<G9CSyncServerEngine> _logger;
     private readonly G9CSyncTokenService _tokens;
+    private readonly SemaphoreSlim? _pullSlots;
+    private readonly SemaphoreSlim? _pushSlots;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private volatile bool _initialized;
 
@@ -48,12 +50,61 @@ public sealed partial class G9CSyncServerEngine
         _authProvider = authProvider;
         _gates = gates.ToArray();
         _logger = logger;
-        _tokens = new G9CSyncTokenService(_options.TokenSigningKey, _options.TokenLifetime);
+        _tokens = new G9CSyncTokenService(_options.TokenSigningKey, _options.TokenLifetime, [.. _options.PreviousTokenSigningKeys], _options.RequireTokenSigningKey);
+        _pullSlots = _options.MaxConcurrentPulls > 0 ? new SemaphoreSlim(_options.MaxConcurrentPulls, _options.MaxConcurrentPulls) : null;
+        _pushSlots = _options.MaxConcurrentPushes > 0 ? new SemaphoreSlim(_options.MaxConcurrentPushes, _options.MaxConcurrentPushes) : null;
+    }
+
+    /// <summary>
+    ///     Takes one of the engine's concurrency slots, or refuses with the retryable <c>G9S-SRV-BUSY</c> after
+    ///     <see cref="G9CSyncServerOptions.AdmissionWait" /> (ADR-0062). The slot is released when the result is disposed.
+    /// </summary>
+    private async ValueTask<AdmissionSlot> AdmitAsync(SemaphoreSlim? slots, string operation, CancellationToken cancellationToken)
+    {
+        if (slots is null) return default;
+        if (await slots.WaitAsync(_options.AdmissionWait, cancellationToken).ConfigureAwait(false)) return new AdmissionSlot(slots);
+
+        G9CSyncServerTelemetry.Refused.Add(1, new KeyValuePair<string, object?>("operation", operation));
+        LogBusy(_logger, operation);
+        throw new G9CSyncException(G9SyncErrorCodes.ServerBusy, $"The server is at its limit of concurrent {operation} requests; try again shortly.");
+    }
+
+    private readonly struct AdmissionSlot(SemaphoreSlim? slots) : IDisposable
+    {
+        public void Dispose() => slots?.Release();
     }
 
     public G9CSyncServerModel Model => _model;
 
     public IG9SyncServerStore Store => _store;
+
+    /// <summary>How many effects wait, how many failed for good, and how old the oldest waiting one is (ADR-0065).</summary>
+    public async Task<G9CEffectQueueStatus> GetEffectQueueStatusAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.GetEffectQueueStatusAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Effects that exhausted their attempts, oldest first, with the error of their last attempt.</summary>
+    public async Task<IReadOnlyList<G9CPendingEffect>> GetFailedEffectsAsync(int max = 100, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.GetFailedEffectsAsync(max, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Puts failed effects back in the queue with a fresh allowance of attempts; null requeues all of them (ADR-0065). Run it after
+    ///     fixing the handler that failed them: an effect is work a COMMITTED push owes, and until it is requeued that work stays undone
+    ///     however correct the handler has become. Handlers are idempotent by contract (ADR-0052), so requeueing one that had in fact
+    ///     partly run is safe.
+    /// </summary>
+    public async Task<int> RequeueFailedEffectsAsync(IReadOnlyCollection<Guid>? effectIds = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        var requeued = await _store.RequeueFailedEffectsAsync(effectIds, cancellationToken).ConfigureAwait(false);
+        if (requeued > 0) LogEffectsRequeued(_logger, requeued);
+        return requeued;
+    }
 
     /// <summary>Initialises the store once. Safe to call concurrently.</summary>
     public async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
@@ -67,6 +118,11 @@ public sealed partial class G9CSyncServerEngine
             await _store.InitializeAsync(cancellationToken).ConfigureAwait(false);
             _initialized = true;
             LogInitialized(_logger, _model.Tables.Count, _model.Subscriptions.Count, _store.Epoch, stopwatch.ElapsedMilliseconds);
+
+            // Said at every start, because the consequence is invisible until it hurts (ADR-0064): with a random key every restart
+            // and every deploy invalidates the pulls in flight, and a second instance rejects the first one's tokens.
+            if (_tokens.IsEphemeralKey) LogEphemeralSigningKey(_logger);
+            else LogConfiguredSigningKey(_logger, _options.PreviousTokenSigningKeys.Count);
         }
         finally
         {
@@ -293,6 +349,10 @@ public sealed partial class G9CSyncServerEngine
             resolved.Add(item);
         }
 
+        // Held for the whole stream: a slot is a database connection and a page of rows in memory (ADR-0062). Taken after the token
+        // and the caller were checked, so a request that was never going to be served does not occupy one.
+        using var slot = await AdmitAsync(_pullSlots, "pull", cancellationToken).ConfigureAwait(false);
+
         var sequence = continuation?.NextSequence ?? 0;
         var after = continuation?.AfterKey;
         for (var index = Math.Max(0, continuation?.PartIndex ?? 0); index < payload.Parts.Count; index++)
@@ -342,6 +402,13 @@ public sealed partial class G9CSyncServerEngine
         activity?.SetTag("g9sync.batch_id", request.BatchId);
         var stopwatch = Stopwatch.StartNew();
 
+        // Who is calling, and whether there is room, BEFORE a byte of the upload is held (ADR-0062). This used to drain the whole
+        // stream first - up to MaxPushBytes, 128 MiB, per caller - and only then ask who the caller was: memory committed to a
+        // request the server might refuse, with nothing limiting how many did it at once.
+        if (request.ClientId == Guid.Empty) throw new G9CSyncException(G9SyncErrorCodes.InvalidParameters, "A push requires a client id.");
+        var auth = await _authProvider.ResolveAsync(caller, cancellationToken).ConfigureAwait(false);
+        using var slot = await AdmitAsync(_pushSlots, "push", cancellationToken).ConfigureAwait(false);
+
         var frames = new List<byte[]>();
         long bytes = 0;
         await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -356,9 +423,6 @@ public sealed partial class G9CSyncServerEngine
             frames.Add(frame);
         }
 
-        if (request.ClientId == Guid.Empty) throw new G9CSyncException(G9SyncErrorCodes.InvalidParameters, "A push requires a client id.");
-
-        var auth = await _authProvider.ResolveAsync(caller, cancellationToken).ConfigureAwait(false);
         var subscriptions = new List<G9CResolvedSubscription>();
         foreach (var reference in request.Subscriptions)
         {
@@ -447,6 +511,7 @@ public sealed partial class G9CSyncServerEngine
             throw new G9CSyncException(G9CSubscriptionResolver.FailureCode(failure), failure.Message ?? "Invalid subscription.");
         }
 
+        using var slot = await AdmitAsync(_pullSlots, "reconcile", cancellationToken).ConfigureAwait(false);
         var tables = new List<G9CStoreReconcileTable>();
         foreach (var digest in request.Tables)
         {
@@ -522,6 +587,7 @@ public sealed partial class G9CSyncServerEngine
             throw new G9CSyncException(G9SyncErrorCodes.InvalidParameters, $"At most {_options.MaxFetchKeys} keys per fetch.");
         }
 
+        using var slot = await AdmitAsync(_pullSlots, "fetch", cancellationToken).ConfigureAwait(false);
         var keys = new List<string>(request.Keys.Count);
         foreach (var key in request.Keys)
         {
@@ -567,7 +633,11 @@ public sealed partial class G9CSyncServerEngine
             if (!clientColumns.Remove(column.Name, out var clientColumn)) continue;
             if (clientColumn.Type != column.Type)
             {
-                negotiated.MissingColumns.Add(clientColumn.Name);
+                // Its own list, and said in the server's log too (ADR-0061). Filed under MissingColumns this was indistinguishable from
+                // "a newer client asked for a column this server does not have yet", nothing on either side read that list, and a
+                // column declared Guid over a varchar simply stopped syncing in both directions - in production, for weeks.
+                negotiated.TypeMismatchColumns.Add(new G9DtColumnTypeMismatch { Name = clientColumn.Name, ClientType = clientColumn.Type, ServerType = column.Type });
+                LogColumnTypeMismatch(_logger, table.LogicalName, clientColumn.Name, clientColumn.Type, column.Type);
                 continue;
             }
 
@@ -742,4 +812,23 @@ public sealed partial class G9CSyncServerEngine
 
     [LoggerMessage(EventId = 21005, Level = LogLevel.Error, Message = "Post-commit handler {Handler} failed for {Table}, client {ClientId} batch {BatchId}")]
     private static partial void LogPostCommitFailed(ILogger logger, Exception exception, string handler, string table, Guid clientId, long batchId);
+
+    [LoggerMessage(EventId = 21007, Level = LogLevel.Warning,
+        Message = "G9SyncData signs pull tokens with a RANDOM key: no TokenSigningKey is configured. Every restart or deploy invalidates the pulls in flight, " +
+                  "and a second instance rejects this one's tokens. Configure at least 32 random bytes from the secret store")]
+    private static partial void LogEphemeralSigningKey(ILogger logger);
+
+    [LoggerMessage(EventId = 21008, Level = LogLevel.Information, Message = "G9SyncData pull tokens: signing key configured, {PreviousKeys} previous key(s) still accepted")]
+    private static partial void LogConfiguredSigningKey(ILogger logger, int previousKeys);
+
+    [LoggerMessage(EventId = 21013, Level = LogLevel.Information, Message = "Requeued {Count} failed effect(s) for delivery")]
+    private static partial void LogEffectsRequeued(ILogger logger, int count);
+
+    [LoggerMessage(EventId = 21009, Level = LogLevel.Warning, Message = "Refused a {Operation} request: the concurrency limit was reached and no slot came free in time")]
+    private static partial void LogBusy(ILogger logger, string operation);
+
+    // Debug here, Warning on the device: every connecting client of a wrong build repeats it, and the device is where the model is fixed.
+    [LoggerMessage(EventId = 21006, Level = LogLevel.Debug,
+        Message = "A client declares {Table}.{Column} as {ClientType}; the server's column is {ServerType}. The column is not negotiated and syncs in neither direction")]
+    private static partial void LogColumnTypeMismatch(ILogger logger, string table, string column, G9ESyncColumnType clientType, G9ESyncColumnType serverType);
 }

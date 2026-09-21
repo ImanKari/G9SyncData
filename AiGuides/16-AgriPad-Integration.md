@@ -1,7 +1,7 @@
 # 16 — AgriPad integration (adoption path)
 
 > Status: **planned, not started.** AgriPad still syncs through the Dotmim fork. This chapter is the path the library was
-> built for; `G9SyncData.md` (repository root) holds the full analysis. Update this chapter as steps land.
+> built for; [`plan/G9SyncData.md`](plan/G9SyncData.md) holds the full analysis. Update this chapter as steps land.
 
 ## Concept mapping
 
@@ -69,3 +69,16 @@ the app: `Agriculture.AgriPad.App/AiGuides/33-G9SyncData.md` §7. What the pilot
   1.3.17's exact device DDL (`tests/Shared/DotmimDeviceSql.cs`, `DotmimCutoverTests`); what remains is the owner's go-ahead per table.
 - **Device validation.** The Android suite ([12](12-Testing.md)) runs the client and 200k/500k-row sites on an emulator in every
   cycle; the DOOGEE S99 run is still required before a table is switched.
+
+## What AgriPad uses from 1.1.0
+
+| Feature | Where in AgriPad |
+|---|---|
+| `IncarnationMarkerPath` (ADR-0067) | `Common/Sync/IncarnationMarker.cs`: `NoBackupFilesDir` on Android, a folder flagged `NSURLIsExcludedFromBackupKey` on iOS |
+| `FailOnTypeMismatch` (ADR-0061) | on in DEBUG; Release logs event 6966 |
+| Apply diagnostics (ADR-0058) | events 6964/6965 and the "Last sync apply" row in Admin Diagnostics |
+| Change-feed floor (ADR-0059) | `GeoSyncCoordinator.ReconcileFarmAsync`: a farm whose watermark is below the floor is rebuilt (event 6967) |
+| `G9S-LOCAL-CORRUPT` / `-DISK-FULL` (ADR-0068) | `SyncFailureClassifier` kinds `LocalDatabaseDamaged` / `StorageFull`; unsent rows exported before the failure is shown |
+| Server options (ADR-0062, 0064, 0065) | `Agriculture.Server.Mobile/Sync/G9Sync/G9SyncDataExtensions.cs` and `Ops/g9sync-database-runbook.md` |
+
+Detail: AgriPad `AiGuides/33-G9SyncData.md` and `AiGuides/35-Pot-Feature-Store.md`.

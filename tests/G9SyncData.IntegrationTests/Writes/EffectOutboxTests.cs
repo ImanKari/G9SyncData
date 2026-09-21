@@ -79,6 +79,36 @@ public sealed class EffectOutboxTests(ITestOutputHelper output)
     }
 
     [PostgresFact]
+    public async Task An_effect_that_failed_for_good_is_delivered_after_the_handler_is_fixed_and_it_is_requeued()
+    {
+        // ADR-0065. A host shipped a handler that threw on every delivery; by the time it was fixed every offline state change had
+        // exhausted its attempts, and the fix only ever reached NEW changes. Requeueing is how the old ones get done.
+        var recorder = new EffectRecorder { FailAttempts = int.MaxValue };
+        await using var harness = await CreateHarnessAsync(recorder, o => o.EffectMaxAttempts = 2);
+        await PushedPotAsync(harness);
+        for (var i = 0; i < 3; i++) await DispatchAsync(harness, dueNow: true);
+
+        var broken = await harness.Engine.GetEffectQueueStatusAsync();
+        Assert.Equal((0L, 1L), (broken.Pending, broken.Failed));
+        Assert.Empty(recorder.Delivered);
+
+        recorder.FailAttempts = 0;   // the handler is fixed
+        await DispatchAsync(harness, dueNow: true);
+        Assert.Empty(recorder.Delivered);   // ...and that alone delivers nothing: the effect is parked
+
+        Assert.Equal(1, await harness.Engine.RequeueFailedEffectsAsync());
+        var requeued = await harness.Engine.GetEffectQueueStatusAsync();
+        Assert.Equal((1L, 0L), (requeued.Pending, requeued.Failed));
+        Assert.NotNull(requeued.OldestPendingAge);
+
+        await DispatchAsync(harness);
+        Assert.Single(recorder.Delivered);
+        var done = await harness.Engine.GetEffectQueueStatusAsync();
+        Assert.Equal((0L, 0L, (TimeSpan?)null), (done.Pending, done.Failed, done.OldestPendingAge));
+        Assert.Equal(0, await harness.Engine.RequeueFailedEffectsAsync());
+    }
+
+    [PostgresFact]
     public async Task A_push_with_no_effect_handler_records_nothing()
     {
         await using var harness = await SyncHarness.CreateAsync(output);
@@ -152,7 +182,7 @@ internal sealed class EffectRecorder
 {
     private int _attempts;
 
-    public int FailAttempts { get; init; }
+    public int FailAttempts { get; set; }
     public int Attempts => _attempts;
     public List<string> Delivered { get; } = [];
 

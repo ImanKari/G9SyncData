@@ -64,9 +64,43 @@ public interface IG9SyncClientStore : IAsyncDisposable
 
     // ------------------------------------------------ pull
 
+    /// <summary>The newest staged pull, whatever it was planned for.</summary>
     Task<G9CStagedPull?> GetStagedPullAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     The newest staged pull planned under exactly this generation, or null (ADR-0060). A store keeps a stage per generation, so a
+    ///     download interrupted for one set of subscriptions is still there after a run for a different set has come and gone.
+    /// </summary>
+    async Task<G9CStagedPull?> GetStagedPullAsync(string generation, CancellationToken cancellationToken) =>
+        await GetStagedPullAsync(cancellationToken).ConfigureAwait(false) is { } staged && string.Equals(staged.Generation, generation, StringComparison.Ordinal)
+            ? staged
+            : null;
+
+    /// <summary>
+    ///     Starts a stage. A stage of the SAME generation is replaced; stages of other generations are left alone - they belong to other
+    ///     subscription sets and may still be resumed (ADR-0060).
+    /// </summary>
     Task BeginStagedPullAsync(G9CStagedPull pull, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     Removes stages created before <paramref name="olderThanUtc" />, then the oldest remaining ones until the stages other than
+    ///     <paramref name="keepGeneration" />'s hold at most <paramref name="maxBytes" /> of payload. Returns how many were removed.
+    ///     The kept generation is only ever removed for its age: a stage larger than the cap must still be resumable.
+    /// </summary>
+    Task<int> PruneStagedPullsAsync(DateTime olderThanUtc, long maxBytes, string? keepGeneration, CancellationToken cancellationToken) => Task.FromResult(0);
+
+    /// <summary>Removes every staged pull. Returns how many there were.</summary>
+    async Task<int> DiscardAllStagedPullsAsync(CancellationToken cancellationToken)
+    {
+        var count = 0;
+        while (await GetStagedPullAsync(cancellationToken).ConfigureAwait(false) is { } staged)
+        {
+            await DiscardStagedPullAsync(staged.RunId, cancellationToken).ConfigureAwait(false);
+            count++;
+        }
+
+        return count;
+    }
 
     Task StageChunkAsync(string runId, G9DtSyncChunk chunk, CancellationToken cancellationToken);
 
@@ -145,6 +179,17 @@ public interface IG9SyncClientStore : IAsyncDisposable
     ///     silently, permanently stale.
     /// </remarks>
     Task<long> GetChangeSequenceAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     The highest sequence <see cref="PurgeDeletedFeedAsync" /> has ever removed from the feed; 0 when nothing was purged (ADR-0059).
+    /// </summary>
+    /// <remarks>
+    ///     The feed keeps only the newest deletions. A consumer whose watermark is BELOW this floor has missed deletions it can no longer
+    ///     read - it was offline, or its scope was not opened, while more than the kept number piled up - and resuming would leave it
+    ///     holding rows that are gone. It has to rebuild its projection instead. A watermark at or above the floor is safe to resume from.
+    ///     A store that does not purge returns 0.
+    /// </remarks>
+    Task<long> GetChangeFeedFloorAsync(CancellationToken cancellationToken) => Task.FromResult(0L);
 
     Task<IReadOnlyList<G9CSyncRejection>> GetRejectionsAsync(CancellationToken cancellationToken);
 
@@ -280,6 +325,14 @@ public sealed class G9CStagedPull
     public string? Generation { get; init; }
 
     /// <summary>
+    ///     The cursor each planned subscription had when the plan was made (null for a first pull), by subscription key (ADR-0060).
+    ///     Stages outlive runs for other subscription sets, and one of those can include a subscription of this stage - a dependency
+    ///     usually - and move its cursor on. The apply then leaves that cursor where it is: it only moves a cursor that is still the one
+    ///     the plan started from. A subscription missing from the map (a stage written before it existed) is moved as before.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> PlannedFromCursors { get; init; } = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+    /// <summary>
     ///     The device clock at the moment the stage began, assigned by the store; the value given here is ignored. Rows changed after it
     ///     are newer than anything the stage carries, so the apply leaves them alone.
     /// </summary>
@@ -329,11 +382,23 @@ public sealed class G9CApplyReport
     /// <summary>Changed keys per local table (capped per table).</summary>
     public Dictionary<string, List<string>> ChangedKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    ///     Upserts whose row already held exactly the incoming values (a range pulled again after an interruption, a reconciliation
+    ///     fetch of a row that was right all along). They count in <see cref="Upserts" /> - the row was delivered - but nothing was
+    ///     written for them, they are not in <see cref="ChangedKeys" />, and the change feed does not announce them (ADR-0058).
+    /// </summary>
+    public long UnchangedRows { get; set; }
+
+    /// <summary>How the apply ran: which large-download optimisations engaged and what they cost (ADR-0058).</summary>
+    public G9CApplyDiagnostics Diagnostics { get; } = new();
+
     public long Total => Upserts + Deletes + MoveOuts;
 
     public void Merge(G9CApplyReport other)
     {
         ArgumentNullException.ThrowIfNull(other);
+        UnchangedRows += other.UnchangedRows;
+        Diagnostics.Merge(other.Diagnostics);
         Upserts += other.Upserts;
         Deletes += other.Deletes;
         MoveOuts += other.MoveOuts;
@@ -403,4 +468,24 @@ public sealed class G9CSyncRunReport
     public long DownloadedBytes { get; set; }
     public List<string> Subscriptions { get; set; } = [];
     public Dictionary<string, long> PhaseMs { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>Whether the run's applies ran with trigger execution off; null when the run applied nothing (ADR-0058).</summary>
+    public bool? TriggersSkipped { get; set; }
+
+    /// <summary>Triggers the library did not create that kept trigger execution on.</summary>
+    public List<string> ForeignTriggers { get; set; } = [];
+
+    /// <summary>Apply transactions of the run (slices; 1 for an atomic apply).</summary>
+    public int ApplyTransactions { get; set; }
+
+    /// <summary>Plain indexes dropped for a load and rebuilt after it.</summary>
+    public int IndexesDeferred { get; set; }
+
+    public long IndexRebuildMs { get; set; }
+
+    /// <summary>Tables large enough for index deferral that kept live indexes, with the reason.</summary>
+    public Dictionary<string, string> LiveIndexReasons { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Upserts that found the row already holding the incoming values.</summary>
+    public long UnchangedRows { get; set; }
 }

@@ -41,6 +41,34 @@ public sealed class SignalRTransportTests(ITestOutputHelper output)
     [PostgresTheory]
     [InlineData(G9ESyncHubProtocol.Json)]
     [InlineData(G9ESyncHubProtocol.MessagePack)]
+    public async Task With_stateful_reconnect_on_at_both_ends_a_device_still_downloads_uploads_and_reconciles(G9ESyncHubProtocol protocol)
+    {
+        // ADR-0069. The feature changes what travels (sequence and ack messages, a buffer on each side), so the whole run is proven
+        // over it in both protocols - including the MessagePack one, which is this family's own implementation.
+        await using var harness = await SyncHarness.CreateAsync(output, transport: SyncTransportKind.SignalR, signalR: o => o.AllowStatefulReconnects = true);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 250);
+        await using var client = await harness.CreateClientAsync(transportFactory: () => new G9CSignalRSyncTransport(
+            new G9CSignalRSyncTransportOptions { Url = harness.HubUrl!, Protocol = protocol, StatefulReconnect = true }));
+        await client.Engine.SubscribeAsync("sites");
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+
+        await client.SyncOkAsync();
+        Assert.Equal(250, await client.CountAsync("Pot"));
+
+        var created = Guid.NewGuid();
+        await client.ExecAsync("INSERT INTO Pot (Id, SiteId, Code, Status, IsDeleted) VALUES ($p0, $p1, 'SR-2', 1, 0)", Key(created), Key(site));
+        await client.SyncOkAsync();
+        Assert.Equal("SR-2", await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", created));
+
+        var reconciled = await client.SyncOkAsync(new G9SyncData.Client.Runs.G9CSyncRequest { ForceReconcile = true });
+        Assert.Equal(0, reconciled.Changes.Upserts);
+    }
+
+    [PostgresTheory]
+    [InlineData(G9ESyncHubProtocol.Json)]
+    [InlineData(G9ESyncHubProtocol.MessagePack)]
     public async Task A_server_refusal_reaches_the_client_with_its_stable_code(G9ESyncHubProtocol protocol)
     {
         await using var harness = await SyncHarness.CreateAsync(output, transport: SyncTransportKind.SignalR);

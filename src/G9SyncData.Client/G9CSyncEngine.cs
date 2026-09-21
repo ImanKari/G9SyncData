@@ -42,6 +42,9 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
     private Timer? _pokeTimer;
     private int _disposed;
 
+    /// <summary>The model problems last written to the log, so the warning is said once per distinct set and not once per run (ADR-0061).</summary>
+    private string? _reportedModelProblems;
+
     public G9CSyncEngine(IG9SyncClientStore store, IG9SyncTransport transport, G9CSyncClientModel model, G9CSyncEngineOptions? options = null,
         ILogger<G9CSyncEngine>? logger = null, IG9SyncHostHooks? hooks = null)
     {
@@ -284,10 +287,9 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
     public async Task<bool> DiscardStagedPullAsync(CancellationToken cancellationToken = default)
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
-        if (await _store.GetStagedPullAsync(cancellationToken).ConfigureAwait(false) is not { } staged) return false;
 
-        await _store.DiscardStagedPullAsync(staged.RunId, cancellationToken).ConfigureAwait(false);
-        return true;
+        // Every stage, not the newest: the store keeps one per subscription set (ADR-0060), and an operator unsticking a device means all of them.
+        return await _store.DiscardAllStagedPullsAsync(cancellationToken).ConfigureAwait(false) > 0;
     }
 
     public async Task<int> DiscardQuarantinedAsync(string? localTable = null, string? key = null, CancellationToken cancellationToken = default)
@@ -326,6 +328,18 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
     {
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
         return await _store.GetChangeSequenceAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The highest sequence ever purged from the change feed; 0 when nothing was.</summary>
+    /// <remarks>
+    ///     The other half of the watermark check. <see cref="GetChangeSequenceAsync" /> catches a watermark that is too HIGH (the store
+    ///     was rebuilt); this catches one that is too LOW: deletions between the watermark and the floor were purged and can no longer
+    ///     be read, so a projection resuming from there would keep rows that are gone. Rebuild it instead (ADR-0059).
+    /// </remarks>
+    public async Task<long> GetChangeFeedFloorAsync(CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.GetChangeFeedFloorAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Registers local rows written before capture existed, so a subscription can adopt them without a download.</summary>

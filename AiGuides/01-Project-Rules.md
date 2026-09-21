@@ -81,7 +81,7 @@ Exceptions that follow platform convention: DI extension classes (`G9Sync…Exte
 
 - Public types and members carry XML docs that say what they guarantee, not what they are called.
 - Guides follow the mandatory rule in [00-AiGuide.md](00-AiGuide.md).
-- Comments explain why; plan requirement ids (`P-xx`, `D-xx`, `Q-xx`) refer to `G9SyncData.md`.
+- Comments explain why; plan requirement ids (`P-xx`, `D-xx`, `Q-xx`) refer to [`plan/G9SyncData.md`](plan/G9SyncData.md).
 
 ## Git and safety
 

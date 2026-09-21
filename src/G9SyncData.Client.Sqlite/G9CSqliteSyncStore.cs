@@ -67,6 +67,14 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
                     Exec(connection, transaction, "DELETE FROM g9_stage; DELETE FROM g9_stage_runs;");
                 }
 
+                if (Convert.ToInt64(Scalar(connection, transaction, "SELECT count(*) FROM pragma_table_info('g9_stage_runs') WHERE name = 'from_cursors_json'"),
+                        CultureInfo.InvariantCulture) == 0)
+                {
+                    // Stores created before stages were kept per generation (ADR-0060). A stage already in flight has no record of the
+                    // cursors it was planned from; its NULL reads back as "move every cursor", which is what it would have done anyway.
+                    Exec(connection, transaction, "ALTER TABLE g9_stage_runs ADD COLUMN from_cursors_json TEXT NULL");
+                }
+
                 if (Convert.ToInt64(Scalar(connection, transaction, "SELECT count(*) FROM pragma_table_info('g9_subscriptions') WHERE name = 'move_out_policy'"),
                         CultureInfo.InvariantCulture) == 0)
                 {
@@ -76,6 +84,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
 
                 if (Meta(connection, transaction, "client_id") is null) SetMeta(connection, transaction, "client_id", Guid.NewGuid().ToString("D"));
                 if (Meta(connection, transaction, "next_batch_id") is null) SetMeta(connection, transaction, "next_batch_id", "1");
+                VerifyIncarnation(connection, transaction);
 
                 foreach (var table in model.Tables)
                 {

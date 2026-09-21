@@ -6,8 +6,21 @@ namespace G9SyncData.Client.Sqlite;
 ///     A SQLite error raised by the store, with SQLite's primary and extended result codes (for example 5 / <c>SQLITE_BUSY</c> when the
 ///     app holds the write lock longer than the busy timeout). It replaces Microsoft.Data.Sqlite's <c>SqliteException</c> (ADR-0032).
 /// </summary>
-public sealed class G9CSqliteException : Exception
+public sealed class G9CSqliteException : Exception, Storage.IG9SyncLocalStoreFailure
 {
+    /// <summary>
+    ///     SQLite's result code in the engine's terms (ADR-0068): <c>SQLITE_CORRUPT</c> (11) and <c>SQLITE_NOTADB</c> (26) are a damaged
+    ///     file, <c>SQLITE_FULL</c> (13) is a full disk, <c>SQLITE_BUSY</c> (5) and <c>SQLITE_LOCKED</c> (6) are a lock that was not released
+    ///     in time.
+    /// </summary>
+    public Storage.G9ELocalStoreFailure Failure => SqliteErrorCode switch
+    {
+        11 or 26 => Storage.G9ELocalStoreFailure.Corrupt,
+        13 => Storage.G9ELocalStoreFailure.DiskFull,
+        5 or 6 => Storage.G9ELocalStoreFailure.Busy,
+        _ => Storage.G9ELocalStoreFailure.Other
+    };
+
     public G9CSqliteException()
     {
     }

@@ -14,7 +14,8 @@ classify failures by code, never by message (plan P-19).
 | Per conflict | `G9DtRowConflict { Code, ServerChangedMask, PartiallyApplied }` |
 | Run result | `G9CSyncRunResult.Error`, `.Problems` (per subscription) |
 
-`G9SyncErrorCodes.IsRetryable(code)`: `NET-FAILURE`, `SRV-ERROR`, `TOKEN-EXPIRED`, `RSY-EPOCH`, `RSY-HORIZON`, `RSY-AUTH`.
+`G9SyncErrorCodes.IsRetryable(code)`: `NET-FAILURE`, `SRV-ERROR`, `SRV-BUSY`, `TOKEN-EXPIRED`, `RSY-EPOCH`, `RSY-HORIZON`, `RSY-AUTH`,
+`LOCAL-BUSY`.
 
 ## Codes
 
@@ -51,4 +52,9 @@ classify failures by code, never by message (plan P-19).
 | `G9S-CON-DELETED` | row was deleted on the server | local row removed |
 | `G9S-CON-RESOLVER` | a custom resolver rejected the change | show |
 | `G9S-LOCAL-STORE` | local database failure or limit (e.g. > 63 persistent subscriptions) | report |
+| `G9S-LOCAL-CORRUPT` | SQLite reported the device database as damaged (`SQLITE_CORRUPT`, `SQLITE_NOTADB`) (ADR-0068) | final. Call `CheckIntegrityAsync`, then `ExportPendingChangesAsync` BEFORE anything else touches the file |
+| `G9S-LOCAL-DISK-FULL` | `SQLITE_FULL`: the device ran out of storage mid-apply; the slice rolled back (ADR-0068) | final. Tell the user to free space |
+| `G9S-LOCAL-BUSY` | `SQLITE_BUSY` / `SQLITE_LOCKED` past the busy timeout (ADR-0068) | engine retries |
+| `G9S-SRV-BUSY` | the server is at `MaxConcurrentPulls` / `MaxConcurrentPushes` and the wait ran out (ADR-0062) | engine retries with backoff |
+| `G9S-MODEL-TYPE-MISMATCH` | a client column's type differs from the server's and `FailOnTypeMismatch` is on (ADR-0061) | developer error: fix the mirror entity |
 | `G9S-UNKNOWN` | not classified | a bug: classify it |

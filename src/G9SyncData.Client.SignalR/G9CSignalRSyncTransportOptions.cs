@@ -33,6 +33,15 @@ public sealed class G9CSignalRSyncTransportOptions
     /// <summary>Builder hook, applied after the hub protocol (<see cref="Protocol" />) is registered.</summary>
     public Func<IHubConnectionBuilder, IHubConnectionBuilder>? ConfigureBuilder { get; set; }
 
+    /// <summary>
+    ///     Ask for SignalR's stateful reconnect (ADR-0069). Default false; the server has to allow it too
+    ///     (<c>G9CSyncSignalROptions.AllowStatefulReconnects</c>), otherwise it is simply not used. With it a short loss of the radio -
+    ///     a tunnel, a cell handover - resumes the SAME connection and the same pull stream, the messages in flight are replayed from
+    ///     both sides' buffers, and the engine never sees a failure. Without it the connection is rebuilt and the pull resumes from its
+    ///     last continuation, which is always correct and costs a reconnect, a hello and the page that was in flight.
+    /// </summary>
+    public bool StatefulReconnect { get; set; }
+
     /// <summary>How long one connect attempt may take before it counts as a network failure.</summary>
     public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(20);
 

@@ -21,6 +21,17 @@ public static class G9SyncErrorCodes
     public const string SchemaUpgradeRequired = "G9S-SCH-UPGRADE";
     public const string UnknownTable = "G9S-SCH-UNKNOWN-TABLE";
 
+    /// <summary>
+    ///     A column the client declares with a type the server's column does not have (ADR-0061). The column is not negotiated, so it
+    ///     syncs in NEITHER direction: downloaded rows arrive without it and uploads go up without it. Reported on every run; a run fails
+    ///     with it only when the engine is told to (<c>FailOnTypeMismatch</c>). Fix the client model - match the DATABASE type, not the
+    ///     shape of the value (a GUID stored in a varchar is a String column).
+    /// </summary>
+    public const string ModelTypeMismatch = "G9S-MODEL-TYPE-MISMATCH";
+
+    /// <summary>The server is at its limit of concurrent pulls or pushes (ADR-0062). Retry: the engine's backoff applies.</summary>
+    public const string ServerBusy = "G9S-SRV-BUSY";
+
     // Subscriptions
     public const string UnknownSubscription = "G9S-SUB-UNKNOWN";
     public const string InvalidParameters = "G9S-SUB-PARAM";
@@ -62,10 +73,22 @@ public static class G9SyncErrorCodes
     // Client-local
     public const string LocalStoreError = "G9S-LOCAL-STORE";
 
+    /// <summary>
+    ///     The device database is damaged or is not a database (ADR-0068). Retrying cannot help. The application should export what is
+    ///     still readable (<c>ExportPendingChangesAsync</c>) and rebuild the store from the server.
+    /// </summary>
+    public const string LocalStoreCorrupt = "G9S-LOCAL-CORRUPT";
+
+    /// <summary>The device ran out of storage while the store was writing. What was committed before is intact; free space and sync again.</summary>
+    public const string LocalStoreDiskFull = "G9S-LOCAL-DISK-FULL";
+
+    /// <summary>Another connection held the device database's write lock longer than the busy timeout. A later run can succeed.</summary>
+    public const string LocalStoreBusy = "G9S-LOCAL-BUSY";
+
     /// <summary>Anything not classified above — treat as a bug to classify.</summary>
     public const string Unknown = "G9S-UNKNOWN";
 
     /// <summary>True for failures a later attempt may succeed at without any change to data or code.</summary>
     public static bool IsRetryable(string code) =>
-        code is NetworkFailure or ServerError or TokenExpired or ResyncEpoch or ResyncHorizon or ResyncAuthChanged;
+        code is NetworkFailure or ServerError or ServerBusy or TokenExpired or ResyncEpoch or ResyncHorizon or ResyncAuthChanged or LocalStoreBusy;
 }

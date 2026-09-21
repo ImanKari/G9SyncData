@@ -1,7 +1,7 @@
 # 10 — Decisions (ADRs)
 
 Each record: **Context → Decision → Consequences**. Never edit a decision's substance after the fact; supersede it with a
-new record and mark the old one. Plan ids (`D-xx`, `Q-xx`) refer to `G9SyncData.md`.
+new record and mark the old one. Plan ids (`D-xx`, `Q-xx`) refer to [`plan/G9SyncData.md`](plan/G9SyncData.md).
 
 ---
 
@@ -1378,3 +1378,227 @@ already recorded, so it costs nothing and cannot drift from the report. The firs
 downloading, 18 s applying on a 449,758-row first pull - showed that such a run leaves the device idle for over half its duration,
 but that ALL of that idle falls before any row has been applied, so a consumer whose work depends on the applied rows has no
 overlap to win.
+
+## ADR-0058 — The apply says how it ran, and stops doing work that changes nothing
+
+**Status:** accepted (2026-09-21).
+
+**Context.** A run reported how LONG its apply took (ADR-0057) and nothing about HOW it ran. That mattered more than it sounds.
+The large-download fast path - triggers switched off for the transaction, plain indexes deferred - is worth 5.3x at 500,000 rows
+(12.5 s against 2.3 s, `benchmarks/results/sqlite-apply-experiments-2026-09.md`, experiment 1l against 1a), and ONE trigger the
+library does not own, anywhere in the database, silently keeps all of it off. A device upgraded from another sync library is
+exactly where such a trigger is left behind, and "Applying = 16 s" reads the same whether that is slow flash or a forgotten
+trigger. Four smaller costs sat in the same code:
+
+- an upsert rewrote a row whose incoming values were identical to what was stored - a delta that re-sends unchanged rows paid a
+  full row write, an index update and a change-feed entry for each;
+- index deferral applied only to an EMPTY table, and the obvious extension ("rebuild whenever the download is large") is wrong:
+  measured, dropping and rebuilding the indexes of a table that already holds rows is up to 2x SLOWER until the download is at
+  least as large as the table (experiment 2);
+- slices were a fixed size, so a large delta committed hundreds of small transactions;
+- the purge of old tombstones ran a full scan and a sort of `g9_rows` under the write lock after every run that applied a row.
+
+**Decision.**
+
+1. `G9CApplyReport.Diagnostics` (`G9CApplyDiagnostics`) reports, per run: transactions, how many had triggers off, the foreign
+   triggers that prevented it BY NAME, which indexes were deferred, why the others stayed live, rows and milliseconds per table,
+   index rebuild time. Logged as event 20112.
+2. The upsert is guarded - `ON CONFLICT DO UPDATE ... WHERE a IS NOT excluded.a OR ...` - and the row's metadata is rewritten only
+   when the row or its server version changed. `G9CApplyReport.UnchangedRows` counts what was skipped; `RowsApplied` names only
+   rows that changed.
+3. Deferral is decided per table by growth: indexes are dropped when the incoming rows are at least
+   `RebuildIndexesMinimumGrowth` (default 1.0) times the rows the table already holds. An empty table always qualifies.
+4. Slices start at `ApplySliceRows` and double after each commit up to `ApplySliceRowsMax` (default 32,000).
+5. After an apply of at least `MaintenanceAfterRows` rows the store runs `PRAGMA optimize` and a `wal_checkpoint(TRUNCATE)` with a
+   250 ms busy timeout; a checkpoint that cannot get the lock is skipped, never waited for.
+6. A partial index `g9_rows_deleted (local_seq) WHERE deleted = 1` serves the tombstone purge.
+
+**Consequences.** A slow apply can be diagnosed from one log line. An application MUST NOT treat "the server sent this row" as
+"this row changed": an unchanged row raises no `RowsApplied` entry and no change-feed entry, which is the point. The growth rule
+means a second large site downloaded into a table that already holds a larger one keeps live indexes - slower than an empty-table
+load, faster than the rebuild would have been.
+
+## ADR-0059 — The change feed publishes the floor below which it is no longer complete
+
+**Status:** accepted (2026-09-21).
+
+**Context.** The change feed (ADR-0055) keeps only the newest `KeepDeletedFeedEntries` deletions; older tombstones are purged. A
+consumer holding a watermark older than the oldest surviving tombstone has therefore missed deletions, and nothing told it so. For
+a map this is a feature that stays drawn after its row was deleted - and when another row was inserted in the same window even a
+row-count comparison cannot see it.
+
+**Decision.** The purge records the highest sequence it has ever removed in `g9_meta.feed_floor_seq`, in the SAME transaction as
+the delete, and only ever raises it. `G9CSyncEngine.GetChangeFeedFloorAsync()` returns it (0 = nothing was ever purged). The
+contract for a consumer: a watermark at or above the floor has seen every deletion; one below it must rebuild from the rows instead
+of reading the feed forward.
+
+**Consequences.** A consumer can be exactly right instead of probably right. The floor moves with `KeepDeletedFeedEntries`: a
+smaller value saves space and makes rebuilds more frequent for consumers that read rarely.
+
+## ADR-0060 — A staged pull is kept per subscription set, and its cursor is checked at the end, not hashed at the start
+
+**Status:** accepted (2026-09-21).
+
+**Context.** A half-downloaded pull is staged so an interrupted run can resume (ADR-0032). The store kept ONE stage: beginning a
+pull for any other subscription set discarded it. An application that syncs a small reference scope between two attempts at a large
+site scope - which is what a foreground timer does - therefore threw the large download away every time, and "resume" resumed
+nothing.
+
+The first design for fixing it put the subscription cursors into the stage's generation hash, so a stage could only be resumed from
+exactly the state it was planned against. That is wrong, and was reverted before it shipped: a cursor is a database snapshot and
+moves on practically every pull, and scopes share dependencies (a site scope depends on the site list), so the hash would have
+changed between every two runs and no stage would ever have matched.
+
+**Decision.** A stage is kept per GENERATION, where the generation names the subscription set and the model - not the cursors.
+Beginning a pull discards only the stage of the same generation. The cursors the plan was made FROM are stored with the stage
+(`G9CStagedPull.PlannedFromCursors`, column `from_cursors_json`), and the final slice advances a subscription's cursor only if it
+still holds the value the plan started from (`UPDATE ... WHERE cursor IS $from`). Stages are pruned by age and by total size
+(`StagedPullsMaxBytes`, default 64 MiB), never the one being resumed.
+
+**Consequences.** Interleaved scopes no longer destroy each other's downloads. A stage whose starting cursor has since moved still
+applies its rows - they are upserts, and the newer pull's rows win by server version - but cannot move the cursor backwards over
+what the newer pull established. `DiscardStagedPullAsync` discards every stage: an operator unsticking a device means all of them.
+
+## ADR-0061 — A column whose client type disagrees with the server's is reported, and can fail the run
+
+**Status:** accepted (2026-09-21).
+
+**Context.** At hello the server intersects the client's declared columns with its own. A column whose wire type differs was
+DROPPED from the negotiated set without a word, so it synced in neither direction and the only symptom was stale data in one
+field, discovered weeks later.
+
+**Decision.** `G9DtNegotiatedTable.TypeMismatchColumns` carries every dropped column with both types. The client logs them once
+per engine (event 20022), returns them on `G9CSyncRunResult.ModelProblems`, and - with `FailOnTypeMismatch = true` - fails the run
+with `G9S-MODEL-TYPE-MISMATCH`. The server logs the same at Debug (event 21006).
+
+**Consequences.** Default behaviour is unchanged (the column is still dropped) so an old client keeps working against a new server.
+The intended use is `FailOnTypeMismatch = true` in Debug builds: the mistake is a build defect and the cheapest place to catch it is
+the developer's first sync.
+
+## ADR-0062 — The server admits a bounded number of pulls and pushes, before it buffers anything
+
+**Status:** accepted (2026-09-21).
+
+**Context.** Every pull holds a database connection and a page of rows for as long as it streams; every push holds a connection, a
+transaction and the decoded upload. Nothing bounded how many ran at once. A fleet reconnecting after an outage could exhaust the
+connection pool - on a shared PostgreSQL, everyone's - and a push was fully buffered BEFORE the caller was even authorised.
+
+**Decision.** `MaxConcurrentPulls` (64) and `MaxConcurrentPushes` (32) are semaphores; a request waits `AdmissionWait` (5 s) and is
+then refused with `G9S-SRV-BUSY`, which is retryable and takes the engine's normal backoff. Pull, reconcile and row fetch share the
+pull slots. A push resolves its auth context and takes its slot BEFORE reading the upload. Refusals are counted
+(`g9sync.server.refused`) and logged (event 21009).
+
+**Consequences.** Overload degrades to waiting instead of failing unpredictably. Hosts on a shared database should set both limits
+well below their share of `max_connections`.
+
+## ADR-0063 — A push that is refused for too many rejections is split, not repeated
+
+**Status:** accepted (2026-09-21).
+
+**Context.** A push with more than `MaxRejectionsPerPush` rejected rows is rolled back whole. The client then retried the identical
+batch, which failed identically, for ever: one bad import and the device never uploaded anything again - including the good rows
+queued behind it.
+
+**Decision.** On that refusal the engine halves its batch size and retries, down to a single row; it grows back after a success
+(event 20023). At one row the rejection is recorded against that row like any other and the queue moves on.
+
+**Consequences.** A poisoned batch costs a logarithmic number of extra round trips once, instead of blocking uploads permanently.
+The server-side rule is unchanged.
+
+## ADR-0064 — Pull tokens accept previous signing keys, and a host can require a configured key
+
+**Status:** accepted (2026-09-21).
+
+**Context.** Pull tokens are HMAC-signed. With no key configured the server generates one per process - correct for development,
+and in production it means every restart and every deploy invalidates the pulls in flight; with a configured key, ROTATING it did
+the same.
+
+**Decision.** `PreviousTokenSigningKeys` are accepted for verification and never used to sign; verification checks every known key
+without an early exit. `RequireTokenSigningKey` makes the server refuse to start without a key. Startup logs which mode it is in
+(21007 ephemeral, 21008 configured).
+
+**Consequences.** Keys can be rotated with no discarded downloads. Resuming a plan made under an UNKNOWN key is still refused and
+re-planned: accepting part of such a plan would need the protocol to say which rows it had covered, and that redesign is not
+justified by a case multi-key acceptance already removes.
+
+## ADR-0065 — Failed effects are visible, countable and can be requeued
+
+**Status:** accepted (2026-09-21).
+
+**Context.** The effect outbox (ADR-0052) retries a failed effect `EffectMaxAttempts` times and then marks it failed. After that it
+was invisible: no metric, no health signal, no way to retry it once the handler was fixed short of editing the table.
+
+**Decision.** `G9CSyncServerEngine.GetEffectQueueStatusAsync`, `GetFailedEffectsAsync` and `RequeueFailedEffectsAsync`; gauges
+`g9sync.server.effects.pending` / `.failed` and a delivery counter; `G9CSyncEffectsHealthCheck` (Unhealthy while anything has failed
+for good, Degraded while the oldest pending effect is older than a threshold), registered with
+`AddHealthChecks().AddG9SyncEffects()`.
+
+**Consequences.** Hosts should NOT tag the check as a readiness probe: a poisoned effect must alert someone, not take the sync
+server out of rotation.
+
+## ADR-0066 — A reconciliation is bounded in memory, and a very large one becomes a snapshot
+
+**Status:** accepted (2026-09-21).
+
+**Context.** Reconciliation fetched every differing row, held every frame in one list, and applied them in one transaction. After an
+epoch change or a long absence "the difference" is most of the subscription: hundreds of thousands of rows decoded and held at once
+on a device with a few hundred megabytes to spare.
+
+**Decision.** Rows are fetched and applied in groups of `ReconcileApplyRows` (20,000). When the difference reaches
+`ReconcileSnapshotThreshold` (100,000) the reconciliation applies only memberships and move-outs, clears the subscription's cursor
+and lets the ordinary pull take a snapshot (event 20024) - the path that already has staging, resume and the apply fast path. Decoded
+frames are bounded by `MaxDecodedFrameBytes` on this path too.
+
+**Consequences.** Peak memory of a reconcile is bounded by the group size. A very large repair costs one extra planning round trip
+and gains resumability.
+
+## ADR-0067 — A copied database is recognised and given a new identity
+
+**Status:** accepted (2026-09-21).
+
+**Context.** The client id and the push batch counter live inside the SQLite file. A file restored from a backup, carried over by a
+device-to-device transfer or copied by a tester therefore shares them with the history it was copied from. The server de-duplicates
+pushes by (client id, batch id), so it answers one history's push with the OTHER's stored result: an edit is marked as sent that
+the server never received. Silent data loss, from an ordinary phone migration.
+
+**Decision.** `IncarnationMarkerPath` names a file the application keeps where the platform does NOT back up or transfer. The store
+writes a random incarnation to both the database and the marker. On open: no value in the database - adopt it; both agree - nothing
+to do; they disagree or the marker is missing - the database is a copy: mint a new client id, reset the batch counter, release the
+in-flight batch so its rows are pushed again under the new identity, and drop staged pulls (events 20105, 20106).
+`ReplicaIdentityWasReplaced` tells the application it happened. Pending rows are kept, always.
+
+**Consequences.** Off when the path is null, which is the previous behaviour. Choosing the path is the application's job because
+only it knows the platform: `NoBackupFilesDir` on Android, a file flagged `NSURLIsExcludedFromBackupKey` on iOS. A marker deleted by
+a cache cleaner costs one identity change and re-pushes of idempotent upserts - safe, by construction, in the direction of "push
+again" rather than "assume sent".
+
+## ADR-0068 — A damaged local database is classified, checked and exported - never repaired by the library
+
+**Status:** accepted (2026-09-21).
+
+**Context.** `SQLITE_CORRUPT`, `SQLITE_NOTADB` and `SQLITE_FULL` reached the application as a generic failure and were retried like
+a network blip. A full disk and a damaged file need opposite responses from a timeout, and a damaged file may hold the only copy
+of unsent work.
+
+**Decision.** Store exceptions implement `IG9SyncLocalStoreFailure`; the engine maps them to `G9S-LOCAL-CORRUPT`,
+`G9S-LOCAL-DISK-FULL` (both final) and `G9S-LOCAL-BUSY` (retryable). `G9CSqliteSyncStore.CheckIntegrityAsync()` runs
+`quick_check` and returns problems instead of throwing. `ExportPendingChangesAsync(path)` writes every unsent row as JSON lines,
+best effort: a row on a damaged page is listed with its key and no values (events 20107, 20108).
+
+**Consequences.** The library never deletes, truncates or rebuilds a database. What happens to a damaged file is the application's
+decision, made after the export.
+
+## ADR-0069 — Stateful reconnect is available and off by default
+
+**Status:** accepted (2026-09-21).
+
+**Context.** SignalR's stateful reconnect lets a connection that dropped for a few seconds resume without losing buffered messages.
+Sync does not NEED it - every stream is resumable at the protocol level (ADR-0032) - but on a flaky mobile link it turns many
+"drop, reconnect, re-plan" cycles into nothing at all.
+
+**Decision.** `G9CSignalRSyncTransportOptions.StatefulReconnect` on the client and `AllowStatefulReconnects` /
+`StatefulReconnectBufferBytes` (4 MiB) on the server. Both must opt in. Also on the server: `CloseOnAuthenticationExpiration`, and
+`ConfigureConnection` for anything else the host needs on the endpoint.
+
+**Consequences.** Off by default because it costs server memory per connection (the buffer) and needs WebSockets end to end; a
+proxy that downgrades to long polling silently disables it. Enable it after measuring reconnect frequency, not before.

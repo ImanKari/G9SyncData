@@ -34,6 +34,15 @@ public sealed class G9CSqliteSyncStoreOptions
 
     public G9ESqliteDecimalStorage DecimalStorage { get; set; } = G9ESqliteDecimalStorage.Real;
 
+    /// <summary>
+    ///     A file OUTSIDE the platform's backup set that records which installation this database belongs to (ADR-0067): on Android a
+    ///     path under <c>Context.NoBackupFilesDir</c>, on iOS a file with <c>NSURLIsExcludedFromBackupKey</c>. One per database file. When
+    ///     the database names a different incarnation than the marker, it was restored from a backup or copied from another device, and
+    ///     the store gives it a new client id so two histories never share one identity (pending rows are kept and upload normally).
+    ///     Null (default) turns the check off.
+    /// </summary>
+    public string? IncarnationMarkerPath { get; set; }
+
     /// <summary>How long a writer waits for the database lock (the app may be writing).</summary>
     public int BusyTimeoutMilliseconds { get; set; } = 30_000;
 
@@ -44,6 +53,12 @@ public sealed class G9CSqliteSyncStoreOptions
     ///     changes.
     /// </summary>
     public Storage.G9CRevocationPolicy Revocation { get; set; } = Storage.G9CRevocationPolicy.Default;
+
+    /// <summary>
+    ///     The largest decoded body the store accepts from one frame it applies (ADR-0051, ADR-0066): the length comes from the frame's
+    ///     own header and is what gets allocated. Default 64 MiB.
+    /// </summary>
+    public int MaxDecodedFrameBytes { get; set; } = 64 * 1024 * 1024;
 
     /// <summary>Changed keys reported per table in an apply report (RowsApplied event).</summary>
     public int MaxChangedKeysPerTable { get; set; } = 5_000;
@@ -64,6 +79,19 @@ public sealed class G9CSqliteSyncStoreOptions
     public int RebuildIndexesAfterRows { get; set; } = 20_000;
 
     /// <summary>
+    ///     For a table that ALREADY holds rows: drop and rebuild its plain indexes anyway when the snapshot brings at least this many
+    ///     times the rows already there (and at least <see cref="RebuildIndexesAfterRows" />). 0 = never for a table that is not empty.
+    ///     Default 1 (ADR-0058).
+    /// </summary>
+    /// <remarks>
+    ///     Measured with 500,000 rows present: live index maintenance won at 5 %, 10 % and 30 % incoming rows - by about 2x, because a
+    ///     rebuild sorts the rows that were already there as well - and the rebuild only came out ahead (4.5 s against 5.9 s) once the
+    ///     incoming load was as large as the table. A device's flash favours the rebuild more than the desktop these numbers are from,
+    ///     so 1 is the conservative end; do not lower it without a measurement on the device.
+    /// </remarks>
+    public double RebuildIndexesMinimumGrowth { get; set; } = 1d;
+
+    /// <summary>
     ///     Rows per committed slice of a staged pull, or 0 to apply the whole pull in one transaction (the default).
     /// </summary>
     /// <remarks>
@@ -78,6 +106,29 @@ public sealed class G9CSqliteSyncStoreOptions
     ///     syncs are therefore somewhat slower than the atomic path; deltas are unaffected.</para>
     /// </remarks>
     public int ApplySliceRows { get; set; }
+
+    /// <summary>
+    ///     The largest slice a sliced apply grows to: each slice is twice the one before, from <see cref="ApplySliceRows" /> up to
+    ///     this. 0 keeps every slice at <see cref="ApplySliceRows" />. Default 32,000 (ADR-0058).
+    /// </summary>
+    /// <remarks>
+    ///     A commit is not free: 500,000 rows in 2,000-row commits measured 2.3x slower than one transaction with the same live
+    ///     indexes, and 20,000-row commits 1.5x. The first slices are what the application is waiting to see, so they stay small; the
+    ///     rows behind them arrive in ever larger commits, and a 100,000-row delta costs a handful of commits instead of fifty.
+    /// </remarks>
+    public int ApplySliceRowsMax { get; set; } = 32_000;
+
+    /// <summary>
+    ///     After an apply of at least this many rows the store runs <c>PRAGMA optimize</c> (so SQLite's planner has statistics for the
+    ///     tables that just changed size) and attempts one <c>wal_checkpoint(TRUNCATE)</c>. Both are best effort: a failure is logged
+    ///     and ignored. 0 turns both off. Default 10,000 (ADR-0058).
+    /// </summary>
+    /// <remarks>
+    ///     The checkpoint matters when the application reads while a sliced apply commits: measured, a reader that is always active
+    ///     starves the automatic checkpoint and the WAL grew from 12 MB to 492 MB. The attempt uses a short busy timeout and gives up
+    ///     rather than wait for a reader.
+    /// </remarks>
+    public int MaintenanceAfterRows { get; set; } = 10_000;
 
     /// <summary>
     ///     In WAL mode, transactions that write only server-derived data (staged download pages and applying them) commit with

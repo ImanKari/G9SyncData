@@ -133,6 +133,69 @@ public sealed class StagedPullSafetyTests(ITestOutputHelper output)
         Assert.Equal(5, result.Applied);
     }
 
+    [PostgresFact]
+    public async Task An_interrupted_download_survives_a_sync_of_a_different_subscription_set_and_is_resumed()
+    {
+        // ADR-0060. An application that syncs one scope per run used to lose a half-downloaded site to the very next sync of anything
+        // else: that run saw "a stage of another generation" and deleted it.
+        await using var harness = await SyncHarness.CreateAsync(output);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 20);
+        await using var client = await harness.CreateClientAsync();
+        await client.Engine.SubscribeAsync("sites");
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+        await client.SyncOkAsync();
+
+        await harness.InsertPotsAsync(site, 5, "R");
+        await harness.WaitForCaptureAsync();
+        await StageFullyAsync(client, ["site-pots"]);
+
+        // Something else syncs in between - and changes, so its cursor really moves.
+        await harness.InsertSiteAsync(Guid.NewGuid(), "South");
+        await harness.WaitForCaptureAsync();
+        var between = await client.Engine.SyncAsync(new G9CSyncRequest { Subscriptions = ["sites"] });
+        Assert.True(between.IsSuccess, between.Error?.Message);
+        Assert.Equal(20, await client.CountAsync("Pot"));
+        Assert.Equal(2, await client.CountAsync("Site"));
+        var sitesCursor = await CursorAsync(client, "sites");
+
+        var plans = client.InMemory.CallCount(G9ETransportOperation.PlanPull);
+        var pulls = client.InMemory.CallCount(G9ETransportOperation.Pull);
+        var resumed = await client.Engine.SyncAsync(new G9CSyncRequest { Subscriptions = ["site-pots"] });
+
+        Assert.True(resumed.IsSuccess, resumed.Error?.Message);
+        Assert.Equal(25, await client.CountAsync("Pot"));
+        Assert.Equal(plans, client.InMemory.CallCount(G9ETransportOperation.PlanPull));
+        Assert.Equal(pulls, client.InMemory.CallCount(G9ETransportOperation.Pull));
+
+        // A cursor another run moved on in the meantime is not set back by the older plan.
+        Assert.Equal(sitesCursor, await CursorAsync(client, "sites"));
+        Assert.Equal(2, await client.CountAsync("Site"));
+    }
+
+    [PostgresFact]
+    public async Task Discarding_staged_pulls_removes_every_stage_not_only_the_newest()
+    {
+        await using var harness = await SyncHarness.CreateAsync(output);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 3);
+        await using var client = await harness.CreateClientAsync();
+        await client.Engine.SubscribeAsync("sites");
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+
+        await StageFullyAsync(client, ["sites"]);
+        await StageFullyAsync(client, ["site-pots"]);
+
+        Assert.True(await client.Engine.DiscardStagedPullAsync());
+        Assert.Null(await client.Store.GetStagedPullAsync(CancellationToken.None));
+        Assert.False(await client.Engine.DiscardStagedPullAsync());
+    }
+
+    private static async Task<string?> CursorAsync(SyncClient client, string name) =>
+        (await client.Store.GetSubscriptionsAsync(CancellationToken.None)).Single(s => s.Name == name).Cursor;
+
     private static async Task<string?> AuthHashAsync(SyncClient client) =>
         (await client.Store.GetSubscriptionsAsync(CancellationToken.None)).Single(s => s.Name == "allowed-pots").AuthHash;
 
@@ -140,11 +203,12 @@ public sealed class StagedPullSafetyTests(ITestOutputHelper output)
     ///     Runs a real sync that is killed the instant the download finishes and the apply is about to start - the process death the
     ///     staging design exists for. What is left behind is a complete, unapplied stage planned by the engine itself.
     /// </summary>
-    private static async Task StageFullyAsync(SyncClient client)
+    private static async Task StageFullyAsync(SyncClient client, IReadOnlyList<string>? subscriptions = null)
     {
         using var kill = new CancellationTokenSource();
         var request = new G9CSyncRequest
         {
+            Subscriptions = subscriptions,
             CancellationToken = kill.Token,
             Progress = new G9CInlineProgress<G9DtSyncProgress>(p =>
             {

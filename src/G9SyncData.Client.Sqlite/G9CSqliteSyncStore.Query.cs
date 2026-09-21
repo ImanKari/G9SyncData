@@ -19,6 +19,78 @@ public sealed partial class G9CSqliteSyncStore
         return runId is null ? null : ReadStagedRun(connection, runId);
     }
 
+    public async Task<G9CStagedPull?> GetStagedPullAsync(string generation, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        var runId = Scalar(connection, null, "SELECT run_id FROM g9_stage_runs WHERE generation = $g ORDER BY created_utc DESC LIMIT 1", ("$g", generation)) as string;
+        return runId is null ? null : ReadStagedRun(connection, runId);
+    }
+
+    public async Task<int> PruneStagedPullsAsync(DateTime olderThanUtc, long maxBytes, string? keepGeneration, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var transaction = connection.BeginTransaction(deferred: false);
+            var doomed = new List<string>();
+            using (var command = Command(connection, transaction, "SELECT run_id FROM g9_stage_runs WHERE created_utc < $c"))
+            {
+                command.Parameters.AddWithValue("$c", ToUnixMs(olderThanUtc));
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) doomed.Add(reader.GetString(0));
+            }
+
+            // The byte cap is for the stages nobody is about to resume: newest first, and everything past the cap goes. The generation
+            // being resumed never counts and never goes - a first sync larger than the cap has to stay resumable (ADR-0060).
+            long kept = 0;
+            using (var command = Command(connection, transaction,
+                       "SELECT r.run_id, (SELECT coalesce(sum(length(payload)), 0) FROM g9_stage s WHERE s.run_id = r.run_id) FROM g9_stage_runs r " +
+                       "WHERE r.created_utc >= $c AND (r.generation IS NULL OR r.generation <> $g) ORDER BY r.created_utc DESC"))
+            {
+                command.Parameters.AddWithValue("$c", ToUnixMs(olderThanUtc));
+                command.Parameters.AddWithValue("$g", keepGeneration ?? string.Empty);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    kept += reader.GetInt64(1);
+                    if (kept > Math.Max(0, maxBytes)) doomed.Add(reader.GetString(0));
+                }
+            }
+
+            foreach (var runId in doomed)
+            {
+                Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
+            }
+
+            transaction.Commit();
+            return doomed.Count;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    public async Task<int> DiscardAllStagedPullsAsync(CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var transaction = connection.BeginTransaction(deferred: false);
+            var count = Convert.ToInt32(Scalar(connection, transaction, "SELECT count(*) FROM g9_stage_runs"), CultureInfo.InvariantCulture);
+            Exec(connection, transaction, "DELETE FROM g9_stage; DELETE FROM g9_stage_runs;");
+            transaction.Commit();
+            return count;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
     public async Task BeginStagedPullAsync(G9CStagedPull pull, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(pull);
@@ -27,16 +99,25 @@ public sealed partial class G9CSqliteSyncStore
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using var transaction = connection.BeginTransaction(deferred: false);
-            Exec(connection, transaction, "DELETE FROM g9_stage; DELETE FROM g9_stage_runs;");
+
+            // Only the stage this one replaces goes: the same generation, or - for a caller that stamps none - the unstamped ones. A
+            // stage of another generation is another subscription set's interrupted download, and the app that syncs one scope per run
+            // would otherwise throw a half-downloaded site away the moment any other scope synced (ADR-0060).
+            Exec(connection, transaction,
+                "DELETE FROM g9_stage WHERE run_id IN (SELECT run_id FROM g9_stage_runs WHERE generation IS $g); DELETE FROM g9_stage_runs WHERE generation IS $g",
+                ("$g", pull.Generation));
 
             // Read inside the transaction that inserts the run: rows written after this point are newer than anything the stage will
             // carry, and the apply must not roll them back (ADR-0046).
             var stageSequence = Convert.ToInt64(Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
             Exec(connection, transaction,
-                "INSERT INTO g9_stage_runs (run_id, plan_json, backfills_json, created_utc, complete, generation, stage_seq) VALUES ($r, $p, $b, $c, 0, $g, $s)",
+                "INSERT INTO g9_stage_runs (run_id, plan_json, backfills_json, created_utc, complete, generation, stage_seq, from_cursors_json) " +
+                "VALUES ($r, $p, $b, $c, 0, $g, $s, $f)",
                 ("$r", pull.RunId), ("$p", JsonSerializer.Serialize(pull.Plan, G9SyncJsonContext.Default.G9DtPullPlan)),
                 ("$b", JsonSerializer.Serialize(pull.Backfills.ToList(), G9SyncJsonContext.Default.ListG9DtBackfillRequest)), ("$c", ToUnixMs(pull.CreatedUtc)),
-                ("$g", pull.Generation), ("$s", stageSequence));
+                ("$g", pull.Generation), ("$s", stageSequence),
+                ("$f", JsonSerializer.Serialize(pull.PlannedFromCursors.ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.Ordinal),
+                    G9SyncClientJsonContext.Default.DictionaryStringString)));
             transaction.Commit();
         }
         finally
@@ -134,12 +215,17 @@ public sealed partial class G9CSqliteSyncStore
 
     private static G9CStagedPull? ReadStagedRun(SqliteConnection connection, string runId)
     {
-        using var command = Command(connection, null, "SELECT plan_json, backfills_json, created_utc, generation, stage_seq FROM g9_stage_runs WHERE run_id = $r");
+        using var command = Command(connection, null,
+            "SELECT plan_json, backfills_json, created_utc, generation, stage_seq, from_cursors_json FROM g9_stage_runs WHERE run_id = $r");
         command.Parameters.AddWithValue("$r", runId);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
         return new G9CStagedPull
         {
+            PlannedFromCursors = reader.IsDBNull(5)
+                ? new Dictionary<string, string?>(StringComparer.Ordinal)
+                : new Dictionary<string, string?>(
+                    JsonSerializer.Deserialize(reader.GetString(5), G9SyncClientJsonContext.Default.DictionaryStringString) ?? [], StringComparer.Ordinal)!,
             RunId = runId,
             Plan = JsonSerializer.Deserialize(reader.GetString(0), G9SyncJsonContext.Default.G9DtPullPlan) ?? new G9DtPullPlan(),
             Backfills = reader.IsDBNull(1) ? [] : JsonSerializer.Deserialize(reader.GetString(1), G9SyncJsonContext.Default.ListG9DtBackfillRequest) ?? [],
@@ -557,14 +643,47 @@ public sealed partial class G9CSqliteSyncStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            return Exec(connection, null,
-                "DELETE FROM g9_rows WHERE deleted = 1 AND dirty = 0 AND local_seq < (SELECT local_seq FROM g9_rows WHERE deleted = 1 ORDER BY local_seq DESC LIMIT 1 OFFSET $k)",
-                ("$k", Math.Max(0, keep)));
+
+            // Every read here is served by g9_rows_deleted (local_seq) WHERE deleted = 1 - a partial index only tombstones touch.
+            // Before it existed this was a full scan plus a sort for the threshold and a second full scan for the DELETE, under the
+            // write lock, after EVERY run that applied a row (ADR-0058).
+            if (Scalar(connection, null, "SELECT local_seq FROM g9_rows WHERE deleted = 1 ORDER BY local_seq DESC LIMIT 1 OFFSET $k", ("$k", Math.Max(0, keep)))
+                is not long threshold)
+            {
+                return 0;
+            }
+
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            // The floor is the highest sequence this store has ever dropped from the feed (ADR-0059). It moves in the same
+            // transaction as the purge, so a consumer can never read a floor that is behind what was actually removed.
+            if (Scalar(connection, transaction, "SELECT max(local_seq) FROM g9_rows WHERE deleted = 1 AND dirty = 0 AND local_seq < $x", ("$x", threshold)) is not long purgedUpTo)
+            {
+                return 0;
+            }
+
+            var purged = Exec(connection, transaction, "DELETE FROM g9_rows WHERE deleted = 1 AND dirty = 0 AND local_seq < $x", ("$x", threshold));
+            Exec(connection, transaction,
+                "INSERT INTO g9_meta (key, value) VALUES ('feed_floor_seq', $f) ON CONFLICT(key) DO UPDATE SET value = excluded.value " +
+                "WHERE CAST(value AS INTEGER) < CAST(excluded.value AS INTEGER)",
+                ("$f", Invariant(purgedUpTo)));
+            transaction.Commit();
+            return purged;
         }
         finally
         {
             _writeLock.Release();
         }
+    }
+
+    public async Task<long> GetChangeFeedFloorAsync(CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        return Scalar(connection, null, "SELECT value FROM g9_meta WHERE key = 'feed_floor_seq'") is string text
+               && long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var floor)
+            ? floor
+            : 0;
     }
 
     internal static string Invariant(long value) => value.ToString(CultureInfo.InvariantCulture);

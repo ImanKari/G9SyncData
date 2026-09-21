@@ -46,7 +46,7 @@
       computes nothing: a re-run without a bump republishes nothing, and the pipeline's skip-duplicate flag makes
       that a no-op rather than a failure.
     -->
-    <G9SyncDataVersion>1.0.0</G9SyncDataVersion>
+    <G9SyncDataVersion>1.1.0</G9SyncDataVersion>
     <Version>$(G9SyncDataVersion)</Version>
 
     <Authors>Iman Kari</Authors>

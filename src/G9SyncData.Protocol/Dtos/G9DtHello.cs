@@ -38,8 +38,24 @@ public sealed class G9DtNegotiatedTable
     /// <summary>Columns the client asked for that the server does not have.</summary>
     public List<string> MissingColumns { get; set; } = [];
 
+    /// <summary>
+    ///     Columns both sides have under the same name but with DIFFERENT types (ADR-0061). Not negotiated, exactly like a missing column -
+    ///     but a missing column is a newer client against an older server, while this is a wrong client model, and until it had a list of
+    ///     its own it was reported as the former and noticed by nobody. A server older than this list still files them under
+    ///     <see cref="MissingColumns" />.
+    /// </summary>
+    public List<G9DtColumnTypeMismatch> TypeMismatchColumns { get; set; } = [];
+
     public G9ESyncDirection Direction { get; set; }
     public G9EConflictPolicy ConflictPolicy { get; set; }
+}
+
+/// <summary>One column whose declared type differs between the client model and the server model.</summary>
+public sealed class G9DtColumnTypeMismatch
+{
+    public string Name { get; set; } = string.Empty;
+    public G9ESyncColumnType ClientType { get; set; }
+    public G9ESyncColumnType ServerType { get; set; }
 }
 
 public sealed class G9DtParameterDefinition

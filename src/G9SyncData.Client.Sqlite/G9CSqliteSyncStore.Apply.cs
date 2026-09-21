@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using G9SyncData.Client.Sqlite.Internal;
@@ -45,9 +46,15 @@ public sealed partial class G9CSqliteSyncStore
             // FIRST pull is a snapshot of everything, nobody is watching individual rows land, and paying per-row index
             // maintenance across it is the single most expensive thing the apply can do. A delta is the opposite - small, and
             // the one the application actually wants to watch. Let the size of the snapshot decide.
-            var defersIndexes = _options.RebuildIndexesAfterRows > 0
+            //
+            // The decision is about the SNAPSHOT, not about whether its tables happen to be empty (ADR-0058). A large snapshot
+            // landing beside rows that are already there - a second site in tables the first one filled - stays in one
+            // transaction as well: measured on 500,000 rows, 2,000-row commits cost 2.3x over a single transaction with the same
+            // live indexes, and nothing is waiting to watch a first load row by row. Which of its tables then drop their indexes
+            // is decided per table, in DeferIndexes.
+            var largeSnapshot = _options.RebuildIndexesAfterRows > 0
                                 && snapshotRows.Values.Any(rows => rows >= _options.RebuildIndexesAfterRows);
-            var progressive = sliceRows > 0 && sequences.Count > 1 && !defersIndexes;
+            var progressive = sliceRows > 0 && sequences.Count > 1 && !largeSnapshot;
 
             // Read ONCE, before any slice commits. A row an earlier slice applied carries a local_seq past the stage sequence, so
             // recomputing this per slice would make the run protect its own work from itself and silently drop later frames for
@@ -57,6 +64,11 @@ public sealed partial class G9CSqliteSyncStore
             var total = new G9CApplyReport();
             long appliedTotal = 0;
             var index = 0;
+            var started = Stopwatch.GetTimestamp();
+
+            // The first slices are the ones the application is waiting to see, so they stay small; each later one is twice the one
+            // before, up to the cap. A commit is not free, and a large delta should not pay for fifty of them (ADR-0058).
+            var sliceBudget = (long)sliceRows;
 
             // do/while, not while: a pull can carry no payload chunks at all (an empty delta, or one whose only chunk is the final
             // marker), and that run still has to write its cursors and clear its stage - exactly once.
@@ -72,13 +84,15 @@ public sealed partial class G9CSqliteSyncStore
 
                     // A chunk is the unit: rows are only counted once the slice is read, so this closes the slice at the first
                     // chunk boundary past the budget rather than splitting a frame.
-                    if (StagedRowCount(connection, runId, slice) >= sliceRows && index + 1 < sequences.Count)
+                    if (StagedRowCount(connection, runId, slice) >= sliceBudget && index + 1 < sequences.Count)
                     {
                         index++;
                         final = false;
                         break;
                     }
                 }
+
+                if (_options.ApplySliceRowsMax > sliceBudget) sliceBudget = Math.Min(_options.ApplySliceRowsMax, sliceBudget * 2);
 
                 using var transaction = connection.BeginTransaction(deferred: false);
 
@@ -115,11 +129,26 @@ public sealed partial class G9CSqliteSyncStore
                     // Cursors move only here. That is what makes an interrupted progressive pull safe: the rows it did apply are
                     // real and readable, the cursor still points before them, and the next run pulls the same range and upserts
                     // over them. A partial pull converges; it never leaves the device believing it is further ahead than it is.
+                    //
+                    // A cursor only moves when it is still the one this plan started from (ADR-0060). Stages are kept per subscription
+                    // set now, so between planning and applying another run may have pulled one of these subscriptions - a dependency
+                    // every site shares, typically - and moved its cursor PAST this plan's. Its rows are safe either way (they carry a
+                    // local_seq beyond the stage sequence, so the frames above skipped them); setting the cursor back would only make
+                    // the next pull fetch that range again. "IS", because a first pull plans from a NULL cursor.
                     foreach (var cursor in staged.Plan.Cursors)
                     {
-                        Exec(connection, transaction,
-                            "UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, last_success_utc = $now WHERE key = $k",
-                            ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key));
+                        const string update = "UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, " +
+                                              "last_success_utc = $now WHERE key = $k";
+                        if (staged.PlannedFromCursors.TryGetValue(cursor.Key, out var plannedFrom))
+                        {
+                            Exec(connection, transaction, update + " AND cursor IS $from",
+                                ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key), ("$from", plannedFrom));
+                        }
+                        else
+                        {
+                            Exec(connection, transaction, update,
+                                ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key));
+                        }
                     }
 
                     foreach (var backfill in staged.Backfills)
@@ -150,11 +179,46 @@ public sealed partial class G9CSqliteSyncStore
             }
             while (index < sequences.Count);
 
+            total.Diagnostics.ElapsedMs = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            if (total.Diagnostics.Transactions > 0 && appliedTotal > 0) LogApplyDiagnostics(_logger, appliedTotal, total.Diagnostics.ToString());
+            MaintainAfterApply(connection, appliedTotal);
             return total;
         }
         finally
         {
             _writeLock.Release();
+        }
+    }
+
+    /// <summary>
+    ///     Best-effort housekeeping after a large apply, outside any transaction (<see cref="G9CSqliteSyncStoreOptions.MaintenanceAfterRows" />):
+    ///     planner statistics for tables that just changed size, and one attempt to fold the WAL back into the database. Neither may
+    ///     fail the run, and neither may wait: the checkpoint gives up after a quarter of a second rather than queue behind a reader.
+    /// </summary>
+    private void MaintainAfterApply(SqliteConnection connection, long appliedRows)
+    {
+        if (_options.MaintenanceAfterRows <= 0 || appliedRows < _options.MaintenanceAfterRows) return;
+        try
+        {
+            Exec(connection, null, "PRAGMA analysis_limit = 1000; PRAGMA optimize;");
+            if (!string.Equals(Scalar(connection, null, "PRAGMA journal_mode") as string, "wal", StringComparison.OrdinalIgnoreCase)) return;
+
+            // The handle goes back to the pool afterwards, and OpenAsync sets the store's busy timeout again on the next use.
+            Exec(connection, null, "PRAGMA busy_timeout = 250");
+            try
+            {
+                using var command = Command(connection, null, "PRAGMA wal_checkpoint(TRUNCATE)");
+                using var reader = command.ExecuteReader();
+                if (reader.Read() && reader.GetInt64(0) != 0) LogCheckpointBusy(_logger, appliedRows);
+            }
+            finally
+            {
+                Exec(connection, null, "PRAGMA busy_timeout = " + _options.BusyTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+        catch (G9CSqliteException exception)
+        {
+            LogMaintenanceFailed(_logger, exception.Message);
         }
     }
 
@@ -168,15 +232,20 @@ public sealed partial class G9CSqliteSyncStore
     ///     The rows an apply must not touch, read before the first slice commits: pending local changes, rows a command is holding,
     ///     and rows changed since the given sequence.
     /// </summary>
-    private static List<(long Tid, string Key)> ReadProtectedRows(SqliteConnection connection, long changedAfterSequence)
+    private List<(long Tid, string Key)> ReadProtectedRows(SqliteConnection connection, long changedAfterSequence)
     {
         var rows = new List<(long Tid, string Key)>();
-        using (var command = Command(connection, null, "SELECT tid, pk FROM g9_rows WHERE dirty <> 0 OR local_seq > $c"))
+
+        // Two indexed reads instead of one "dirty <> 0 OR local_seq > $c", which no index serves: on a device holding a large site
+        // that was a full scan of g9_rows under the write lock, for a delta of five rows (ADR-0058). A row both reads return is
+        // added twice; the caller keeps a set.
+        using (var command = Command(connection, null, "SELECT tid, pk FROM g9_rows WHERE dirty <> 0"))
         {
-            command.Parameters.AddWithValue("$c", changedAfterSequence);
             using var reader = command.ExecuteReader();
             while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1)));
         }
+
+        ReadRowsChangedAfter(connection, null, changedAfterSequence, (tid, key) => rows.Add((tid, key)));
 
         using (var command = Command(connection, null,
                    "SELECT r.tid, r.pk FROM g9_command_rows r JOIN g9_commands c ON c.command_id = r.command_id WHERE c.state = 0"))
@@ -264,13 +333,7 @@ public sealed partial class G9CSqliteSyncStore
                 while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
             }
 
-            if (changedAfterSequence is not null)
-            {
-                using var command = Command(connection, transaction, "SELECT tid, pk FROM g9_rows WHERE local_seq > $c");
-                command.Parameters.AddWithValue("$c", changedAfterSequence.Value);
-                using var reader = command.ExecuteReader();
-                while (reader.Read()) context.AddDirty(reader.GetInt64(0), reader.GetString(1));
-            }
+            if (changedAfterSequence is not null) ReadRowsChangedAfter(connection, transaction, changedAfterSequence.Value, context.AddDirty);
 
             // Rows touched by a command the server has not executed yet keep their optimistic state until its result settles them.
             using (var command = Command(connection, transaction,
@@ -295,7 +358,17 @@ public sealed partial class G9CSqliteSyncStore
         }
 
         foreach (var backfill in backfills) context.BackfillColumns[backfill.TableId] = backfill.Columns;
-        if (_options.SkipTriggersDuringApply && !HasForeignTriggers(connection, transaction)) context.TriggersSkipped = connection.TrySetTriggersEnabled(false);
+
+        var diagnostics = context.Report.Diagnostics;
+        diagnostics.Transactions = 1;
+        if (_options.SkipTriggersDuringApply)
+        {
+            var foreign = ForeignTriggers(connection, transaction);
+            if (foreign.Count == 0) context.TriggersSkipped = connection.TrySetTriggersEnabled(false);
+            else diagnostics.ForeignTriggers.AddRange(foreign.Take(G9CApplyDiagnostics.MaxForeignTriggerNames));
+        }
+
+        if (context.TriggersSkipped) diagnostics.TransactionsWithTriggersSkipped = 1;
         if (snapshotRows is not null && _options.RebuildIndexesAfterRows > 0) DeferIndexes(context, snapshotRows);
         return context;
     }
@@ -303,9 +376,34 @@ public sealed partial class G9CSqliteSyncStore
     private static void EndApply(ApplyContext context)
     {
         // The deferred indexes are rebuilt before anything commits: a failure here rolls back the whole apply, indexes included.
-        foreach (var index in context.DeferredIndexes) Exec(context.Connection, context.Transaction, index.Sql);
-        context.DeferredIndexes.Clear();
+        if (context.DeferredIndexes.Count > 0)
+        {
+            var started = Stopwatch.GetTimestamp();
+            foreach (var index in context.DeferredIndexes) Exec(context.Connection, context.Transaction, index.Sql);
+            context.DeferredIndexes.Clear();
+            context.Report.Diagnostics.IndexRebuildMs += (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        }
+
+        context.PublishTableTimes();
         Exec(context.Connection, context.Transaction, "UPDATE g9_clock SET seq = $s WHERE id = 1; UPDATE g9_ctx SET applying = 0 WHERE id = 1", ("$s", context.Clock));
+    }
+
+    /// <summary>
+    ///     Rows changed after a sequence, read table by table: <c>g9_rows_feed (tid, local_seq)</c> serves each read, where a bare
+    ///     <c>local_seq &gt; ?</c> has no index to use and scanned the whole of <c>g9_rows</c> (ADR-0058). Metadata of a table that left the
+    ///     model is not read - no apply can touch its rows.
+    /// </summary>
+    private void ReadRowsChangedAfter(SqliteConnection connection, SqliteTransaction? transaction, long sequence, Action<long, string> add)
+    {
+        using var command = Command(connection, transaction, "SELECT pk FROM g9_rows WHERE tid = $t AND local_seq > $c");
+        var tid = command.Parameters.Add("$t", SqliteType.Integer);
+        command.Parameters.AddWithValue("$c", sequence);
+        foreach (var table in _byLocal.Values)
+        {
+            tid.Value = table.Tid;
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) add(table.Tid, reader.GetString(0));
+        }
     }
 
     /// <summary>Rows each table receives from snapshot parts of a plan, by server table id.</summary>
@@ -313,16 +411,15 @@ public sealed partial class G9CSqliteSyncStore
         plan.Parts.Where(p => p.Kind == G9EPullPartKind.Snapshot).GroupBy(p => p.TableId).ToDictionary(g => g.Key, g => g.Sum(p => p.Rows));
 
     /// <summary>
-    ///     True when the database holds a trigger the library did not create. Trigger execution then stays on for the whole apply: the app's
-    ///     triggers (an FTS index, an audit table) must fire for synced rows exactly as before. The store's connections run with foreign
-    ///     keys off, so a library write fires only the triggers of the table it writes; any foreign trigger anywhere still keeps them on.
+    ///     The triggers in the database that the library did not create. Any one of them keeps trigger execution on for the whole apply:
+    ///     the app's triggers (an FTS index, an audit table) must fire for synced rows exactly as before. The store's connections run with
+    ///     foreign keys off, so a library write fires only the triggers of the table it writes; a foreign trigger anywhere still keeps them on.
     /// </summary>
-    private bool HasForeignTriggers(SqliteConnection connection, SqliteTransaction transaction)
+    private List<string> ForeignTriggers(SqliteConnection connection, SqliteTransaction transaction)
     {
         var foreign = ForeignTriggerNames(connection, transaction);
-        if (foreign.Count == 0) return false;
-        if (Interlocked.Exchange(ref _foreignTriggersLogged, 1) == 0) LogForeignTriggers(_logger, foreign.Count, string.Join(", ", foreign.Take(5)));
-        return true;
+        if (foreign.Count > 0 && Interlocked.Exchange(ref _foreignTriggersLogged, 1) == 0) LogForeignTriggers(_logger, foreign.Count, string.Join(", ", foreign.Take(5)));
+        return foreign;
     }
 
     /// <summary><c>g9_{table}_{ai|au|ad|ci|cu|cd}</c> for a table of the model (SqliteSql.TriggerName).</summary>
@@ -346,7 +443,23 @@ public sealed partial class G9CSqliteSyncStore
         foreach (var (serverTableId, rows) in snapshotRows)
         {
             if (rows < _options.RebuildIndexesAfterRows || !_byServerId.TryGetValue(serverTableId, out var table)) continue;
-            if (Scalar(context.Connection, context.Transaction, $"SELECT 1 FROM {table.Quoted} LIMIT 1") is not null) continue;
+
+            // Per table, and said out loud (ADR-0058). A table that already holds rows keeps its indexes live unless the snapshot
+            // is at least RebuildIndexesMinimumGrowth times what is there: a rebuild sorts the existing rows too, and measured
+            // with 500,000 rows present it lost to live maintenance by 2x at 5-30 % incoming and only won at 100 %. The count is
+            // one index scan, paid once per large table per apply and only when the table is not empty.
+            if (Scalar(context.Connection, context.Transaction, $"SELECT 1 FROM {table.Quoted} LIMIT 1") is not null)
+            {
+                var growth = _options.RebuildIndexesMinimumGrowth;
+                var existing = growth > 0
+                    ? Convert.ToInt64(Scalar(context.Connection, context.Transaction, $"SELECT count(*) FROM {table.Quoted}"), CultureInfo.InvariantCulture)
+                    : long.MaxValue;
+                if (growth <= 0 || rows < existing * growth)
+                {
+                    context.Report.Diagnostics.LiveIndexReasons[table.Model.LocalName] = G9CApplyDiagnostics.ReasonTableNotEmpty;
+                    continue;
+                }
+            }
 
             var indexes = new List<(string Name, string Sql)>();
             using (var command = Command(context.Connection, context.Transaction,
@@ -364,7 +477,9 @@ public sealed partial class G9CSqliteSyncStore
                 context.DeferredIndexes.Add(index);
             }
 
-            if (indexes.Count > 0) LogIndexesDeferred(_logger, table.Model.LocalName, rows, indexes.Count);
+            if (indexes.Count == 0) continue;
+            context.Report.Diagnostics.DeferredIndexes[table.Model.LocalName] = indexes.Count;
+            LogIndexesDeferred(_logger, table.Model.LocalName, rows, indexes.Count);
         }
     }
 
@@ -400,10 +515,14 @@ public sealed partial class G9CSqliteSyncStore
             policy = context.Policies.GetValueOrDefault(subscriptionKey, G9EMoveOutPolicy.Delete);
         }
 
-        using var reader = G9CRowBatchReader.Open(frame);
+        using var reader = G9CRowBatchReader.Open(frame, _options.MaxDecodedFrameBytes);
         while (reader.NextSection())
         {
             if (!_byServerId.TryGetValue(reader.TableId, out var table) || table.Negotiated is null) continue;
+
+            // Per section, not per row: two timestamps for a few thousand rows.
+            var sectionStarted = Stopwatch.GetTimestamp();
+            var rowsBefore = context.Rows;
             switch (reader.Op)
             {
                 case G9ERowBatchOp.Upsert:
@@ -423,6 +542,8 @@ public sealed partial class G9CSqliteSyncStore
 
                     break;
             }
+
+            context.AddTableTime(table.Model.LocalName, context.Rows - rowsBefore, Stopwatch.GetElapsedTime(sectionStarted));
         }
     }
 
@@ -439,18 +560,32 @@ public sealed partial class G9CSqliteSyncStore
         var bit = slot >= 0 ? SqliteSql.Bit(slot) : 0L;
         var integerKey = table.Model.KeyType is G9ESyncColumnType.Int32 or G9ESyncColumnType.Int64;
 
+        // The update half is guarded: a row that already holds exactly these values is not rewritten (ADR-0058). IS NOT, not <>, so
+        // NULLs compare; excluded.* carries the column's affinity, so a value compares in the form it would be stored in. A range
+        // pulled again after an interruption and a reconciliation fetch of a row that was right all along are the cases - measured
+        // on 200,000 identical rows: 2.6x faster and 40 % less WAL, because neither the row nor its index entries are touched.
         var upsert = context.GetRowStatement("upsert:" + table.Tid, () =>
         {
             var names = targets.Select(t => SqliteSql.Quote(t.Column.Name)).ToList();
             return $"INSERT INTO {table.Quoted} ({table.KeyQuoted}{string.Concat(names.Select(n => ", " + n))}) VALUES (?1{string.Concat(names.Select((_, i) => ", ?" + (i + 2)))}) " +
                    (names.Count == 0
                        ? $"ON CONFLICT({table.KeyQuoted}) DO NOTHING"
-                       : $"ON CONFLICT({table.KeyQuoted}) DO UPDATE SET {string.Join(", ", names.Select(n => n + " = excluded." + n))}");
+                       : $"ON CONFLICT({table.KeyQuoted}) DO UPDATE SET {string.Join(", ", names.Select(n => n + " = excluded." + n))} " +
+                         $"WHERE {string.Join(" OR ", names.Select(n => n + " IS NOT excluded." + n))}");
         });
         var rowMeta = context.GetRowStatement("rowmeta",
             () => "INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0) " +
                   "ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, " +
                   "dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0");
+
+        // For a row whose values did not change: its metadata is written only when the metadata itself differs - a new version, a new
+        // membership bit, a flag to clear. local_seq then stays where it was, so the change feed does not announce a row that did not
+        // change, and whoever projects the feed (a map, a search index) does not redo work for it.
+        var rowMetaUnchanged = context.GetRowStatement("rowmeta-unchanged",
+            () => "INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0) " +
+                  "ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, " +
+                  "dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0 " +
+                  "WHERE server_ver IS NOT excluded.server_ver OR (subs | excluded.subs) <> subs OR dirty <> 0 OR dirty_mask <> 0 OR rejected <> 0 OR deleted <> 0");
         var dirtyTable = context.HasDirty(table.Tid);
         Span<byte> keyBuffer = stackalloc byte[40];
 
@@ -485,14 +620,17 @@ public sealed partial class G9CSqliteSyncStore
             if (integerKey) upsert.BindInt64(1, keyInteger);
             else upsert.BindText(1, keyText);
             for (var i = 0; i < targets.Length; i++) BindValue(upsert, i + 2, reader, targets[i].Frame, targets[i].Column.Type);
-            upsert.Execute();
+            var changed = upsert.Execute() > 0;
 
-            rowMeta.BindInt64(1, table.Tid);
-            rowMeta.BindText(2, keyText);
-            rowMeta.BindInt64(3, reader.Version);
-            rowMeta.BindInt64(4, ++context.Clock);
-            rowMeta.BindInt64(5, bit);
-            rowMeta.Execute();
+            // The clock only moves for a row that was written: a sequence nobody holds is harmless, but there is no reason to spend one.
+            var meta = changed ? rowMeta : rowMetaUnchanged;
+            meta.BindInt64(1, table.Tid);
+            meta.BindText(2, keyText);
+            meta.BindInt64(3, reader.Version);
+            meta.BindInt64(4, context.Clock + 1);
+            meta.BindInt64(5, bit);
+            if (meta.Execute() > 0) context.Clock++;
+            if (!changed) context.Report.UnchangedRows++;
 
             if (ephemeralKey is not null) InsertEphemeral(context, table, reader.Key, ephemeralKey);
             if (context.HasRevoked && slot >= 0)
@@ -503,7 +641,7 @@ public sealed partial class G9CSqliteSyncStore
             }
 
             context.Report.Upserts++;
-            if (context.WantsChangedKey(table.Model.LocalName)) context.AddChanged(table.Model.LocalName, reader.Key);
+            if (changed && context.WantsChangedKey(table.Model.LocalName)) context.AddChanged(table.Model.LocalName, reader.Key);
             context.Tick();
         }
     }
@@ -712,8 +850,17 @@ public sealed partial class G9CSqliteSyncStore
         Message = "G9SyncData applies downloads with triggers on: the database has {Count} trigger(s) the library did not create ({Names})")]
     private static partial void LogForeignTriggers(ILogger logger, int count, string names);
 
-    [LoggerMessage(EventId = 20111, Level = LogLevel.Debug, Message = "G9SyncData fills empty {Table} with {Rows} row(s): {Count} index(es) rebuilt after the load")]
+    [LoggerMessage(EventId = 20111, Level = LogLevel.Debug, Message = "G9SyncData loads {Rows} row(s) into {Table}: {Count} index(es) rebuilt after the load")]
     private static partial void LogIndexesDeferred(ILogger logger, string table, long rows, int count);
+
+    [LoggerMessage(EventId = 20112, Level = LogLevel.Information, Message = "G9SyncData applied {Rows} row(s): {Diagnostics}")]
+    private static partial void LogApplyDiagnostics(ILogger logger, long rows, string diagnostics);
+
+    [LoggerMessage(EventId = 20113, Level = LogLevel.Debug, Message = "The WAL checkpoint after applying {Rows} row(s) was blocked by a reader; the next one retries")]
+    private static partial void LogCheckpointBusy(ILogger logger, long rows);
+
+    [LoggerMessage(EventId = 20114, Level = LogLevel.Warning, Message = "Maintenance after an apply failed and was skipped: {Message}")]
+    private static partial void LogMaintenanceFailed(ILogger logger, string message);
 
     private sealed class ApplyContext(SqliteConnection connection, SqliteTransaction transaction, IProgress<long>? progress, int maxChangedKeys) : IDisposable
     {
@@ -722,6 +869,7 @@ public sealed partial class G9CSqliteSyncStore
         public SqliteConnection Connection { get; } = connection;
         public SqliteTransaction Transaction { get; } = transaction;
         private readonly Dictionary<string, SqliteRowStatement> _rowStatements = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TimeSpan> _tableTime = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<long> _dirtyTables = [];
 
         public HashSet<(long Tid, string Key)> Dirty { get; } = [];
@@ -776,6 +924,18 @@ public sealed partial class G9CSqliteSyncStore
         {
             Rows++;
             if (progress is not null && Rows % 1000 == 0) progress.Report(Rows);
+        }
+
+        /// <summary>Time is kept as a TimeSpan per table and published once: summing whole milliseconds per section would round most of it away.</summary>
+        public void AddTableTime(string table, long rows, TimeSpan elapsed)
+        {
+            _tableTime[table] = _tableTime.GetValueOrDefault(table) + elapsed;
+            Report.Diagnostics.RowsByTable[table] = Report.Diagnostics.RowsByTable.GetValueOrDefault(table) + rows;
+        }
+
+        public void PublishTableTimes()
+        {
+            foreach (var (table, elapsed) in _tableTime) Report.Diagnostics.MsByTable[table] = (long)elapsed.TotalMilliseconds;
         }
 
         public void Dispose()

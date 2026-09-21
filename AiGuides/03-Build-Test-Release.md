@@ -29,7 +29,7 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 ## Versioning and packing
 
-- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.0.0`). `<Version>` only
+- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.1.0`). `<Version>` only
   consumes it. The indirection exists so a consuming repository can pin the family from one property — in an
   application project `$(Version)` means "the app's version", not "the version of the packages it references".
 - ⛔ **The family releases TOGETHER and must never be mixed.** The protocol frame layout is negotiated across
@@ -78,9 +78,14 @@ Three SECRET pipeline variables are required:
 
 | Variable | Scope | Used for |
 |---|---|---|
-| `AzureDevOps.PAT` | Code (Read) on g9tm | clones this repo for the GitHub mirror |
+| `AzureDevOps.PAT` | Code (Read **& Write**) on g9tm | clones this repo for the GitHub mirror, and pushes the release tag |
 | `Github.PAT` | repo | creates/pushes `github.com/ImanKari/G9SyncData` |
 | `NuGetApiKey` | Push on nuget.org | publishes the packages |
+
+**Every release is tagged `v<G9SyncDataVersion>`** on the commit the packages were built from, BEFORE the mirror so the tag reaches
+GitHub with it. The step only WARNS when it cannot: a PAT with Code (Read) alone cannot push a tag, and a tag that already exists on
+another commit means `main` moved without a version bump - in which case the publish below skips every package as a duplicate, and
+the warning is the only thing that says why.
 
 Order that matters, and why:
 

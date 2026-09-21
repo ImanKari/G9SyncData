@@ -1,3 +1,4 @@
+using G9SyncData.Client;
 using G9SyncData.Client.Model;
 using G9SyncData.Client.Sqlite;
 using G9SyncData.Client.Storage;
@@ -74,16 +75,164 @@ public sealed class SqliteBulkApplyTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_table_that_already_has_rows_keeps_its_indexes_during_a_large_download()
+    public async Task A_table_that_holds_more_rows_than_the_download_brings_keeps_its_indexes_and_says_why()
     {
-        await DownloadAsync(10, prefix: "existing");
+        // ADR-0058: a rebuild sorts the rows that are already there too, and measured it loses to live maintenance until the download is
+        // about as large as the table. 300 rows into 400 is a growth of 0.75 - below the default of 1.
+        await DownloadAsync(400, prefix: "existing");
         _log.Events.Clear();
 
         var report = await DownloadAsync(Rows);
 
         Assert.Equal(Rows, report.Upserts);
         Assert.DoesNotContain(_log.Events, e => e.Id == 20111);
-        Assert.Equal((long)Rows + 10, await ScalarAsync("SELECT count(*) FROM Pot"));
+        Assert.Empty(report.Diagnostics.DeferredIndexes);
+        Assert.Equal(G9CApplyDiagnostics.ReasonTableNotEmpty, report.Diagnostics.LiveIndexReasons["Pot"]);
+        Assert.Equal((long)Rows + 400, await ScalarAsync("SELECT count(*) FROM Pot"));
+    }
+
+    [Fact]
+    public async Task A_download_at_least_as_large_as_the_table_rebuilds_its_indexes_even_though_the_table_is_not_empty()
+    {
+        await DownloadAsync(10, prefix: "existing");
+        var before = await IndexesAsync();
+        _log.Events.Clear();
+
+        var report = await DownloadAsync(Rows);
+
+        Assert.Equal(Rows, report.Upserts);
+        Assert.Single(_log.Events, e => e.Id == 20111);
+        Assert.Equal(1, report.Diagnostics.DeferredIndexes["Pot"]);
+        Assert.Empty(report.Diagnostics.LiveIndexReasons);
+        Assert.Equal(before, await IndexesAsync());
+        Assert.Equal((long)Rows + 10, await ScalarAsync("SELECT count(*) FROM Pot INDEXED BY IX_Pot_Status WHERE Status >= 0"));
+        Assert.Equal("ok", await ScalarAsync("PRAGMA integrity_check"));
+    }
+
+    [Fact]
+    public async Task With_a_minimum_growth_of_zero_a_table_that_is_not_empty_never_has_its_indexes_rebuilt()
+    {
+        await _store.DisposeAsync();
+        _store = await CreateStoreAsync(options =>
+        {
+            options.RebuildIndexesAfterRows = 100;
+            options.RebuildIndexesMinimumGrowth = 0;
+        });
+        await DownloadAsync(10, prefix: "existing");
+        _log.Events.Clear();
+
+        var report = await DownloadAsync(Rows);
+
+        Assert.DoesNotContain(_log.Events, e => e.Id == 20111);
+        Assert.Equal(G9CApplyDiagnostics.ReasonTableNotEmpty, report.Diagnostics.LiveIndexReasons["Pot"]);
+    }
+
+    [Fact]
+    public async Task An_apply_reports_which_fast_paths_engaged_and_what_each_table_cost()
+    {
+        var report = await DownloadAsync(Rows);
+
+        var diagnostics = report.Diagnostics;
+        Assert.Equal(1, diagnostics.Transactions);
+        Assert.True(diagnostics.TriggersSkipped);
+        Assert.Empty(diagnostics.ForeignTriggers);
+        Assert.Equal(1, diagnostics.DeferredIndexes["Pot"]);
+        Assert.Equal(Rows, diagnostics.RowsByTable["Pot"]);
+        Assert.True(diagnostics.MsByTable.ContainsKey("Pot"));
+        var line = Assert.Single(_log.Events, e => e.Id == 20112);
+        Assert.Contains("triggers skipped", line.Message, StringComparison.Ordinal);
+        Assert.Contains("1 index(es) rebuilt", line.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Rows_pulled_again_with_the_same_values_are_not_rewritten_and_not_announced()
+    {
+        await DownloadAsync(Rows);
+        var sequence = await _store.GetChangeSequenceAsync(CancellationToken.None);
+        await ExecAsync("UPDATE g9_ctx SET applying = 1; UPDATE Pot SET Note = 'edited outside capture' WHERE Id = $p0; UPDATE g9_ctx SET applying = 0", Key(3, "pot"));
+
+        var report = await DownloadAsync(Rows);
+
+        // Every row was delivered, one was different: that one is rewritten and announced, the others are left exactly as they were.
+        Assert.Equal(Rows, report.Upserts);
+        Assert.Equal(Rows - 1, report.UnchangedRows);
+        Assert.Equal(new[] { Key(3, "pot") }, report.ChangedKeys["Pot"]);
+        Assert.Equal(DBNull.Value, await ScalarAsync("SELECT Note FROM Pot WHERE Id = $p0", Key(3, "pot")) ?? DBNull.Value);
+        var feed = await _store.ReadChangeFeedAsync("Pot", sequence, 1000, CancellationToken.None);
+        Assert.Equal(Key(3, "pot"), Assert.Single(feed).Key);
+    }
+
+    [Fact]
+    public async Task Slices_of_a_delta_double_from_the_first_size_up_to_the_cap()
+    {
+        await _store.DisposeAsync();
+        _store = await CreateStoreAsync(options =>
+        {
+            options.ApplySliceRows = 10;
+            options.ApplySliceRowsMax = 40;
+        });
+
+        // Twelve pages of ten rows, planned as a DELTA: a large snapshot would stay in one transaction whatever the slice size (ADR-0056).
+        var runId = Guid.NewGuid().ToString("N");
+        await _store.BeginStagedPullAsync(new G9CStagedPull
+        {
+            RunId = runId,
+            CreatedUtc = DateTime.UtcNow,
+            Plan = new G9DtPullPlan
+            {
+                TotalRows = 120,
+                Parts = [new G9DtPlannedPart { SubscriptionKey = _subscription.Key, TableId = 1, Kind = G9EPullPartKind.Delta, Rows = 120 }]
+            }
+        }, CancellationToken.None);
+        for (var page = 0; page < 12; page++)
+        {
+            await _store.StageChunkAsync(runId, new G9DtSyncChunk
+            {
+                Sequence = page + 1, Payload = Frame(page * 10, 10, "pot"), RowCount = 10, SubscriptionKey = _subscription.Key, IsFinal = page == 11
+            }, CancellationToken.None);
+        }
+
+        var slices = new List<G9CApplySlice>();
+        var report = await _store.ApplyStagedPullAsync(runId, null, new G9CInlineProgress<G9CApplySlice>(slices.Add), CancellationToken.None);
+
+        Assert.Equal(new long[] { 10, 20, 40, 40, 10 }, slices.Select(s => s.RowsApplied).ToArray());
+        Assert.True(slices[^1].IsFinal);
+        Assert.All(slices.Take(4), slice => Assert.False(slice.IsFinal));
+        Assert.Equal(120, report.Upserts);
+        Assert.Equal(5, report.Diagnostics.Transactions);
+        Assert.Equal(120L, await ScalarAsync("SELECT count(*) FROM Pot"));
+    }
+
+    [Fact]
+    public async Task Purging_deleted_feed_entries_moves_the_feed_floor_and_the_floor_never_moves_back()
+    {
+        await DownloadAsync(Rows);
+        Assert.Equal(0, await _store.GetChangeFeedFloorAsync(CancellationToken.None));
+
+        // Ten tombstones, sequences 1..10 in the order the rows were applied.
+        await ExecAsync("UPDATE g9_rows SET deleted = 1 WHERE local_seq <= 10");
+        var purged = await _store.PurgeDeletedFeedAsync(3, CancellationToken.None);
+
+        // The newest three are kept, plus the entry the threshold itself sits on.
+        Assert.Equal(6, purged);
+        Assert.Equal(6, await _store.GetChangeFeedFloorAsync(CancellationToken.None));
+        Assert.Equal(4L, await ScalarAsync("SELECT count(*) FROM g9_rows WHERE deleted = 1"));
+        Assert.Contains("g9_rows_deleted", await PlanAsync("SELECT local_seq FROM g9_rows WHERE deleted = 1 ORDER BY local_seq DESC LIMIT 1 OFFSET 3"), StringComparison.Ordinal);
+
+        Assert.Equal(0, await _store.PurgeDeletedFeedAsync(3, CancellationToken.None));
+        Assert.Equal(6, await _store.GetChangeFeedFloorAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task An_unchanged_row_still_has_its_metadata_updated_when_the_version_moved()
+    {
+        await DownloadAsync(Rows);
+        await ExecAsync("UPDATE g9_rows SET server_ver = 1 WHERE pk = $p0", Key(5, "pot"));
+
+        var report = await DownloadAsync(Rows);
+
+        Assert.Equal(Rows, report.UnchangedRows);
+        Assert.Equal(7L, await ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(5, "pot")));
     }
 
     [Fact]
@@ -149,9 +298,12 @@ public sealed class SqliteBulkApplyTests : IAsyncLifetime
         await ExecAsync("CREATE TABLE PotAudit (PotId TEXT NOT NULL); " +
                         "CREATE TRIGGER app_pot_audit AFTER INSERT ON Pot BEGIN INSERT INTO PotAudit (PotId) VALUES (NEW.Id); END;");
 
-        await DownloadAsync(Rows);
+        var report = await DownloadAsync(Rows);
         await DownloadAsync(20, prefix: "second");
 
+        // The apply says so itself, not only the log: this is what a run report carries to whoever is asking why a sync was slow.
+        Assert.False(report.Diagnostics.TriggersSkipped);
+        Assert.Equal(new[] { "app_pot_audit" }, report.Diagnostics.ForeignTriggers);
         Assert.Equal((long)Rows + 20, await ScalarAsync("SELECT count(*) FROM PotAudit"));
         var kept = Assert.Single(_log.Events, e => e.Id == 20110);   // said once per store, not once per apply
         Assert.Contains("app_pot_audit", kept.Message, StringComparison.Ordinal);

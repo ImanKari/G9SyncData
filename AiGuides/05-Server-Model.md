@@ -267,3 +267,21 @@ scope that reads other tables inside a **function** must be listed in `G9CPostgr
 | `CleanupInterval` | 6 h | tombstone purge timer |
 | `EnableChangeNotifications` | true | LISTEN for committed changes (drives pokes) |
 | `InitializeOnStartup` | true | install/verify capture at host start; a failure stops the host |
+
+## Added in 1.1.0
+
+| Option (`G9CSyncServerOptions`) | Default | Meaning |
+|---|---|---|
+| `PreviousTokenSigningKeys` | empty | accepted for verification, never used to sign - rotate without discarding pulls in flight (ADR-0064) |
+| `RequireTokenSigningKey` | false | refuse to start without a key. Set it in production |
+| `MaxConcurrentPulls` / `MaxConcurrentPushes` | 64 / 32 | admission control; pull, reconcile and row fetch share the pull slots (ADR-0062) |
+| `AdmissionWait` | 5 s | how long a request waits for a slot before `G9S-SRV-BUSY` |
+
+- A push authorises the caller and takes its slot BEFORE it buffers the upload.
+- Hello reports `TypeMismatchColumns` per table (ADR-0061).
+- Effect outbox operations on `G9CSyncServerEngine`: `GetEffectQueueStatusAsync`, `GetFailedEffectsAsync`,
+  `RequeueFailedEffectsAsync` (ADR-0065). Metrics `g9sync.server.effects.pending`, `.failed`, `.deliveries`, and
+  `g9sync.server.refused`.
+- `g9sync.install.library_version` records the real assembly version and is updated on every initialise (it said `0.1.0` for ever).
+- Events: 21006 type mismatch (Debug), 21007 ephemeral signing key, 21008 configured key, 21009 busy, 21013 effects requeued,
+  21025 effects have failed for good (Error, once per dispatch pass while any remain), 21026 the queue status could not be read.

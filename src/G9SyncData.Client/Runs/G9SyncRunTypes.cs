@@ -69,6 +69,17 @@ public sealed class G9CSyncRequest
         $"{Push}|{Pull}|{ForceReconcile}|{(Subscriptions is null ? "*" : string.Join(',', Subscriptions.Order(StringComparer.Ordinal)))}";
 }
 
+/// <summary>One defect of the client model, as the server sees it.</summary>
+/// <param name="Code">A <see cref="G9SyncErrorCodes" /> value, e.g. <see cref="G9SyncErrorCodes.ModelTypeMismatch" />.</param>
+/// <param name="Table">Server logical table name.</param>
+/// <param name="Column">The column the problem is about.</param>
+/// <param name="ClientType">The type the client model declares.</param>
+/// <param name="ServerType">The type the server model has.</param>
+public sealed record G9CSyncModelProblem(string Code, string Table, string Column, G9ESyncColumnType ClientType, G9ESyncColumnType ServerType)
+{
+    public override string ToString() => $"{Table}.{Column} is {ClientType} on the client and {ServerType} on the server";
+}
+
 public sealed class G9CSyncRunResult
 {
     public required Guid RunId { get; init; }
@@ -95,6 +106,13 @@ public sealed class G9CSyncRunResult
 
     /// <summary>Subscriptions that could not sync, with the server's reason.</summary>
     public IReadOnlyList<G9DtSubscriptionState> Problems { get; init; } = [];
+
+    /// <summary>
+    ///     Defects of the client MODEL the server reported in this run's hello (ADR-0061): today, columns declared with a type the
+    ///     server's column does not have. They do not fail a run by themselves - the rest of the model syncs - but the columns they name
+    ///     sync in neither direction, so an application should treat a non-empty list in a test build as a failed test.
+    /// </summary>
+    public IReadOnlyList<G9CSyncModelProblem> ModelProblems { get; init; } = [];
 
     public G9CApplyReport Changes { get; init; } = new();
 

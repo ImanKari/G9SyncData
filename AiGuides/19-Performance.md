@@ -235,6 +235,21 @@ naive apply (A); a server-built file attached and copied (K) in 1.3 s (not adopt
 
 **Reconciliation hash** (1,000,000 rows, `md5(key)` + `md5(key:version)` each): platform MD5 3,013 ms, managed `G9CMd5` 902 ms (LES-0040).
 
+## SQLite apply experiments — 2026-09-20
+
+Rig: `benchmarks/experiments/SqliteApplyExperiment` (raw SQLitePCL, no library code - it measures what SQLite can do, so the store's
+design can be judged against it). Full tables: `benchmarks/results/sqlite-apply-experiments-2026-09.md`. Desktop, SQLite 3.53.4,
+500,000 rows, best of 2.
+
+| Finding | Numbers | What was done with it |
+|---|---|---|
+| The fast path is worth 5.3x | 2.3 s with triggers off and indexes deferred; 12.5 s with neither; triggers alone 1.36x, live indexes alone 2.06x | made VISIBLE: `G9CApplyDiagnostics`, event 20112 (ADR-0058) |
+| `g9_rows` metadata is 37% of a first load | 1.47 s data only, 0.90 s metadata only, 2.34 s both | kept: a set-based metadata write saved 16% and cost the per-row version that conflict detection reads |
+| Deferral on a NON-empty table loses below 1:1 growth | up to 2x slower at a 10-30% growth ratio | `RebuildIndexesMinimumGrowth = 1.0` (ADR-0058, LES-0043) |
+| Integer surrogate keys for `g9_rows` | 1.27x SLOWER | rejected |
+| `WITHOUT ROWID` for `g9_rows` (current) against rowid + index | current is 5% faster | kept |
+| Identical rows re-sent in a delta | a guarded upsert skips the row write, the index writes and the feed entry | shipped (ADR-0058) |
+
 ## What the numbers say
 
 1. **Capture is paid by writers, mostly on bulk statements.** Every affected row writes a tracking row (xid, version,

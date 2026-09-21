@@ -1,0 +1,3 @@
+<Project>
+  <!-- Stops the walk-up: experiments are throwaway measuring rigs and do not take the library's analysers, warnings-as-errors or packaging. -->
+</Project>

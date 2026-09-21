@@ -120,3 +120,15 @@ through the same JSON context, maps server exceptions like the hub, and injects 
 
 - Client: AOT-clean. Client-to-server streams must carry reference types (`G9DtSyncChunk` is a class).
 - Server: the hub constructor is `[RequiresDynamicCode]` (typed hub proxies); an AOT-published server sees that warning by design.
+
+## Added in 1.1.0
+
+| Option | Side | Default | Meaning |
+|---|---|---|---|
+| `StatefulReconnect` | client (`G9CSignalRSyncTransportOptions`) | false | ask for SignalR's stateful reconnect (ADR-0069) |
+| `AllowStatefulReconnects`, `StatefulReconnectBufferBytes` | server (`G9CSyncSignalROptions`) | false, 4 MiB | allow it; the buffer is per connection |
+| `CloseOnAuthenticationExpiration` | server | false | close a hub connection when its token expires. Turn on when tokens can be revoked |
+| `ConfigureConnection` | server | null | anything else on `HttpConnectionDispatcherOptions` |
+
+`AddHealthChecks().AddG9SyncEffects(name, maxPendingAge, tags)` registers `G9CSyncEffectsHealthCheck` (ADR-0065). Do not tag it as
+a readiness probe.

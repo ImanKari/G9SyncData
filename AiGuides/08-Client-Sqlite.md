@@ -218,3 +218,42 @@ A GUID is 128 bits: it cannot be an SQLite INTEGER (64 bits). The compact form i
 to the app, and both sqlite-net and EF Core map `Guid` to TEXT: switching would change every entity key, every query literal and every
 index of the app. The larger costs were elsewhere (key order 2×, idle triggers 2.6×, index maintenance 1.8×). BLOB keys remain an
 option for a table the app declares that way; the store has no BLOB-GUID mapping today ([17](17-Known-Limitations.md)).
+
+## Apply diagnostics and the 1.1.0 options
+
+`G9CApplyReport.Diagnostics` (`G9CApplyDiagnostics`, ADR-0058) says how an apply ran; the engine copies it to
+`G9CSyncRunResult.Changes.Diagnostics` and the store logs it as event 20112.
+
+| Member | Meaning |
+|---|---|
+| `Transactions`, `TransactionsWithTriggersSkipped`, `TriggersSkipped` | whether the trigger switch engaged. `false` = the fast path was OFF for the whole apply |
+| `ForeignTriggers` | the triggers the library does not own that kept it off, by name (capped) |
+| `DeferredIndexes`, `LiveIndexReasons` | what was dropped and rebuilt, and per table why not (`table-not-empty` = below the growth ratio) |
+| `RowsByTable`, `MsByTable`, `IndexRebuildMs`, `ElapsedMs` | where the time went |
+
+`G9CSqliteSyncStoreOptions` added in 1.1.0:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `RebuildIndexesMinimumGrowth` | 1.0 | defer a table's indexes when incoming rows >= this x existing rows (ADR-0058) |
+| `ApplySliceRowsMax` | 32,000 | slices double from `ApplySliceRows` up to this |
+| `MaintenanceAfterRows` | 10,000 | `PRAGMA optimize` + a non-blocking WAL checkpoint after an apply this large; 0 = never |
+| `MaxDecodedFrameBytes` | 64 MiB | a frame that decodes larger than this is refused rather than allocated |
+| `IncarnationMarkerPath` | null (off) | restore/copy detection (ADR-0067). MUST be a path the platform does not back up or transfer |
+
+**Guarded upsert.** An incoming row identical to the stored one writes nothing: no row, no index, no `g9_rows` update, no feed
+entry, no `RowsApplied` entry. `G9CApplyReport.UnchangedRows` counts them. Consumers of the change feed see only real changes.
+
+**Change-feed floor (ADR-0059).** `GetChangeFeedFloorAsync()` = the highest sequence the tombstone purge ever removed. A consumer
+whose watermark is below it has missed deletions and must rebuild from the rows.
+
+**Staged pulls (ADR-0060).** One stage per generation (subscription set + model); `from_cursors_json` records the cursors the plan
+started from and the final slice only advances a cursor that still holds that value. `PruneStagedPullsAsync` bounds them by age and
+bytes; `DiscardAllStagedPullsAsync` is the operator's reset.
+
+**Recovery (ADR-0068).** `CheckIntegrityAsync()` (`quick_check(50)`, returns problems, never throws on a damaged file) and
+`ExportPendingChangesAsync(path)` (JSON lines of every unsent row, best effort, changes nothing). `G9CSqliteException` implements
+`IG9SyncLocalStoreFailure`: result codes 11/26 -> Corrupt, 13 -> DiskFull, 5/6 -> Busy.
+
+**Events.** 20105/20106 incarnation adopted/replaced, 20107 integrity problems, 20108 pending exported, 20112 apply diagnostics,
+20113 the checkpoint after an apply was blocked by a reader (skipped, not waited for), 20114 maintenance failed and was skipped.

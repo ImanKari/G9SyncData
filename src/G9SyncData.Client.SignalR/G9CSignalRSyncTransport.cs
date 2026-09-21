@@ -38,6 +38,7 @@ public sealed partial class G9CSignalRSyncTransport
             {
                 if (options.Protocol == G9ESyncHubProtocol.MessagePack) builder.AddG9MessagePackProtocol(G9SyncWireShapes.GeneratedTypeShapeProvider);
                 else builder.AddJsonProtocol(protocol => protocol.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, G9SyncJsonContext.Default));
+                if (options.StatefulReconnect) builder.WithStatefulReconnect();
                 return options.ConfigureBuilder?.Invoke(builder) ?? builder;
             },
             configureHttpConnection: http =>

@@ -16,7 +16,7 @@ A sync library for offline-first apps: PostgreSQL holds the truth, each device h
 over one SignalR connection. The server captures changes with statement-level triggers and serves them through a
 snapshot cursor; devices capture local edits with SQLite triggers and push them in idempotent batches. Subscriptions
 (parameterised, SQL-scoped row sets) decide what each device holds. Server code can follow the same change stream through
-the change feed. It was designed to replace the Dotmim.Sync fork in AgriPad; the research and plan are `G9SyncData.md` at
+the change feed. It was designed to replace the Dotmim.Sync fork in AgriPad; the research and plan are [`plan/`](plan/00-README.md) at
 the agriculture repository root.
 
 ## Start here by task
@@ -86,6 +86,7 @@ the agriculture repository root.
 | `src/G9SyncData.Testing` | `G9CInMemorySyncTransport` (swappable server engine), `G9CTransportFaults` |
 | `samples/` | `G9SyncData.Samples.Server` (PostgreSQL + SignalR), `G9SyncData.Samples.AotClient` (NativeAOT console) |
 | `benchmarks/G9SyncData.Benchmarks` | plan §12 spikes measurable on a development machine; `results/latest.md` |
+| `benchmarks/experiments/SqliteApplyExperiment` | a raw-SQLite rig with NO library code: what SQLite itself can do, so the store's design can be judged against it ([19](19-Performance.md), ADR-0058). Outside the solution and the repository's build props on purpose |
 | `tests/G9SyncData.Tests` | codec, digest parity, parameters, JSON, SQLite store, generated model |
 | `tests/G9SyncData.IntegrationTests` | end-to-end over real PostgreSQL + SQLite, in-memory and real SignalR |
 | `build/G9SyncData.Library.props` | imported by every redistributable library: AOT/trim analyzers |

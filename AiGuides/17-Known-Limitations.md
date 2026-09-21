@@ -58,6 +58,17 @@ Read before promising a feature. Remove an entry only in the change that lifts i
   to keep the staged pull's guarantees (resume from any page, apply atomically once) and is the largest measured opportunity left
   for first syncs. Not built.
 
+- A pull token signed with a key the server does not know is refused and the pull re-planned (ADR-0064). Accepting the part of
+  such a plan that was already downloaded would need the protocol to say which rows it covered; multi-key acceptance
+  (`PreviousTokenSigningKeys`) removes the case in practice, so it was not built.
+- Index deferral on a table that already holds rows engages only when the download is at least as large as the table
+  (`RebuildIndexesMinimumGrowth`, ADR-0058). Below that, live indexes are the faster choice - measured, not assumed - so a second
+  large site loads slower than the first.
+- The incarnation check (ADR-0067) is only as good as the marker path the application chooses. A path the platform DOES back up
+  makes the check a no-op; a path a cache cleaner empties costs an identity change (safe, but re-pushes the in-flight batch).
+- `ExportPendingChangesAsync` needs an initialised store. A file too damaged to open never gets that far; the application then
+  has only the file itself to hand to support.
+
 ## Not yet covered by tests
 
 - The AgriPad pilot on a device and through the Mobile server's real hub (auth provider inside SignalR, `?access_token=`); verified only
@@ -67,7 +78,20 @@ Read before promising a feature. Remove an entry only in the change that lifts i
 - The G9 reconnect policy's own retry schedule over a real network (connection loss mid-run is covered with a real SignalR
   connection on loopback, `SignalRConnectionLossTests`).
 - Device-level performance on the DOOGEE S99 (the emulator numbers are in [19](19-Performance.md)).
+- The apply diagnostics, the guarded upsert and the growth rule on a DEVICE (covered on desktop SQLite 3.53; the 5.3x fast-path
+  figure is a desktop measurement and the device ratio has not been taken).
+- Stateful reconnect across a real proxy (covered on loopback, `SignalRTransportTests`).
 - NativeAOT runtime run as an automated test (the publish is verified and a manual run synced 50,000 rows).
+
+## Not verified by CI
+
+- **The client model against the server model.** A column whose declared type disagrees with the server's is reported
+  (ADR-0061) and fails a Debug run, but nothing proves the two models agree at BUILD time. The contract test the
+  1.1.0 review asked for was not written: AgriPad's client model is source-generated inside the MAUI assembly, which a
+  plain test project cannot reference. Until that is solved, the Debug-build failure is the only guard.
+- **Areas never audited.** The 2026-09 review covered the engine, the stores, the transports and the protocol. It did
+  NOT cover the source generator's diagnostics, the AOT sample, the digest cache's eviction, or the EF Core table
+  extractor beyond the paths AgriPad exercises.
 
 ## Features not built
 

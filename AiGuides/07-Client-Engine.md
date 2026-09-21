@@ -148,3 +148,23 @@ include those tables, debounced by `ChangesDebounce`. A poke is only a hint; cur
 
 `IG9SyncHostHooks.BeginRunAsync(run)` returns a scope held for the run — the place for an Android foreground service or
 keep-screen-on, held **only during a run** (plan D-11). `IsNetworkAvailable = false` skips automatic runs.
+
+## Added in 1.1.0
+
+| Option (`G9CSyncEngineOptions`) | Default | Meaning |
+|---|---|---|
+| `FailOnTypeMismatch` | false | fail the run with `G9S-MODEL-TYPE-MISMATCH` when the server dropped a column for its type (ADR-0061). Turn on in Debug builds |
+| `ReconcileApplyRows` | 20,000 | a reconcile fetches and applies in groups of this size (ADR-0066) |
+| `ReconcileSnapshotThreshold` | 100,000 | a difference this large hands over to a snapshot pull; 0 = never (ADR-0066) |
+| `StagedPullsMaxBytes` | 64 MiB | total size of kept stages before the oldest are pruned (ADR-0060) |
+| `MaxDecodedFrameBytes` | 64 MiB | decode budget per frame, on the pull and the reconcile path |
+
+- `G9CSyncRunResult.ModelProblems` - the columns the server dropped at hello, logged once per engine (event 20022).
+- `G9CSyncRunResult.Changes.Diagnostics` / `.UnchangedRows` - see [08](08-Client-Sqlite.md).
+- `GetChangeFeedFloorAsync()` - ADR-0059.
+- **Push splitting (ADR-0063).** `G9S-REJ-TOO-MANY` halves the batch and retries, down to one row, and grows back after a success
+  (event 20023). The old behaviour - repeat the identical batch for ever - blocked every later upload.
+- **Local store failures (ADR-0068)** are normalised from `IG9SyncLocalStoreFailure`: `G9S-LOCAL-CORRUPT` and
+  `G9S-LOCAL-DISK-FULL` end the run; `G9S-LOCAL-BUSY` and `G9S-SRV-BUSY` are transient.
+- Event ids: 20019 push failure (was sharing 20013 with transient retry), 20021 stages pruned, 20022 model problems, 20023 push
+  split, 20024 reconcile handed over to snapshot. 20017 is retired.

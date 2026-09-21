@@ -1,5 +1,6 @@
 using G9SyncData.Client.Runs;
 using G9SyncData.IntegrationTests.Infrastructure;
+using G9SyncData.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using static G9SyncData.IntegrationTests.Infrastructure.TestSchema;
 
@@ -199,8 +200,12 @@ public sealed class ServerPipelineTests(ITestOutputHelper output)
     }
 
     [PostgresFact]
-    public async Task Too_many_rejections_roll_back_the_whole_push()
+    public async Task Too_many_rejections_roll_back_the_push_and_the_device_splits_it_until_the_valid_rows_get_through()
     {
+        // The server still rolls a push back whole when more rows are rejected than it accepts (a systematic problem should not half
+        // apply). What changed is the device (ADR-0063): it used to send the same batch again on every run and fail the same way for
+        // ever, so ONE bad import meant that device never uploaded anything again. It now halves the batch until the push is below the
+        // limit, where the bad rows are rejected one by one and parked.
         await using var harness = await SyncHarness.CreateAsync(output, configure: o => o.MaxRejectionsPerPush = 1);
         var site = Guid.NewGuid();
         await harness.InsertSiteAsync(site, "North");
@@ -211,11 +216,18 @@ public sealed class ServerPipelineTests(ITestOutputHelper output)
         await client.ExecAsync(InsertPot, Key(valid), Key(site), "OK-1", 0);
         for (var i = 0; i < 3; i++) await client.ExecAsync(InsertPot, Key(Guid.NewGuid()), Key(site), "P00001", 0);
 
+        var pushes = client.InMemory.CallCount(G9ETransportOperation.Push);
         var result = await client.SyncAsync();
-        Assert.Equal(G9ESyncOutcome.Failed, result.Outcome);
-        Assert.Equal(G9SyncErrorCodes.RejectTooMany, result.Error?.Code);
-        Assert.Equal(0L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Pot" WHERE "Id" = $1""", valid));
-        Assert.Equal(4, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
+
+        Assert.Equal(G9ESyncOutcome.CompletedWithRejections, result.Outcome);
+        Assert.Equal(3, result.Rejected);
+        Assert.Equal(1L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Pot" WHERE "Id" = $1""", valid));
+        var pending = await client.Engine.GetPendingSummaryAsync();
+        Assert.Equal(0, pending.TotalRows);
+        Assert.Equal(3, pending.RejectedRows);
+
+        // 4 rows rolled back, then 2 (through), 2 rolled back, then 1 and 1: the first attempt really was refused as a whole.
+        Assert.True(client.InMemory.CallCount(G9ETransportOperation.Push) - pushes >= 4);
     }
 
     [PostgresFact]

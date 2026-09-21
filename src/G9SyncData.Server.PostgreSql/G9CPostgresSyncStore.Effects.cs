@@ -77,6 +77,34 @@ public sealed partial class G9CPostgresSyncStore
         return effects;
     }
 
+    public async Task<int> RequeueFailedEffectsAsync(IReadOnlyCollection<Guid>? effectIds, CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+        // Attempts go back to zero, so the effect gets its full allowance again; last_error stays until the next outcome replaces it,
+        // because "why did this fail before" is exactly what whoever requeues it wants to keep seeing.
+        if (effectIds is { Count: 0 }) return 0;
+        await using var command = Command(connection, null,
+            $"UPDATE {_schema}.effects SET failed = false, attempts = 0, next_attempt_at = now() WHERE failed" +
+            (effectIds is null ? string.Empty : " AND effect_id = ANY(@g9_ids)"));
+        if (effectIds is not null) command.Parameters.Add(P("g9_ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid, effectIds.ToArray()));
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<G9CEffectQueueStatus> GetEffectQueueStatusAsync(CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = Command(connection, null,
+            $"SELECT count(*) FILTER (WHERE NOT failed), count(*) FILTER (WHERE failed), " +
+            $"extract(epoch FROM now() - min(created_at) FILTER (WHERE NOT failed)) FROM {_schema}.effects");
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return new G9CEffectQueueStatus(0, 0, null);
+        return new G9CEffectQueueStatus(reader.GetInt64(0), reader.GetInt64(1),
+            reader.IsDBNull(2) ? null : TimeSpan.FromSeconds(Math.Max(0, Convert.ToDouble(reader.GetValue(2), System.Globalization.CultureInfo.InvariantCulture))));
+    }
+
     private static G9CPendingEffect Read(NpgsqlDataReader reader) => new()
     {
         EffectId = reader.GetGuid(0),

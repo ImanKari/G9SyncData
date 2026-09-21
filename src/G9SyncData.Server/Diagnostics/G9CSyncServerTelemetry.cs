@@ -20,6 +20,21 @@ public static class G9CSyncServerTelemetry
 
     internal static Counter<long> Hellos { get; } = Meter.CreateCounter<long>("g9sync.server.hellos", "{call}", "Hello calls.");
 
+    /// <summary>The effect queue as the dispatcher last saw it; the gauges below read this instead of querying per scrape (ADR-0065).</summary>
+    internal static Storage.G9CEffectQueueStatus EffectQueue { get; set; } = new(0, 0, null);
+
+    internal static Counter<long> EffectDeliveries { get; } =
+        Meter.CreateCounter<long>("g9sync.server.effects.deliveries", "{delivery}", "Effect delivery attempts by outcome (delivered, failed, failed_for_good).");
+
+    internal static ObservableGauge<long> EffectsPending { get; } =
+        Meter.CreateObservableGauge("g9sync.server.effects.pending", () => EffectQueue.Pending, "{effect}", "Effects waiting to be delivered.");
+
+    internal static ObservableGauge<long> EffectsFailed { get; } =
+        Meter.CreateObservableGauge("g9sync.server.effects.failed", () => EffectQueue.Failed, "{effect}", "Effects that exhausted their attempts and are no longer retried.");
+
+    internal static Counter<long> Refused { get; } =
+        Meter.CreateCounter<long>("g9sync.server.refused", "{call}", "Requests refused as busy (G9S-SRV-BUSY), tagged by operation.");
+
     internal static Counter<long> PullPlans { get; } = Meter.CreateCounter<long>("g9sync.server.pull.plans", "{plan}", "Planned pulls.");
 
     internal static Counter<long> PlannedRows { get; } = Meter.CreateCounter<long>("g9sync.server.pull.planned_rows", "{row}", "Rows announced by pull plans.");

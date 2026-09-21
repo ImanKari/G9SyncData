@@ -9,7 +9,38 @@ public sealed class G9CSyncServerOptions
     /// </summary>
     public byte[]? TokenSigningKey { get; set; }
 
+    /// <summary>
+    ///     Keys that are still ACCEPTED on a pull token but never used to sign one (ADR-0064). To rotate: move the current key here, set
+    ///     the new one as <see cref="TokenSigningKey" />, and drop the old one after <see cref="TokenLifetime" /> has passed. Pulls planned
+    ///     under the old key finish; without this every pull in flight at the moment of rotation is discarded and planned again.
+    /// </summary>
+    public IList<byte[]> PreviousTokenSigningKeys { get; } = [];
+
+    /// <summary>
+    ///     Refuse to start without a <see cref="TokenSigningKey" /> (ADR-0064). Default false, because one instance with a random key is a
+    ///     legitimate development setup. A production host should set it: with a random key every restart and every deploy invalidates
+    ///     the pulls in flight, and for a device on a field connection that is a half-downloaded site thrown away and planned again.
+    /// </summary>
+    public bool RequireTokenSigningKey { get; set; }
+
     public TimeSpan TokenLifetime { get; set; } = TimeSpan.FromHours(2);
+
+    /// <summary>
+    ///     Pull, reconcile and fetch streams served at the same time; further ones are refused with the retryable
+    ///     <c>G9S-SRV-BUSY</c> after <see cref="AdmissionWait" /> (ADR-0062). 0 = unlimited. Default 64.
+    /// </summary>
+    /// <remarks>
+    ///     Every stream holds a database connection and a page of rows in memory. Without a limit a fleet that all opens the same large
+    ///     site after a deploy is bounded only by the connection pool, and the first thing to fail is somebody's push. A refused device
+    ///     retries with its ordinary backoff and jitter, which is exactly the spreading-out that is wanted.
+    /// </remarks>
+    public int MaxConcurrentPulls { get; set; } = 64;
+
+    /// <summary>Pushes applied at the same time; see <see cref="MaxConcurrentPulls" />. 0 = unlimited. Default 32.</summary>
+    public int MaxConcurrentPushes { get; set; } = 32;
+
+    /// <summary>How long a request waits for a free slot before it is refused as busy.</summary>
+    public TimeSpan AdmissionWait { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Rows per pull page (one chunk per page).</summary>
     public int PageRows { get; set; } = 2000;

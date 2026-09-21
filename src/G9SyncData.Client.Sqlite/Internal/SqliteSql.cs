@@ -41,6 +41,7 @@ internal static class SqliteSql
             PRIMARY KEY (tid, pk)) WITHOUT ROWID;
         CREATE INDEX IF NOT EXISTS g9_rows_dirty ON g9_rows (local_seq) WHERE dirty <> 0;
         CREATE INDEX IF NOT EXISTS g9_rows_feed ON g9_rows (tid, local_seq);
+        CREATE INDEX IF NOT EXISTS g9_rows_deleted ON g9_rows (local_seq) WHERE deleted = 1;
         CREATE TABLE IF NOT EXISTS g9_subscriptions (
             key TEXT NOT NULL PRIMARY KEY,
             name TEXT NOT NULL,
@@ -60,7 +61,7 @@ internal static class SqliteSql
             last_access_utc INTEGER NULL) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS g9_ephemeral_rows (sub_key TEXT NOT NULL, tid INTEGER NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (sub_key, tid, pk)) WITHOUT ROWID;
         CREATE INDEX IF NOT EXISTS g9_ephemeral_rows_row ON g9_ephemeral_rows (tid, pk);
-        CREATE TABLE IF NOT EXISTS g9_stage_runs (run_id TEXT NOT NULL PRIMARY KEY, plan_json TEXT NOT NULL, backfills_json TEXT NULL, created_utc INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0, generation TEXT NULL, stage_seq INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS g9_stage_runs (run_id TEXT NOT NULL PRIMARY KEY, plan_json TEXT NOT NULL, backfills_json TEXT NULL, created_utc INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0, generation TEXT NULL, stage_seq INTEGER NOT NULL DEFAULT 0, from_cursors_json TEXT NULL) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS g9_stage (run_id TEXT NOT NULL, seq INTEGER NOT NULL, subscription_key TEXT NULL, row_count INTEGER NOT NULL, continuation_json TEXT NULL, payload BLOB NULL, PRIMARY KEY (run_id, seq)) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS g9_rejections (
             tid INTEGER NOT NULL, pk TEXT NOT NULL, code TEXT NOT NULL, message TEXT NULL, sql_state TEXT NULL, constraint_name TEXT NULL,

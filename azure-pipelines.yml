@@ -295,6 +295,59 @@ jobs:
           ArtifactName: 'nuget'
 
       # ────────────────────────────────────────────────────────────────────────────────────────
+      # Tag the commit the packages are built from: v<G9SyncDataVersion>. BEFORE the mirror, so the tag
+      # reaches GitHub with it - a package whose version cannot be found in the repository is the first
+      # thing anyone debugging a consumer trips over.
+      #
+      # ⛔ A WARNING, never a failure. The tag is bookkeeping; the release is the packages. The two ways
+      #    this can go wrong are both worth saying out loud and neither is a reason to stop:
+      #      - the PAT has Code(Read) only -> the push is refused;
+      #      - the tag already exists on ANOTHER commit -> main moved without a version bump, and the
+      #        nuget push below will skip every package as a duplicate. That is the real message.
+      - task: PowerShell@2
+        displayName: 'Tag the release commit'
+        condition: and(succeeded(), eq(variables.isRelease, true))
+        env:
+          AZDO_PAT: $(AzureDevOps.PAT)
+        inputs:
+          targetType: 'inline'
+          script: |
+            $ErrorActionPreference = 'Continue'   # git reports progress on stderr
+            $repo = '${{ parameters.repositoryName }}'
+            $version = (Select-Xml -Path 'Directory.Build.props' -XPath '//G9SyncDataVersion').Node.InnerText.Trim()
+            if ([string]::IsNullOrWhiteSpace($version)) {
+                Write-Host "##vso[task.logissue type=warning]G9SyncDataVersion not found in Directory.Build.props; no tag created."
+                exit 0
+            }
+
+            $tag = "v$version"
+            $head = (git rev-parse HEAD).Trim()
+            $remote = "https://$env:AZDO_PAT@g9tm.visualstudio.com/$repo/_git/$repo"
+
+            $existing = (git ls-remote --tags $remote "refs/tags/$tag" | Select-Object -First 1)
+            if ($existing) {
+                $taggedCommit = ($existing -split "\s+")[0]
+                # An annotated tag lists the TAG object; the commit it points at is the peeled ^{} line.
+                $peeled = (git ls-remote --tags $remote "refs/tags/$tag^{}" | Select-Object -First 1)
+                if ($peeled) { $taggedCommit = ($peeled -split "\s+")[0] }
+
+                if ($taggedCommit -eq $head) {
+                    Write-Host "Tag $tag already points at $head."
+                } else {
+                    Write-Host "##vso[task.logissue type=warning]Tag $tag exists on $taggedCommit but this build is $head. G9SyncDataVersion was not bumped: every package below will be skipped as a duplicate."
+                }
+                exit 0
+            }
+
+            git -c user.name='g9-pipeline' -c user.email='pipeline@g9tm.invalid' tag -a $tag -m "G9SyncData $version" $head
+            git push $remote "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "##vso[task.logissue type=warning]Could not push tag $tag (does AzureDevOps.PAT have Code: Read & Write?). The release continues."
+                exit 0
+            }
+            Write-Host "Tagged $head as $tag."
+
+      # ────────────────────────────────────────────────────────────────────────────────────────
       # Mirror BEFORE publishing, so the commit the packages' SourceLink points at is already public.
       - task: PowerShell@2
         displayName: 'Mirror Azure DevOps repo to GitHub'

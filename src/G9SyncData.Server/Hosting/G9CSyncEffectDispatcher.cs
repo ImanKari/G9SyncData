@@ -1,3 +1,4 @@
+using G9SyncData.Server.Diagnostics;
 using G9SyncData.Server.Pipeline;
 using G9SyncData.Server.Storage;
 using Microsoft.Extensions.DependencyInjection;
@@ -73,7 +74,29 @@ internal sealed partial class G9CSyncEffectDispatcher(
             await DeliverAsync(effect, options, cancellationToken).ConfigureAwait(false);
         }
 
+        await RefreshQueueStatusAsync(cancellationToken).ConfigureAwait(false);
         return claimed.Count;
+    }
+
+    /// <summary>
+    ///     Reads the queue's size for the gauges (ADR-0065), once per dispatch pass: a gauge callback must not open a database connection
+    ///     of its own every time a meter is scraped. A failure here never disturbs delivery.
+    /// </summary>
+    private async Task RefreshQueueStatusAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var status = await store.GetEffectQueueStatusAsync(cancellationToken).ConfigureAwait(false);
+            var failedBefore = G9CSyncServerTelemetry.EffectQueue.Failed;
+            G9CSyncServerTelemetry.EffectQueue = status;
+
+            // Said once when the count goes UP, not on every pass: a failed effect is work the push owes that nobody is doing.
+            if (status.Failed > failedBefore) LogEffectsFailedForGood(logger, status.Failed);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LogQueueStatusFailed(logger, exception);
+        }
     }
 
     private async Task DeliverAsync(G9CPendingEffect effect, G9CSyncServerOptions options, CancellationToken cancellationToken)
@@ -119,6 +142,7 @@ internal sealed partial class G9CSyncEffectDispatcher(
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             var terminal = effect.Attempt >= options.EffectMaxAttempts;
+            G9CSyncServerTelemetry.EffectDeliveries.Add(1, new KeyValuePair<string, object?>("outcome", terminal ? "failed_for_good" : "failed"));
             LogEffectFailed(logger, exception, effect.EffectId, table.LogicalName, effect.Attempt, options.EffectMaxAttempts, terminal);
             await store.FailEffectAsync(effect.EffectId, exception.Message, options.EffectMaxAttempts, CancellationToken.None).ConfigureAwait(false);
             return;
@@ -126,8 +150,17 @@ internal sealed partial class G9CSyncEffectDispatcher(
 
         // Only now: a completion recorded before the handlers ran would lose the work the outbox exists to protect.
         await store.CompleteEffectAsync(effect.EffectId, cancellationToken).ConfigureAwait(false);
+        G9CSyncServerTelemetry.EffectDeliveries.Add(1, new KeyValuePair<string, object?>("outcome", "delivered"));
         LogEffectDelivered(logger, effect.EffectId, table.LogicalName, effect.Attempt);
     }
+
+    [LoggerMessage(EventId = 21025, Level = LogLevel.Error,
+        Message = "{Failed} effect(s) have exhausted their attempts and are no longer retried: work a committed push owes is NOT being done. " +
+                  "Fix the handler, then requeue them (RequeueFailedEffectsAsync)")]
+    private static partial void LogEffectsFailedForGood(ILogger logger, long failed);
+
+    [LoggerMessage(EventId = 21026, Level = LogLevel.Debug, Message = "Could not read the effect queue status for the gauges")]
+    private static partial void LogQueueStatusFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(EventId = 21020, Level = LogLevel.Debug, Message = "Effect {EffectId} for {Table} delivered on attempt {Attempt}")]
     private static partial void LogEffectDelivered(ILogger logger, Guid effectId, string table, int attempt);
