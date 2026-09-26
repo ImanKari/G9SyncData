@@ -9,7 +9,7 @@ resumable, observable and **NativeAOT-compatible** from the first line.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.1.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.1.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet

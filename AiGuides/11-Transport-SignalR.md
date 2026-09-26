@@ -132,3 +132,20 @@ through the same JSON context, maps server exceptions like the hub, and injects 
 
 `AddHealthChecks().AddG9SyncEffects(name, maxPendingAge, tags)` registers `G9CSyncEffectsHealthCheck` (ADR-0065). Do not tag it as
 a readiness probe.
+
+## 1.1.1 — on G9SignalRSuperNetCore 2.9.0
+
+A dependency release: the four transport packages move from 2.7.0 to 2.9.0 (`Directory.Packages.props`). Nothing in
+the sync protocol or the transports' code changes. What 2.8.0 and 2.9.0 bring to this library:
+
+- **Client (2.8.0):** WebSockets first with a real fallback (`G9EConnectionPhase.TransportFallback` says when it
+  happened), per-attempt reconnect jitter so a fleet does not come back together after an outage, and opt-in stateful
+  reconnect (off here — it needs WebSockets end to end and costs server memory per connection).
+- **Client (2.9.0):** additive only — nullable `StoredFileName` on upload results (null from older servers), an
+  optional connection-quality monitor, hub-connection extensions. The MessagePack packages' code is unchanged since 2.7.0.
+- **Server (2.9.0):** connection limits per hub type; `G9AttrRequireRole` / `Claim` / `Permission` declared on a hub
+  CLASS now apply together with the method's own; an auth throttle on the JWT hub; upload ownership. The sync hub
+  declares none of these attributes and uses no upload or JWT hub, so its behaviour is unchanged.
+
+Why now: AgriPad pinned the client at 2.9.0 while this family still brought 2.7.0 transitively, so the app ran a
+mixed Client / Client.MessagePack pair and the mobile server (built from this source) stayed on 2.7.0.
