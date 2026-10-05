@@ -10,7 +10,7 @@ import { createG9SignalRBridge } from '@g9tm/signalr-supernetcore-lynx/lynxtron'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bundleForLynx, runInLynxSandbox } from '../../../../scripts/lynx-sandbox.mjs';
 import { nodeSqliteDriver } from '../../../syncdata/src/node/index.js';
-import { postgresAvailable, startServer, type SampleServer } from '../../../syncdata/test/interop/harness.js';
+import { postgresAvailable, startServer, withServerLog, type SampleServer } from '../../../syncdata/test/interop/harness.js';
 import { createG9SyncDataBridge } from '../../src/lynxtron/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -93,17 +93,19 @@ describe.skipIf(unavailable !== null)('the TypeScript client in a Lynx-shaped ru
       });
 
       it('runs the whole scenario', async () => {
-        const result = (await runInLynxSandbox({
-          code,
-          fetch,
-          timeoutMs: 600000,
-          host: { hubUrl: server.hubUrl, serverUrl: server.url, dir, protocol },
-          nativeModules: {
-            G9SignalRLynxModule: callbackModuleOf(createG9SignalRBridge()),
-            G9SyncDataLynxModule: callbackModuleOf(createG9SyncDataBridge()),
-            G9SyncTestSqlite: sqliteModule(),
-          },
-        })) as { environment: Record<string, string>; choices: string[]; pots: number; lines: string[] };
+        const result = (await withServerLog(server, () =>
+          runInLynxSandbox({
+            code,
+            fetch,
+            timeoutMs: 600000,
+            host: { hubUrl: server.hubUrl, serverUrl: server.url, dir, protocol },
+            nativeModules: {
+              G9SignalRLynxModule: callbackModuleOf(createG9SignalRBridge()),
+              G9SyncDataLynxModule: callbackModuleOf(createG9SyncDataBridge()),
+              G9SyncTestSqlite: sqliteModule(),
+            },
+          }),
+        )) as { environment: Record<string, string>; choices: string[]; pots: number; lines: string[] };
         expect(result.environment).toEqual({ BigInt: 'undefined', TextEncoder: 'undefined', URL: 'undefined', WebSocket: 'undefined', globalSetTimeout: 'undefined' });
         expect(result.choices.length).toBeGreaterThan(0);
         expect(result.choices.every((c) => c === 'native-websocket')).toBe(true);

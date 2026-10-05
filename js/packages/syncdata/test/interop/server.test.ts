@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { nodeSqliteDriver, useNodeBrotli } from '../../src/node/index.js';
 import { G9ESyncHubProtocol, G9SignalRSyncTransport } from '../../src/signalr/transport.js';
-import { postgresAvailable, runDotnetClient, startServer, type SampleServer } from './harness.js';
+import { postgresAvailable, runDotnetClient, startServer, withServerLog, type SampleServer } from './harness.js';
 import { createClient, initialSync, runScenario, type ScenarioDeps } from './scenario.js';
 
 useNodeBrotli();
@@ -47,7 +47,7 @@ describe.skipIf(unavailable !== null)('the TypeScript client against the real .N
       });
 
       it('downloads 50,000 rows, pushes edits, receives pokes, reconciles and unsubscribes', async () => {
-        const report = await runScenario(deps(server, protocol, join(scratch, name)));
+        const report = await withServerLog(server, () => runScenario(deps(server, protocol, join(scratch, name))));
         expect(report.pots).toBe(25003);
       }, 900000);
     });

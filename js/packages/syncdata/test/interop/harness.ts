@@ -71,6 +71,20 @@ export async function postgresAvailable(): Promise<string | null> {
 }
 
 
+/**
+ * Runs a test body against `server`; when it fails, the error carries the tail of the sample server's log — on a CI agent
+ * nothing else shows why the server closed a connection or rejected a call.
+ */
+export async function withServerLog<T>(server: SampleServer, body: () => Promise<T>, lines = 150): Promise<T> {
+  try {
+    return await body();
+  } catch (error) {
+    const tail = server.log.join('').split(/\r?\n/).slice(-lines).join('\n');
+    if (error instanceof Error) error.message += `\n--- sample server log (last ${lines} lines) ---\n${tail}`;
+    throw error;
+  }
+}
+
 /** Drops a g9t_js_ database with psql (G9SYNC_PSQL, else psql on PATH, else D:\Apps\pgsql\bin\psql.exe). */
 export async function dropDatabase(database: string): Promise<void> {
   if (!/^g9t_js_[a-z0-9]+$/.test(database)) throw new Error(`Refusing to drop '${database}': not a test database.`);
