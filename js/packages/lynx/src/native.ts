@@ -36,7 +36,7 @@ export type G9SyncDataNativeEnvelope<T> =
 
 /** The promise face of the module, the same for every platform. */
 export interface G9SyncDataNative {
-  /** `{ version: '1.2.0', platform: 'android' | 'ios' | 'lynxtron', brotli }`. */
+  /** `{ version: '1.2.1', platform: 'android' | 'ios' | 'lynxtron', brotli }`. */
   capabilities(): Promise<{ version: string; platform: string; brotli: boolean }>;
   /** The raw Brotli stream `data` decoded off the JS thread: EXACTLY `expectedLength` bytes, or a rejection. */
   brotliDecompress(data: Uint8Array, expectedLength: number): Promise<Uint8Array>;

@@ -491,7 +491,9 @@ jobs:
           targetType: 'inline'
           workingDirectory: js
           script: |
-            if ([string]::IsNullOrWhiteSpace($env:NPM_TOKEN) -or $env:NPM_TOKEN -eq '$(NpmToken)') {
+            # Not '$' + '(NpmToken)' written as one macro: Azure expands it inside this script as well, and the check
+            # then compared the token with itself (build 514 published NuGet but skipped npm as 'not set').
+            if ([string]::IsNullOrWhiteSpace($env:NPM_TOKEN) -or $env:NPM_TOKEN -eq ('$' + '(NpmToken)')) {
                 Write-Host "##vso[task.logissue type=warning]NpmToken is not set: the npm packages were packed (artifact 'npm') but not published."
                 exit 0
             }

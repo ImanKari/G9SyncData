@@ -4,7 +4,7 @@
 
 typedef void (^G9SyncDataReply)(id envelope);
 
-static NSString *const G9SyncDataLynxVersion = @"1.2.0";
+static NSString *const G9SyncDataLynxVersion = @"1.2.1";
 
 static NSInteger G9SyncDataAppleBrotli(uint8_t *destination, size_t capacity, const uint8_t *source, size_t length)
     API_AVAILABLE(ios(15.0), macos(12.0));

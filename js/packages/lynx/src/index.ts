@@ -3,7 +3,7 @@
 // SQLite driver is the app's (G9LynxControls' native driver satisfies the store's G9SqliteDriver contract).
 
 /** The package version; equal to @g9tm/syncdata's and to the .NET packages' (one release, every side). */
-export const VERSION = '1.2.0';
+export const VERSION = '1.2.1';
 
 export * from './native.js';
 export { createLynxSyncTransport, useLynxBrotli, type G9LynxSyncTransportOptions } from './transport.js';

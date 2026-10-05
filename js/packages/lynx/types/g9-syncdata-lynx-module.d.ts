@@ -11,7 +11,7 @@
 
 /** @lynxmodule */
 export declare class G9SyncDataLynxModule {
-  /** `{ version: '1.2.0', platform: 'android' | 'ios', brotli }` — `brotli` is false on iOS < 15. */
+  /** `{ version: '1.2.1', platform: 'android' | 'ios', brotli }` — `brotli` is false on iOS < 15. */
   capabilities(callback: (reply: Record<string, unknown>) => void): void;
   /**
    * Decodes the raw Brotli stream `data` (no framing; what .NET's `BrotliEncoder` writes) OFF the JS thread. The value

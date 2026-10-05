@@ -14,7 +14,7 @@ local database** as the .NET client — a database the MAUI app wrote opens in t
 | `@g9tm/syncdata/testing` | fault injection over any transport (`G9FaultInjectingTransport`) |
 | `@g9tm/syncdata/brotli-js` | a pure-JavaScript Brotli decoder for runtimes without a native one |
 
-Version 1.2.0 — always equal to the .NET packages' version. What maps to what, and every deliberate difference:
+Version 1.2.1 — always equal to the .NET packages' version. What maps to what, and every deliberate difference:
 [PARITY.md](PARITY.md).
 
 ## Install

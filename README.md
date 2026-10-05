@@ -11,7 +11,7 @@ the .NET client byte for byte.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.2.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.2.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -22,6 +22,17 @@ the .NET client byte for byte.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.2.1
+
+- **Subscriptions created in the same millisecond are pulled in creation order** — on both clients. A tie in
+  `CreatedUtc` used to fall back to key order, and the key carries a GUID parameter, so two devices doing the same thing
+  could apply the same rows in a different order and number them differently (`local_seq`). Order is now
+  `CreatedUtc`, then the subscription's slot (creation order), then the key, ordinal (LES-0052).
+- **The npm packages are published from this version on** (`@g9tm/syncdata`, `@g9tm/syncdata-lynx`): 1.2.0 reached
+  nuget.org without this fix, and its npm publication was skipped by a pipeline check, so npm starts at 1.2.1 and both
+  clients share one version and one behaviour.
+- CI found two test races (a telemetry assertion read before the run recorded its metrics; nothing else changed).
 
 ## What's new in 1.2.0
 

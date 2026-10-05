@@ -77,6 +77,17 @@ public sealed class ServerFeedAndTelemetryTests(ITestOutputHelper output)
         await client.ExecAsync("INSERT INTO Pot (Id, SiteId, Code, Status, IsDeleted) VALUES ($p0, $p1, 'T-1', 0, 0)", Key(Guid.NewGuid()), Key(site));
         await client.SyncOkAsync();
 
+        // The engine records a run's metrics and stops its activity right AFTER completing it (the caller is released
+        // first), so the last run's measurements can land a moment after SyncOkAsync returns: wait for them (CI build 520
+        // read rows.pushed = 0 here).
+        bool Recorded() =>
+            totals.GetValueOrDefault("g9sync.client.runs") >= 2 && totals.GetValueOrDefault("g9sync.client.rows.downloaded") >= 61
+            && totals.GetValueOrDefault("g9sync.client.rows.pushed") >= 1 && totals.GetValueOrDefault("g9sync.server.pull.rows") >= 61
+            && totals.GetValueOrDefault("g9sync.server.push.rows") >= 1
+            && new[] { "G9Sync.Run", "G9Sync.Push", "G9Sync.PlanPull" }.All(name => activities.Contains(name));
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!Recorded() && DateTime.UtcNow < deadline) await Task.Delay(20);
+
         Assert.True(totals.GetValueOrDefault("g9sync.client.runs") >= 2);
         Assert.True(totals.GetValueOrDefault("g9sync.client.rows.downloaded") >= 61);
         Assert.True(totals.GetValueOrDefault("g9sync.client.rows.pushed") >= 1);

@@ -10,7 +10,7 @@ Lynx support for [`@g9tm/syncdata`](../syncdata/README.md), the TypeScript twin 
   trip.
 - **`useLynxBrotli()`** — makes the native decoder the default for every frame the store and the engine read.
 
-Version 1.2.0, released with `@g9tm/syncdata` and the .NET packages.
+Version 1.2.1, released with `@g9tm/syncdata` and the .NET packages.
 
 ## Install
 
