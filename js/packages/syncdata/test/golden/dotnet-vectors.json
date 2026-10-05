@@ -1,0 +1,2229 @@
+{
+  "generator": "tests/G9SyncData.Tests/Protocol/JsGoldenVectorsTests.cs",
+  "varints": [
+    {
+      "value": "0",
+      "hex": "00"
+    },
+    {
+      "value": "1",
+      "hex": "01"
+    },
+    {
+      "value": "127",
+      "hex": "7f"
+    },
+    {
+      "value": "128",
+      "hex": "8001"
+    },
+    {
+      "value": "300",
+      "hex": "ac02"
+    },
+    {
+      "value": "16383",
+      "hex": "ff7f"
+    },
+    {
+      "value": "16384",
+      "hex": "808001"
+    },
+    {
+      "value": "2147483647",
+      "hex": "ffffffff07"
+    },
+    {
+      "value": "4294967296",
+      "hex": "8080808010"
+    },
+    {
+      "value": "9007199254740991",
+      "hex": "ffffffffffffff0f"
+    },
+    {
+      "value": "9007199254740992",
+      "hex": "8080808080808010"
+    },
+    {
+      "value": "9223372036854775807",
+      "hex": "ffffffffffffffff7f"
+    },
+    {
+      "value": "18446744073709551615",
+      "hex": "ffffffffffffffffff01"
+    }
+  ],
+  "zigzag": [
+    {
+      "value": "0",
+      "zigzag": "0"
+    },
+    {
+      "value": "-1",
+      "zigzag": "1"
+    },
+    {
+      "value": "1",
+      "zigzag": "2"
+    },
+    {
+      "value": "-2",
+      "zigzag": "3"
+    },
+    {
+      "value": "2",
+      "zigzag": "4"
+    },
+    {
+      "value": "-2147483648",
+      "zigzag": "4294967295"
+    },
+    {
+      "value": "2147483647",
+      "zigzag": "4294967294"
+    },
+    {
+      "value": "-9223372036854775808",
+      "zigzag": "18446744073709551615"
+    },
+    {
+      "value": "9223372036854775807",
+      "zigzag": "18446744073709551614"
+    },
+    {
+      "value": "9007199254740992",
+      "zigzag": "18014398509481984"
+    },
+    {
+      "value": "-9007199254740992",
+      "zigzag": "18014398509481983"
+    },
+    {
+      "value": "4503599627370495",
+      "zigzag": "9007199254740990"
+    },
+    {
+      "value": "-4503599627370496",
+      "zigzag": "9007199254740991"
+    }
+  ],
+  "md5": [
+    {
+      "text": "",
+      "hex": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    {
+      "text": "a",
+      "hex": "0cc175b9c0f1b6a831c399e269772661"
+    },
+    {
+      "text": "abc",
+      "hex": "900150983cd24fb0d6963f7d28e17f72"
+    },
+    {
+      "text": "message digest",
+      "hex": "f96b697d7cb7938d525a2f31aaf161d0"
+    },
+    {
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "hex": "04364420e25c512fd958a70738aa8f72"
+    },
+    {
+      "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "hex": "6c830a5d23df58dbe0171eb5639bf3e4"
+    },
+    {
+      "text": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+      "hex": "3ecc49f9d9d6c263b4f0de7fc3f38aed"
+    },
+    {
+      "text": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+      "hex": "20ffcf857ba39b1d56e11650e63e35d0"
+    },
+    {
+      "text": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+      "hex": "879e5b71d2157443a72257dc3c741159"
+    },
+    {
+      "text": "Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 Ünïcødé ✓ \uD83D\uDE00 ",
+      "hex": "a7157e274d74b7ae92d6424079dc6a72"
+    }
+  ],
+  "digests": [
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "0",
+      "computed": [],
+      "bucket": 87,
+      "rowHash": "3650066824972017935"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "0",
+      "computed": [
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "2813340482776343685"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "0",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 87,
+      "rowHash": "-1140554180016582375"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "0",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "9116849903426638811"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "1",
+      "computed": [],
+      "bucket": 87,
+      "rowHash": "-1723609107331928823"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "1",
+      "computed": [
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "-6695134915546383748"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "1",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 87,
+      "rowHash": "-760503460730265953"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "1",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "3830572252947687822"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "123456789",
+      "computed": [],
+      "bucket": 87,
+      "rowHash": "7254922526945850731"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "123456789",
+      "computed": [
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "-6587316778523899704"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "123456789",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 87,
+      "rowHash": "8012550811210104576"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "123456789",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "9086762743069667902"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "9223372036854775807",
+      "computed": [],
+      "bucket": 87,
+      "rowHash": "-9108397184271486689"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "9223372036854775807",
+      "computed": [
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "-3534364791139921088"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "9223372036854775807",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 87,
+      "rowHash": "679953856002769897"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "9223372036854775807",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 87,
+      "rowHash": "-6318369123881123699"
+    },
+    {
+      "key": "42",
+      "version": "0",
+      "computed": [],
+      "bucket": 161,
+      "rowHash": "-6262141173674240483"
+    },
+    {
+      "key": "42",
+      "version": "0",
+      "computed": [
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "6634610261544223669"
+    },
+    {
+      "key": "42",
+      "version": "0",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 161,
+      "rowHash": "-8259060439902220816"
+    },
+    {
+      "key": "42",
+      "version": "0",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "-7866419498724103927"
+    },
+    {
+      "key": "42",
+      "version": "1",
+      "computed": [],
+      "bucket": 161,
+      "rowHash": "6417015583370890157"
+    },
+    {
+      "key": "42",
+      "version": "1",
+      "computed": [
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "-4717694887930597961"
+    },
+    {
+      "key": "42",
+      "version": "1",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 161,
+      "rowHash": "-4626869471223860178"
+    },
+    {
+      "key": "42",
+      "version": "1",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "5616152521740394507"
+    },
+    {
+      "key": "42",
+      "version": "123456789",
+      "computed": [],
+      "bucket": 161,
+      "rowHash": "-6103711274878011880"
+    },
+    {
+      "key": "42",
+      "version": "123456789",
+      "computed": [
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "-6453005745270911650"
+    },
+    {
+      "key": "42",
+      "version": "123456789",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 161,
+      "rowHash": "-5082013669014697909"
+    },
+    {
+      "key": "42",
+      "version": "123456789",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "5905450297388687935"
+    },
+    {
+      "key": "42",
+      "version": "9223372036854775807",
+      "computed": [],
+      "bucket": 161,
+      "rowHash": "1457373927711729996"
+    },
+    {
+      "key": "42",
+      "version": "9223372036854775807",
+      "computed": [
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "2116563263433377171"
+    },
+    {
+      "key": "42",
+      "version": "9223372036854775807",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 161,
+      "rowHash": "6083659042727440424"
+    },
+    {
+      "key": "42",
+      "version": "9223372036854775807",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 161,
+      "rowHash": "-1850554570362196465"
+    },
+    {
+      "key": "-7",
+      "version": "0",
+      "computed": [],
+      "bucket": 116,
+      "rowHash": "-2182045794553171914"
+    },
+    {
+      "key": "-7",
+      "version": "0",
+      "computed": [
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "2760427059241515707"
+    },
+    {
+      "key": "-7",
+      "version": "0",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 116,
+      "rowHash": "-7754398878425240797"
+    },
+    {
+      "key": "-7",
+      "version": "0",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "527338336019941458"
+    },
+    {
+      "key": "-7",
+      "version": "1",
+      "computed": [],
+      "bucket": 116,
+      "rowHash": "-5713517715930329660"
+    },
+    {
+      "key": "-7",
+      "version": "1",
+      "computed": [
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "7636885362941059683"
+    },
+    {
+      "key": "-7",
+      "version": "1",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 116,
+      "rowHash": "358295445064003659"
+    },
+    {
+      "key": "-7",
+      "version": "1",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "1791741774980681529"
+    },
+    {
+      "key": "-7",
+      "version": "123456789",
+      "computed": [],
+      "bucket": 116,
+      "rowHash": "-3668202180218556024"
+    },
+    {
+      "key": "-7",
+      "version": "123456789",
+      "computed": [
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "4325649206559066692"
+    },
+    {
+      "key": "-7",
+      "version": "123456789",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 116,
+      "rowHash": "6358853132144859542"
+    },
+    {
+      "key": "-7",
+      "version": "123456789",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "1987541262034975905"
+    },
+    {
+      "key": "-7",
+      "version": "9223372036854775807",
+      "computed": [],
+      "bucket": 116,
+      "rowHash": "-1753276286519925398"
+    },
+    {
+      "key": "-7",
+      "version": "9223372036854775807",
+      "computed": [
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "8217575566087758668"
+    },
+    {
+      "key": "-7",
+      "version": "9223372036854775807",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 116,
+      "rowHash": "-8695986523425554965"
+    },
+    {
+      "key": "-7",
+      "version": "9223372036854775807",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 116,
+      "rowHash": "-3474421117974724264"
+    },
+    {
+      "key": "hello",
+      "version": "0",
+      "computed": [],
+      "bucket": 93,
+      "rowHash": "3590608265827986453"
+    },
+    {
+      "key": "hello",
+      "version": "0",
+      "computed": [
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "-8522936527617126812"
+    },
+    {
+      "key": "hello",
+      "version": "0",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 93,
+      "rowHash": "-4243148986755598349"
+    },
+    {
+      "key": "hello",
+      "version": "0",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "-1970147371744095599"
+    },
+    {
+      "key": "hello",
+      "version": "1",
+      "computed": [],
+      "bucket": 93,
+      "rowHash": "6730401304909832811"
+    },
+    {
+      "key": "hello",
+      "version": "1",
+      "computed": [
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "6242437621827283776"
+    },
+    {
+      "key": "hello",
+      "version": "1",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 93,
+      "rowHash": "-8331569496834833868"
+    },
+    {
+      "key": "hello",
+      "version": "1",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "196313809142509221"
+    },
+    {
+      "key": "hello",
+      "version": "123456789",
+      "computed": [],
+      "bucket": 93,
+      "rowHash": "-5822990600588655652"
+    },
+    {
+      "key": "hello",
+      "version": "123456789",
+      "computed": [
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "7327186477283679156"
+    },
+    {
+      "key": "hello",
+      "version": "123456789",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 93,
+      "rowHash": "9188683210686055136"
+    },
+    {
+      "key": "hello",
+      "version": "123456789",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "4551264286256921457"
+    },
+    {
+      "key": "hello",
+      "version": "9223372036854775807",
+      "computed": [],
+      "bucket": 93,
+      "rowHash": "1669282646368753592"
+    },
+    {
+      "key": "hello",
+      "version": "9223372036854775807",
+      "computed": [
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "2528319431824358402"
+    },
+    {
+      "key": "hello",
+      "version": "9223372036854775807",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 93,
+      "rowHash": "-5281814052263788758"
+    },
+    {
+      "key": "hello",
+      "version": "9223372036854775807",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 93,
+      "rowHash": "-4133137949245485771"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "0",
+      "computed": [],
+      "bucket": 250,
+      "rowHash": "-7010693174091727369"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "0",
+      "computed": [
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "1321971240297514719"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "0",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 250,
+      "rowHash": "1670880201615825393"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "0",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "754685937266716833"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "1",
+      "computed": [],
+      "bucket": 250,
+      "rowHash": "3768678965249432289"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "1",
+      "computed": [
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "-1501471313956387564"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "1",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 250,
+      "rowHash": "563966345225194050"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "1",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "-5107835633566725335"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "123456789",
+      "computed": [],
+      "bucket": 250,
+      "rowHash": "-7106089503301561221"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "123456789",
+      "computed": [
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "8790316798092907295"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "123456789",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 250,
+      "rowHash": "8546261083105701390"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "123456789",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "1210479253955034989"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "9223372036854775807",
+      "computed": [],
+      "bucket": 250,
+      "rowHash": "6391636026265109131"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "9223372036854775807",
+      "computed": [
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "8198341194251397843"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "9223372036854775807",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 250,
+      "rowHash": "-2894665359281455445"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "9223372036854775807",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 250,
+      "rowHash": "-4273550098892826936"
+    },
+    {
+      "key": "",
+      "version": "0",
+      "computed": [],
+      "bucket": 212,
+      "rowHash": "1917792036161038739"
+    },
+    {
+      "key": "",
+      "version": "0",
+      "computed": [
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "3014343451634949950"
+    },
+    {
+      "key": "",
+      "version": "0",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 212,
+      "rowHash": "4793956964728801781"
+    },
+    {
+      "key": "",
+      "version": "0",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "-1633451027846794125"
+    },
+    {
+      "key": "",
+      "version": "1",
+      "computed": [],
+      "bucket": 212,
+      "rowHash": "3843850031098596087"
+    },
+    {
+      "key": "",
+      "version": "1",
+      "computed": [
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "3554911192863112546"
+    },
+    {
+      "key": "",
+      "version": "1",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 212,
+      "rowHash": "-9135498317228516509"
+    },
+    {
+      "key": "",
+      "version": "1",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "-6494577154416584840"
+    },
+    {
+      "key": "",
+      "version": "123456789",
+      "computed": [],
+      "bucket": 212,
+      "rowHash": "5670955757161432665"
+    },
+    {
+      "key": "",
+      "version": "123456789",
+      "computed": [
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "6615899422950470232"
+    },
+    {
+      "key": "",
+      "version": "123456789",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 212,
+      "rowHash": "6352898654916289495"
+    },
+    {
+      "key": "",
+      "version": "123456789",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "-2138335333184959781"
+    },
+    {
+      "key": "",
+      "version": "9223372036854775807",
+      "computed": [],
+      "bucket": 212,
+      "rowHash": "-2662517032492422000"
+    },
+    {
+      "key": "",
+      "version": "9223372036854775807",
+      "computed": [
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "1321672555152026361"
+    },
+    {
+      "key": "",
+      "version": "9223372036854775807",
+      "computed": [
+        "1.5",
+        "x"
+      ],
+      "bucket": 212,
+      "rowHash": "5544745136640736543"
+    },
+    {
+      "key": "",
+      "version": "9223372036854775807",
+      "computed": [
+        "",
+        null
+      ],
+      "bucket": 212,
+      "rowHash": "-3065081766238375181"
+    },
+    {
+      "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "version": "987654321",
+      "computed": [],
+      "bucket": 87,
+      "rowHash": "3062272670617216306"
+    },
+    {
+      "key": "42",
+      "version": "987654321",
+      "computed": [],
+      "bucket": 161,
+      "rowHash": "-3165434263666115375"
+    },
+    {
+      "key": "-7",
+      "version": "987654321",
+      "computed": [],
+      "bucket": 116,
+      "rowHash": "7822026794363130644"
+    },
+    {
+      "key": "hello",
+      "version": "987654321",
+      "computed": [],
+      "bucket": 93,
+      "rowHash": "-8519636622134702104"
+    },
+    {
+      "key": "Ünïcødé ✓ \uD83D\uDE00",
+      "version": "987654321",
+      "computed": [],
+      "bucket": 250,
+      "rowHash": "7321616777341775367"
+    },
+    {
+      "key": "",
+      "version": "987654321",
+      "computed": [],
+      "bucket": 212,
+      "rowHash": "-3436314000073725022"
+    }
+  ],
+  "canonicalText": [
+    {
+      "type": 1,
+      "kind": "integer",
+      "value": "3",
+      "text": "1"
+    },
+    {
+      "type": 1,
+      "kind": "integer",
+      "value": "0",
+      "text": "0"
+    },
+    {
+      "type": 3,
+      "kind": "integer",
+      "value": "9007199254740993",
+      "text": "9007199254740993"
+    },
+    {
+      "type": 3,
+      "kind": "integer",
+      "value": "-9223372036854775808",
+      "text": "-9223372036854775808"
+    },
+    {
+      "type": 2,
+      "kind": "integer",
+      "value": "1000000000000000",
+      "text": "1000000000000000"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "3fb999999999999a",
+        "text": "0.1"
+      },
+      "text": "0.1"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "430c6bf526340000",
+        "text": "1000000000000000"
+      },
+      "text": "1000000000000000"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "42d6bcc41e900000",
+        "text": "100000000000000"
+      },
+      "text": "100000000000000"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "437b69b4ba630f35",
+        "text": "1.2345678901234568E+17"
+      },
+      "text": "1.2345678901234568E+17"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "4345ee2a2eb5a5c4",
+        "text": "12345678901234568"
+      },
+      "text": "12345678901234568"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "3ee4f8b588e368f1",
+        "text": "1E-05"
+      },
+      "text": "1E-05"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "3f1a36e2eb1c432d",
+        "text": "0.0001"
+      },
+      "text": "0.0001"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "8000000000000000",
+        "text": "-0"
+      },
+      "text": "-0"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "0000000000000000",
+        "text": "0"
+      },
+      "text": "0"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "3ff8000000000000",
+        "text": "1.5"
+      },
+      "text": "1.5"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "c002000000000000",
+        "text": "-2.25"
+      },
+      "text": "-2.25"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "7fefffffffffffff",
+        "text": "1.7976931348623157E+308"
+      },
+      "text": "1.7976931348623157E+308"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "0000000000000001",
+        "text": "5E-324"
+      },
+      "text": "5E-324"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "4059000000000000",
+        "text": "100"
+      },
+      "text": "100"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "444b1ae4d6e2ef50",
+        "text": "1E+21"
+      },
+      "text": "1E+21"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "3fd3333333333334",
+        "text": "0.30000000000000004"
+      },
+      "text": "0.30000000000000004"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "0000000000000001",
+        "text": "5E-324"
+      },
+      "text": "5E-324"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "7fefffffffffffff",
+        "text": "1.7976931348623157E+308"
+      },
+      "text": "1.7976931348623157E+308"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "fff8000000000000",
+        "text": "NaN"
+      },
+      "text": "NaN"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "7ff0000000000000",
+        "text": "Infinity"
+      },
+      "text": "Infinity"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "fff0000000000000",
+        "text": "-Infinity"
+      },
+      "text": "-Infinity"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "419d6f3454000000",
+        "text": "123456789"
+      },
+      "text": "123456789"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "4341c37937e08000",
+        "text": "10000000000000000"
+      },
+      "text": "10000000000000000"
+    },
+    {
+      "type": 4,
+      "kind": "real",
+      "value": {
+        "bits": "4376345785d8a000",
+        "text": "1E+17"
+      },
+      "text": "1E+17"
+    },
+    {
+      "type": 7,
+      "kind": "text",
+      "value": "0F8FAD5B-D9CB-469F-A165-70867728950E",
+      "text": "0f8fad5b-d9cb-469f-a165-70867728950e"
+    },
+    {
+      "type": 7,
+      "kind": "text",
+      "value": "not-a-guid",
+      "text": "not-a-guid"
+    },
+    {
+      "type": 6,
+      "kind": "text",
+      "value": "Ünïcødé",
+      "text": "Ünïcødé"
+    },
+    {
+      "type": 11,
+      "kind": "blob",
+      "value": "0102",
+      "text": "System.Byte[]"
+    },
+    {
+      "type": 6,
+      "kind": "null",
+      "value": null,
+      "text": null
+    }
+  ],
+  "keys": [
+    {
+      "type": 7,
+      "text": "{0F8FAD5B-D9CB-469F-A165-70867728950E}",
+      "canonical": "0f8fad5b-d9cb-469f-a165-70867728950e"
+    },
+    {
+      "type": 7,
+      "text": "0f8fad5bd9cb469fa16570867728950e",
+      "canonical": "0f8fad5b-d9cb-469f-a165-70867728950e"
+    },
+    {
+      "type": 7,
+      "text": "(0f8fad5b-d9cb-469f-a165-70867728950e)",
+      "canonical": "0f8fad5b-d9cb-469f-a165-70867728950e"
+    },
+    {
+      "type": 7,
+      "text": "  0F8FAD5B-D9CB-469F-A165-70867728950E  ",
+      "canonical": "0f8fad5b-d9cb-469f-a165-70867728950e"
+    },
+    {
+      "type": 7,
+      "text": "0f8fad5b-d9cb-469f-a165-70867728950",
+      "canonical": null
+    },
+    {
+      "type": 7,
+      "text": "0f8fad5b-d9cb-469f-a165-70867728950g",
+      "canonical": null
+    },
+    {
+      "type": 3,
+      "text": "+42",
+      "canonical": "42"
+    },
+    {
+      "type": 3,
+      "text": "-0",
+      "canonical": "0"
+    },
+    {
+      "type": 3,
+      "text": "0042",
+      "canonical": "42"
+    },
+    {
+      "type": 3,
+      "text": " 42",
+      "canonical": null
+    },
+    {
+      "type": 3,
+      "text": "9223372036854775807",
+      "canonical": "9223372036854775807"
+    },
+    {
+      "type": 3,
+      "text": "9223372036854775808",
+      "canonical": null
+    },
+    {
+      "type": 3,
+      "text": "-9223372036854775808",
+      "canonical": "-9223372036854775808"
+    },
+    {
+      "type": 2,
+      "text": "-17",
+      "canonical": "-17"
+    },
+    {
+      "type": 2,
+      "text": "1.5",
+      "canonical": null
+    },
+    {
+      "type": 6,
+      "text": " Mixed Case ",
+      "canonical": " Mixed Case "
+    },
+    {
+      "type": 6,
+      "text": "",
+      "canonical": ""
+    }
+  ],
+  "parameters": [
+    {
+      "subscription": "Site",
+      "ops": [
+        {
+          "op": "guid",
+          "name": "siteId",
+          "value": "0F8FAD5B-D9CB-469F-A165-70867728950E"
+        },
+        {
+          "op": "int64",
+          "name": "year",
+          "value": "2026"
+        }
+      ],
+      "canonical": "siteId=0f8fad5b-d9cb-469f-a165-70867728950e&year=2026",
+      "key": "Site?siteId=0f8fad5b-d9cb-469f-a165-70867728950e&year=2026"
+    },
+    {
+      "subscription": "Mixed",
+      "ops": [
+        {
+          "op": "guidList",
+          "name": "ids",
+          "value": [
+            "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+            "0F8FAD5B-D9CB-469F-A165-70867728950E",
+            "6F1C2A7E-3B4D-4E5F-8A9B-0C1D2E3F4A5B"
+          ]
+        },
+        {
+          "op": "string",
+          "name": "name",
+          "value": "a b&c=d/é\uD83D\uDE00~*!'()%"
+        },
+        {
+          "op": "bool",
+          "name": "flag",
+          "value": true
+        },
+        {
+          "op": "int64List",
+          "name": "n",
+          "value": [
+            "3",
+            "-1",
+            "3",
+            "10",
+            "-9223372036854775808"
+          ]
+        },
+        {
+          "op": "stringList",
+          "name": "tags",
+          "value": [
+            "b",
+            "a",
+            "b",
+            "Z",
+            "ä"
+          ]
+        },
+        {
+          "op": "int32",
+          "name": "Ünï",
+          "value": "-5"
+        }
+      ],
+      "canonical": "flag=true&ids=0f8fad5b-d9cb-469f-a165-70867728950e%2C6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b&n=-9223372036854775808%2C-1%2C3%2C10&name=a%20b%26c%3Dd%2F%C3%A9%F0%9F%98%80~%2A%21%27%28%29%25&tags=Z%2Ca%2Cb%2C%C3%A4&%C3%9Cn%C3%AF=-5",
+      "key": "Mixed?flag=true&ids=0f8fad5b-d9cb-469f-a165-70867728950e%2C6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b&n=-9223372036854775808%2C-1%2C3%2C10&name=a%20b%26c%3Dd%2F%C3%A9%F0%9F%98%80~%2A%21%27%28%29%25&tags=Z%2Ca%2Cb%2C%C3%A4&%C3%9Cn%C3%AF=-5"
+    },
+    {
+      "subscription": "Empty",
+      "ops": [],
+      "canonical": "",
+      "key": "Empty"
+    }
+  ],
+  "frames": [
+    {
+      "name": "all-ops",
+      "sections": [
+        {
+          "op": 1,
+          "tableId": 3,
+          "keyType": 7,
+          "types": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "rows": [
+            {
+              "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+              "version": "1",
+              "values": [
+                true,
+                -123456,
+                "-9007199254740993",
+                {
+                  "bits": "400921fb54442d18",
+                  "text": "3.141592653589793"
+                },
+                {
+                  "lo": 150,
+                  "mid": 0,
+                  "hi": 0,
+                  "scale": 2,
+                  "negative": false,
+                  "text": "1.50",
+                  "double": "3ff8000000000000"
+                },
+                "Ünïcødé ✓ \uD83D\uDE00 text",
+                "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+                {
+                  "ticks": "639268004961234567",
+                  "kind": 1
+                },
+                {
+                  "utcTicks": "639268004960000007",
+                  "offsetMinutes": 210
+                },
+                {
+                  "ticks": "-36000000001"
+                },
+                {
+                  "hex": "0001feff"
+                }
+              ]
+            },
+            {
+              "key": "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+              "version": "9223372036854775807",
+              "values": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            {
+              "key": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+              "version": "300",
+              "values": [
+                false,
+                -2147483648,
+                "9223372036854775807",
+                {
+                  "bits": "fff8000000000000",
+                  "text": "NaN"
+                },
+                {
+                  "lo": -1,
+                  "mid": -1,
+                  "hi": -1,
+                  "scale": 0,
+                  "negative": false,
+                  "text": "79228162514264337593543950335",
+                  "double": "45f0000000000000"
+                },
+                "",
+                "00000000-0000-0000-0000-000000000000",
+                {
+                  "ticks": "3155378975999999999",
+                  "kind": 2
+                },
+                {
+                  "utcTicks": "1368000000000",
+                  "offsetMinutes": -840
+                },
+                {
+                  "ticks": "9223372036854775807"
+                },
+                {
+                  "hex": "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d"
+                }
+              ]
+            },
+            {
+              "key": "b1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+              "version": "16384",
+              "values": [
+                null,
+                0,
+                "0",
+                {
+                  "bits": "8000000000000000",
+                  "text": "-0"
+                },
+                {
+                  "lo": 1,
+                  "mid": 0,
+                  "hi": 0,
+                  "scale": 28,
+                  "negative": true,
+                  "text": "-0.0000000000000000000000000001",
+                  "double": "ba1fb0f6be50601a"
+                },
+                null,
+                null,
+                {
+                  "ticks": "0",
+                  "kind": 0
+                },
+                {
+                  "utcTicks": "3155378436000000000",
+                  "offsetMinutes": 840
+                },
+                {
+                  "ticks": "-9223372036854775808"
+                },
+                {
+                  "hex": ""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "op": 2,
+          "tableId": 300,
+          "keyType": 6,
+          "types": [],
+          "rows": [
+            {
+              "key": "k1",
+              "version": "5"
+            },
+            {
+              "key": "ünï",
+              "version": "0"
+            }
+          ]
+        },
+        {
+          "op": 3,
+          "tableId": 1,
+          "keyType": 3,
+          "types": [],
+          "rows": [
+            {
+              "key": "-5",
+              "version": "7"
+            },
+            {
+              "key": "9223372036854775807",
+              "version": "1"
+            }
+          ]
+        },
+        {
+          "op": 4,
+          "tableId": 2,
+          "keyType": 2,
+          "types": [],
+          "rows": [
+            {
+              "key": "42",
+              "version": "9",
+              "rowHash": "-9223372036854775808"
+            },
+            {
+              "key": "-1",
+              "version": "0",
+              "rowHash": "123"
+            }
+          ]
+        },
+        {
+          "op": 5,
+          "tableId": 4,
+          "keyType": 7,
+          "types": [
+            6,
+            2,
+            11
+          ],
+          "rows": [
+            {
+              "key": "6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+              "pushOp": 1,
+              "sequence": "10",
+              "baseVersion": "3",
+              "dirtyMask": "2305843009213693957",
+              "hlcMs": "1759667696789",
+              "values": [
+                "pushed",
+                7,
+                {
+                  "hex": "010203"
+                }
+              ]
+            },
+            {
+              "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+              "pushOp": 2,
+              "sequence": "11",
+              "baseVersion": "0",
+              "dirtyMask": "0",
+              "hlcMs": "-5"
+            },
+            {
+              "key": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+              "pushOp": 1,
+              "sequence": "12",
+              "baseVersion": "9007199254740993",
+              "dirtyMask": "-1",
+              "hlcMs": "0",
+              "values": [
+                null,
+                null,
+                null
+              ]
+            }
+          ]
+        },
+        {
+          "op": 6,
+          "tableId": 3,
+          "keyType": 7,
+          "types": [
+            4,
+            1
+          ],
+          "rows": [
+            {
+              "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+              "version": "12",
+              "values": [
+                {
+                  "bits": "bff4000000000000",
+                  "text": "-1.25"
+                },
+                false
+              ]
+            }
+          ]
+        },
+        {
+          "op": 1,
+          "tableId": 5,
+          "keyType": 6,
+          "types": [
+            2,
+            6
+          ],
+          "rows": []
+        }
+      ],
+      "v1": "47395242010083030000070000000103070b0102030405060708090a0b040000000f8fad5bd9cb469fa16570867728950e01000001ff880f8180808080808020182d4454fb2109409600000000000000000000000000020019c39c6ec3af63c3b864c3a920e29c9320f09f988020746578746f1c2a7e3b4d4e5f8a9b0c1d2e3f4a5b87aefc0fdd22df080107d8e90fdd22df08d20081a0a39c8c02040001feff6f1c2a7e3b4d4e5f8a9b0c1d2e3f4a5bffffffffffffffff7fff07a1b2c3d4e5f64a7b8c9d0e1f2a3b4c5dac02000000ffffffff0ffeffffffffffffffff01000000000000f8ffffffffffffffffffffffffff000000000000000000000000000000000000000000ff3f37f47528ca2b02007027833e010000b8fcfeffffffffffffffff01ac0200070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262db1b2c3d4e5f64a7b8c9d0e1f2a3b4c5d80800161000000000000000000008001000000000000000000000000001c800000000000000000000028b539f827ca2b4803ffffffffffffffffff010002ac02060002000000026b310505c3bc6ec3af0003010300020000000907feffffffffffffffff010104020200020000005409000000000000008001007b000000000000000504070306020b030000006f1c2a7e3b4d4e5f8a9b0c1d2e3f4a5b010a030500000000000020aad2f1c5b66600067075736865640e030102030f8fad5bd9cb469fa16570867728950e020b00000000000000000009a1b2c3d4e5f64a7b8c9d0e1f2a3b4c5d010c8180808080808010ffffffffffffffff0007060307020401010000000f8fad5bd9cb469fa16570867728950e0c00000000000000f4bf0001050602020600000000",
+      "v2": "473952420200ad030000070000000103070b0102030405060708090a0b04000000400f0802091318301b201b1e1ab4020f8fad5bd9cb469fa16570867728950e6f1c2a7e3b4d4e5f8a9b0c1d2e3f4a5ba1b2c3d4e5f64a7b8c9d0e1f2a3b4c5db1b2c3d4e5f64a7b8c9d0e1f2a3b4c5d01ffffffffffffffff7fac028080010000ff07000061000100ff880fffffffff0f008180808080808020feffffffffffffffff0100182d4454fb210940000000000000f8ff000000000000008096000000000000000000000000000200ffffffffffffffffffffffff0000000001000000000000000000000000001c8019c39c6ec3af63c3b864c3a920e29c9320f09f98802074657874006f1c2a7e3b4d4e5f8a9b0c1d2e3f4a5b0000000000000000000000000000000087aefc0fdd22df0801ff3f37f47528ca2b0200000000000000000007d8e90fdd22df08d200007027833e010000b8fc0028b539f827ca2b480381a0a39c8c02feffffffffffffffff01ffffffffffffffffff01040001feffac0200070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d0002ac020600020000000902026b3105c3bc6ec3af050003010300020000000b0209feffffffffffffffff01070104020200020000000202105401090000000000000000807b000000000000000504070306020b030000003003030a1808020701046f1c2a7e3b4d4e5f8a9b0c1d2e3f4a5b0f8fad5bd9cb469fa16570867728950ea1b2c3d4e5f64a7b8c9d0e1f2a3b4c5d0102010a0b0c0300818080808080801005000000000000200000000000000000ffffffffffffffffaad2f1c5b66609000007067075736865640e030102030603070204010100000010010108010f8fad5bd9cb469fa16570867728950e0c00000000000000f4bf00010506020206000000000000000000",
+      "v1br": "473952420101830300001b82030064118f4a3b9d003d20ce6c679451cc6f4d0b4a3c1f35b088038da330a116481731a4db142f9f40286a48dba633008008861b6182a4688683938b9b0400fefe75d1b7ceb8cd2f4a2d682bd718e5430088ede06f6ca81d05095d97903f8a9c0e6310cb30481e99c93bb221f9c8ce9423ab141ecf0c2b7c9c9f68502849ad28c997d1aab3f6f58bef9ae691d5b3f78a6e5fff97ff9ed2030ec4dc7cb5d1bd0c8d0b4b667a3009e83ffb026c0ed6b3cca2cd47ae3efbee55dd33cb27af65ed13bb160300cbb22cffff8b8e4573899f6c5ae1066b6ffeb554e3b4368602f5663b04b0f32fd22fc65a0c0c9fa88cb296a185bd9b6f4874526641795d6bcff0d4a2951bb6ef3b7ae6f2ad872fde7ffb4b70094ac8abe99a583b790684c7a5e614573576f48fcd2e5db379d7c113e7afdd7df2fad34f96e6159156d23430b773f5098e4accc82fab6de91e9a5c58b17edbde23a72fdd7cf0fcddd73f9853405c4e55c7d8cad1c33f2c3625bba8b2a1bd6f7466c9ea4d3b0f1c3f77f5cee3571f7ffca77884a51435f4cd6c5dbc832213d2f34a6b9abb0627e697afdbbae7f0a98b37ee3f7bfbe537e2e0179355d136b27470f70b8d49ce2aaca86feb1d995ebc6ae38efdc7ce5eb9fde8e587efff486e214905753d531b67afc088f8b4dc92eaa6ce81f1b9656bb7ec3e74f2c2f57b4fdf7cfe050c9fa8cc1f709bb8a91a1a50a23e64036220c83440cb35b659fe543faded4110d68f00afc5346000c0d9861475646fde910d4020e2b8e064c88e88c478510827ba694050ad49910c41636e02001498101741cdf0a4c2eacb9f8e6d4f03baa0b4382335858f40983080c7dcd0584e0912e2f10504647a88058626184c226425f060b5bf1e0044d118d30000",
+      "v2br": "473952420201ad0300001bac0300e4902e9b64dd2b646cf12098752774848b3d94acace481c5350f0f14d24183b614c23030081cd31b26bf3c96606eefe10000519c04618a66588e17a4243400f8cbf1585052b7d7d2d7d2d5dc8ae526accbba752674c1a292fae16de6d364ebb42d7bbd6262f346cf91d6b1f58bcc5ab4f9c8d567df23bbc6ce93d5b3f48aced9b4f9c8d567df23bbc6ce93d5b3f48ace4184104208217d6bb1282200c20114000232528e1042e4a05f14455114f5ffa31504ea36c1c97f0c04ff8f84e9270133c4e94031100f2f0dd099daa2c691b9b54736141dd9597c6495fee3b953f43f2e9829ea3797b437432f12c8c088f57fe5ee193ee011f173fbda627eda0a8398bbf92abc7619a0de6cd01701ecfc0be6db3c7e9a9db60aa7fa172e993b16ff2f2e22a29f098806f49facc5c0c9aa681b593ab8fb85c624671556d4b7f50e1b3b65f6a2951bb6ef3b7ae6f2ad872fde7ffb4b4929a8eb99da387b0546c4a7e596543775f68f9c307dded2359b771d3c71fedadd27af3ffd24ac8cb296a185bd9b6f4874526641795d6bcfd098c9b316ae58bf6def91d3976e3e78feeeeb1f2cc8abe99a583b790684c7a5e6145735768823c64f9bbb64f5a69d078e9fbb7ae7f1ab8f3ffe33d24a9a06e676ae3ec1518919f965b52ddd83a327cd5cb07cddd63d874f5dbc71ffd9db2fbf112fa7aa636ce5e8e11f169b925d54d9d0de377cdcd4398b576ddcb1ffd8d92bb71fbdfcf0fd1f2d51d4d037b375f10e8a4c48cf2bad69ee1a183571c6fc656bb7ec3e74f2c2f57b4fdf7cfe059cac8ab6d10c2600afc52c60001030ae72608eecad3db281010a51814e828561670ed118e32b8ce59391b0d42076ad774f86e628164b2800b0a72829751e7388e67493f3e222293192924853c05c9667c0813ed892eeb8faf2a763db4b05008ead6f692a2f2996a510a6588ac3344200208f108f0ecc492752be1e00c4b018b3a0"
+    },
+    {
+      "name": "empty",
+      "sections": [],
+      "v1": "4739524201000400000000000000",
+      "v2": "4739524202000400000000000000",
+      "v1br": "4739524201000400000000000000",
+      "v2br": "4739524202000400000000000000"
+    },
+    {
+      "name": "tiny",
+      "sections": [
+        {
+          "op": 2,
+          "tableId": 0,
+          "keyType": 7,
+          "types": [],
+          "rows": [
+            {
+              "key": "0f8fad5b-d9cb-469f-a165-70867728950e",
+              "version": "1"
+            }
+          ]
+        }
+      ],
+      "v1": "4739524201001d0000000100000002000700010000000f8fad5bd9cb469fa16570867728950e01",
+      "v2": "4739524202001f00000001000000020007000100000010010f8fad5bd9cb469fa16570867728950e01",
+      "v1br": "4739524201001d0000000100000002000700010000000f8fad5bd9cb469fa16570867728950e01",
+      "v2br": "4739524202001f00000001000000020007000100000010010f8fad5bd9cb469fa16570867728950e01"
+    }
+  ],
+  "model": {
+    "metadata": "CREATE TABLE IF NOT EXISTS g9_meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NULL) WITHOUT ROWID;\nCREATE TABLE IF NOT EXISTS g9_clock (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), seq INTEGER NOT NULL);\nINSERT OR IGNORE INTO g9_clock (id, seq) VALUES (1, 0);\nCREATE TABLE IF NOT EXISTS g9_ctx (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), applying INTEGER NOT NULL DEFAULT 0);\nINSERT OR IGNORE INTO g9_ctx (id, applying) VALUES (1, 0);\nUPDATE g9_ctx SET applying = 0 WHERE id = 1 AND applying <> 0;\nCREATE TABLE IF NOT EXISTS g9_tables (\n    tid INTEGER PRIMARY KEY AUTOINCREMENT,\n    local_name TEXT NOT NULL UNIQUE,\n    server_name TEXT NOT NULL,\n    model_hash TEXT NOT NULL,\n    server_table_id INTEGER NULL,\n    negotiated_json TEXT NULL,\n    synced_columns TEXT NULL);\nCREATE TABLE IF NOT EXISTS g9_rows (\n    tid INTEGER NOT NULL,\n    pk TEXT NOT NULL,\n    server_ver INTEGER NOT NULL DEFAULT 0,\n    local_seq INTEGER NOT NULL DEFAULT 0,\n    dirty INTEGER NOT NULL DEFAULT 0,\n    dirty_mask INTEGER NOT NULL DEFAULT 0,\n    hlc_ms INTEGER NULL,\n    subs INTEGER NOT NULL DEFAULT 0,\n    rejected INTEGER NOT NULL DEFAULT 0,\n    deleted INTEGER NOT NULL DEFAULT 0,\n    PRIMARY KEY (tid, pk)) WITHOUT ROWID;\nCREATE INDEX IF NOT EXISTS g9_rows_dirty ON g9_rows (local_seq) WHERE dirty <> 0;\nCREATE INDEX IF NOT EXISTS g9_rows_feed ON g9_rows (tid, local_seq);\nCREATE INDEX IF NOT EXISTS g9_rows_deleted ON g9_rows (local_seq) WHERE deleted = 1;\nCREATE TABLE IF NOT EXISTS g9_subscriptions (\n    key TEXT NOT NULL PRIMARY KEY,\n    name TEXT NOT NULL,\n    params TEXT NOT NULL,\n    slot INTEGER NOT NULL,\n    ephemeral INTEGER NOT NULL,\n    ttl_seconds INTEGER NULL,\n    cursor TEXT NULL,\n    definition_hash TEXT NULL,\n    auth_hash TEXT NULL,\n    state INTEGER NOT NULL DEFAULT 0,\n    error_code TEXT NULL,\n    move_out_policy INTEGER NULL,\n    created_utc INTEGER NOT NULL,\n    last_success_utc INTEGER NULL,\n    last_reconcile_utc INTEGER NULL,\n    last_access_utc INTEGER NULL) WITHOUT ROWID;\nCREATE TABLE IF NOT EXISTS g9_ephemeral_rows (sub_key TEXT NOT NULL, tid INTEGER NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (sub_key, tid, pk)) WITHOUT ROWID;\nCREATE INDEX IF NOT EXISTS g9_ephemeral_rows_row ON g9_ephemeral_rows (tid, pk);\nCREATE TABLE IF NOT EXISTS g9_stage_runs (run_id TEXT NOT NULL PRIMARY KEY, plan_json TEXT NOT NULL, backfills_json TEXT NULL, created_utc INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0, generation TEXT NULL, stage_seq INTEGER NOT NULL DEFAULT 0, from_cursors_json TEXT NULL) WITHOUT ROWID;\nCREATE TABLE IF NOT EXISTS g9_stage (run_id TEXT NOT NULL, seq INTEGER NOT NULL, subscription_key TEXT NULL, row_count INTEGER NOT NULL, continuation_json TEXT NULL, payload BLOB NULL, PRIMARY KEY (run_id, seq)) WITHOUT ROWID;\nCREATE TABLE IF NOT EXISTS g9_rejections (\n    tid INTEGER NOT NULL, pk TEXT NOT NULL, code TEXT NOT NULL, message TEXT NULL, sql_state TEXT NULL, constraint_name TEXT NULL,\n    column_name TEXT NULL, details TEXT NULL, at_utc INTEGER NOT NULL, PRIMARY KEY (tid, pk)) WITHOUT ROWID;\nCREATE TABLE IF NOT EXISTS g9_runs (run_id TEXT NOT NULL PRIMARY KEY, started_utc INTEGER NOT NULL, report_json TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS g9_stats (key TEXT NOT NULL PRIMARY KEY, value REAL NOT NULL, samples INTEGER NOT NULL) WITHOUT ROWID;\nCREATE TABLE IF NOT EXISTS g9_commands (\n    command_id TEXT NOT NULL PRIMARY KEY,\n    seq INTEGER NOT NULL,\n    name TEXT NOT NULL,\n    version INTEGER NOT NULL,\n    payload TEXT NOT NULL,\n    created_utc INTEGER NOT NULL,\n    state INTEGER NOT NULL DEFAULT 0,\n    batch_id INTEGER NULL,\n    code TEXT NULL,\n    message TEXT NULL,\n    result TEXT NULL,\n    completed_utc INTEGER NULL) WITHOUT ROWID;\nCREATE INDEX IF NOT EXISTS g9_commands_pending ON g9_commands (seq) WHERE state = 0;\nCREATE TABLE IF NOT EXISTS g9_command_rows (command_id TEXT NOT NULL, tid INTEGER NOT NULL, pk TEXT NOT NULL, PRIMARY KEY (command_id, tid, pk)) WITHOUT ROWID;\nCREATE INDEX IF NOT EXISTS g9_command_rows_row ON g9_command_rows (tid, pk);\nCREATE TABLE IF NOT EXISTS g9_quarantine (\n    tid INTEGER NOT NULL, pk TEXT NOT NULL, reason INTEGER NOT NULL, rule TEXT NULL, row_json TEXT NOT NULL,\n    had_pending INTEGER NOT NULL, dirty_mask INTEGER NOT NULL, at_utc INTEGER NOT NULL, PRIMARY KEY (tid, pk)) WITHOUT ROWID;\nCREATE TABLE IF NOT EXISTS g9_revoked (\n    tid INTEGER NOT NULL, pk TEXT NOT NULL, disposition INTEGER NOT NULL, reason INTEGER NOT NULL, rule TEXT NULL, at_utc INTEGER NOT NULL,\n    PRIMARY KEY (tid, pk)) WITHOUT ROWID;",
+    "tables": [
+      {
+        "serverName": "Operation.Pot",
+        "localName": "Pot",
+        "modelHash": "cb194b60a2a177e69d7a6d6e6ae9ac8e",
+        "createTable": "CREATE TABLE IF NOT EXISTS [Pot] ([Id] TEXT NOT NULL COLLATE NOCASE PRIMARY KEY, [RidgeId] TEXT COLLATE NOCASE, [Code] TEXT NOT NULL DEFAULT '', [PlantedAt] TEXT, [Weight] REAL, [Count] INTEGER NOT NULL DEFAULT 0, [Alive] INTEGER NOT NULL DEFAULT 0, [Photo] BLOB, [Moment] TEXT NOT NULL DEFAULT '', [Span] INTEGER, [Ratio] REAL NOT NULL DEFAULT 0, [Big] INTEGER, [Due] TEXT NOT NULL DEFAULT '0001-01-01T00:00:00.0000000', [Price] REAL NOT NULL DEFAULT 0, [Owner] TEXT COLLATE NOCASE NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000', [Blob] BLOB NOT NULL DEFAULT x'')",
+        "createTableExact": "CREATE TABLE IF NOT EXISTS [Pot] ([Id] TEXT NOT NULL COLLATE NOCASE PRIMARY KEY, [RidgeId] TEXT COLLATE NOCASE, [Code] TEXT NOT NULL DEFAULT '', [PlantedAt] INTEGER, [Weight] TEXT, [Count] INTEGER NOT NULL DEFAULT 0, [Alive] INTEGER NOT NULL DEFAULT 0, [Photo] BLOB, [Moment] TEXT NOT NULL DEFAULT '', [Span] INTEGER, [Ratio] REAL NOT NULL DEFAULT 0, [Big] INTEGER, [Due] INTEGER NOT NULL DEFAULT 0, [Price] TEXT NOT NULL DEFAULT '0', [Owner] TEXT COLLATE NOCASE NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000', [Blob] BLOB NOT NULL DEFAULT x'')",
+        "createTriggers": "CREATE TRIGGER [g9_Pot_ai] AFTER INSERT ON [Pot] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (7, lower(NEW.[Id]));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 1, dirty_mask = 32767, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 7 AND pk = lower(NEW.[Id]);\nEND;\nCREATE TRIGGER [g9_Pot_au] AFTER UPDATE ON [Pot] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0 AND ((CASE WHEN OLD.[RidgeId] IS NOT NEW.[RidgeId] THEN 1 ELSE 0 END) | (CASE WHEN OLD.[Code] IS NOT NEW.[Code] THEN 2 ELSE 0 END) | (CASE WHEN OLD.[PlantedAt] IS NOT NEW.[PlantedAt] THEN 4 ELSE 0 END) | (CASE WHEN OLD.[Weight] IS NOT NEW.[Weight] THEN 8 ELSE 0 END) | (CASE WHEN OLD.[Count] IS NOT NEW.[Count] THEN 16 ELSE 0 END) | (CASE WHEN OLD.[Alive] IS NOT NEW.[Alive] THEN 32 ELSE 0 END) | (CASE WHEN OLD.[Photo] IS NOT NEW.[Photo] THEN 64 ELSE 0 END) | (CASE WHEN OLD.[Moment] IS NOT NEW.[Moment] THEN 128 ELSE 0 END) | (CASE WHEN OLD.[Span] IS NOT NEW.[Span] THEN 256 ELSE 0 END) | (CASE WHEN OLD.[Ratio] IS NOT NEW.[Ratio] THEN 512 ELSE 0 END) | (CASE WHEN OLD.[Big] IS NOT NEW.[Big] THEN 1024 ELSE 0 END) | (CASE WHEN OLD.[Due] IS NOT NEW.[Due] THEN 2048 ELSE 0 END) | (CASE WHEN OLD.[Price] IS NOT NEW.[Price] THEN 4096 ELSE 0 END) | (CASE WHEN OLD.[Owner] IS NOT NEW.[Owner] THEN 8192 ELSE 0 END) | (CASE WHEN OLD.[Blob] IS NOT NEW.[Blob] THEN 16384 ELSE 0 END)) <> 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (7, lower(NEW.[Id]));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = CASE WHEN dirty = 2 THEN 2 ELSE 1 END, dirty_mask = dirty_mask | ((CASE WHEN OLD.[RidgeId] IS NOT NEW.[RidgeId] THEN 1 ELSE 0 END) | (CASE WHEN OLD.[Code] IS NOT NEW.[Code] THEN 2 ELSE 0 END) | (CASE WHEN OLD.[PlantedAt] IS NOT NEW.[PlantedAt] THEN 4 ELSE 0 END) | (CASE WHEN OLD.[Weight] IS NOT NEW.[Weight] THEN 8 ELSE 0 END) | (CASE WHEN OLD.[Count] IS NOT NEW.[Count] THEN 16 ELSE 0 END) | (CASE WHEN OLD.[Alive] IS NOT NEW.[Alive] THEN 32 ELSE 0 END) | (CASE WHEN OLD.[Photo] IS NOT NEW.[Photo] THEN 64 ELSE 0 END) | (CASE WHEN OLD.[Moment] IS NOT NEW.[Moment] THEN 128 ELSE 0 END) | (CASE WHEN OLD.[Span] IS NOT NEW.[Span] THEN 256 ELSE 0 END) | (CASE WHEN OLD.[Ratio] IS NOT NEW.[Ratio] THEN 512 ELSE 0 END) | (CASE WHEN OLD.[Big] IS NOT NEW.[Big] THEN 1024 ELSE 0 END) | (CASE WHEN OLD.[Due] IS NOT NEW.[Due] THEN 2048 ELSE 0 END) | (CASE WHEN OLD.[Price] IS NOT NEW.[Price] THEN 4096 ELSE 0 END) | (CASE WHEN OLD.[Owner] IS NOT NEW.[Owner] THEN 8192 ELSE 0 END) | (CASE WHEN OLD.[Blob] IS NOT NEW.[Blob] THEN 16384 ELSE 0 END)),\n        hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 7 AND pk = lower(NEW.[Id]);\nEND;\nCREATE TRIGGER [g9_Pot_ad] AFTER DELETE ON [Pot] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 2, dirty_mask = 0, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0\n        WHERE tid = 7 AND pk = lower(OLD.[Id]) AND NOT (server_ver = 0 AND subs = 0 AND dirty = 1);\n    DELETE FROM g9_rows WHERE tid = 7 AND pk = lower(OLD.[Id]) AND server_ver = 0 AND subs = 0 AND dirty = 1;\nEND;",
+        "createCommandTriggers": "CREATE TRIGGER [g9_Pot_ci] AFTER INSERT ON [Pot] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 7, lower(NEW.[Id]));\nEND;\nCREATE TRIGGER [g9_Pot_cu] AFTER UPDATE ON [Pot] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 7, lower(NEW.[Id]));\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 7, lower(OLD.[Id]));\nEND;\nCREATE TRIGGER [g9_Pot_cd] AFTER DELETE ON [Pot] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 7, lower(OLD.[Id]));\nEND;",
+        "dropTriggers": "DROP TRIGGER IF EXISTS [g9_Pot_ai]; DROP TRIGGER IF EXISTS [g9_Pot_au]; DROP TRIGGER IF EXISTS [g9_Pot_ad]; DROP TRIGGER IF EXISTS [g9_Pot_ci]; DROP TRIGGER IF EXISTS [g9_Pot_cu]; DROP TRIGGER IF EXISTS [g9_Pot_cd];",
+        "tid": 7
+      },
+      {
+        "serverName": "Base.Site",
+        "localName": "Site",
+        "modelHash": "e9b6a8c4a7ede90e45911c3707722b97",
+        "createTable": "CREATE TABLE IF NOT EXISTS [Site] ([SiteId] INTEGER NOT NULL PRIMARY KEY, [Name] TEXT)",
+        "createTableExact": "CREATE TABLE IF NOT EXISTS [Site] ([SiteId] INTEGER NOT NULL PRIMARY KEY, [Name] TEXT)",
+        "createTriggers": "CREATE TRIGGER [g9_Site_ai] AFTER INSERT ON [Site] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (8, CAST(NEW.[SiteId] AS TEXT));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 1, dirty_mask = 1, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 8 AND pk = CAST(NEW.[SiteId] AS TEXT);\nEND;\nCREATE TRIGGER [g9_Site_au] AFTER UPDATE ON [Site] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0 AND ((CASE WHEN OLD.[Name] IS NOT NEW.[Name] THEN 1 ELSE 0 END)) <> 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (8, CAST(NEW.[SiteId] AS TEXT));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = CASE WHEN dirty = 2 THEN 2 ELSE 1 END, dirty_mask = dirty_mask | ((CASE WHEN OLD.[Name] IS NOT NEW.[Name] THEN 1 ELSE 0 END)),\n        hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 8 AND pk = CAST(NEW.[SiteId] AS TEXT);\nEND;\nCREATE TRIGGER [g9_Site_ad] AFTER DELETE ON [Site] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 2, dirty_mask = 0, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0\n        WHERE tid = 8 AND pk = CAST(OLD.[SiteId] AS TEXT) AND NOT (server_ver = 0 AND subs = 0 AND dirty = 1);\n    DELETE FROM g9_rows WHERE tid = 8 AND pk = CAST(OLD.[SiteId] AS TEXT) AND server_ver = 0 AND subs = 0 AND dirty = 1;\nEND;",
+        "createCommandTriggers": "CREATE TRIGGER [g9_Site_ci] AFTER INSERT ON [Site] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 8, CAST(NEW.[SiteId] AS TEXT));\nEND;\nCREATE TRIGGER [g9_Site_cu] AFTER UPDATE ON [Site] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 8, CAST(NEW.[SiteId] AS TEXT));\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 8, CAST(OLD.[SiteId] AS TEXT));\nEND;\nCREATE TRIGGER [g9_Site_cd] AFTER DELETE ON [Site] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 8, CAST(OLD.[SiteId] AS TEXT));\nEND;",
+        "dropTriggers": "DROP TRIGGER IF EXISTS [g9_Site_ai]; DROP TRIGGER IF EXISTS [g9_Site_au]; DROP TRIGGER IF EXISTS [g9_Site_ad]; DROP TRIGGER IF EXISTS [g9_Site_ci]; DROP TRIGGER IF EXISTS [g9_Site_cu]; DROP TRIGGER IF EXISTS [g9_Site_cd];",
+        "tid": 8
+      },
+      {
+        "serverName": "Base.Tag",
+        "localName": "Tag]x",
+        "modelHash": "14b06073d4c49631df1aea92b37dbc28",
+        "createTable": "CREATE TABLE IF NOT EXISTS [Tag]]x] ([Name] TEXT NOT NULL PRIMARY KEY, [Color] TEXT NOT NULL DEFAULT '')",
+        "createTableExact": "CREATE TABLE IF NOT EXISTS [Tag]]x] ([Name] TEXT NOT NULL PRIMARY KEY, [Color] TEXT NOT NULL DEFAULT '')",
+        "createTriggers": "CREATE TRIGGER [g9_Tag]]x_ai] AFTER INSERT ON [Tag]]x] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (9, CAST(NEW.[Name] AS TEXT));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 1, dirty_mask = 1, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 9 AND pk = CAST(NEW.[Name] AS TEXT);\nEND;\nCREATE TRIGGER [g9_Tag]]x_au] AFTER UPDATE ON [Tag]]x] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0 AND ((CASE WHEN OLD.[Color] IS NOT NEW.[Color] THEN 1 ELSE 0 END)) <> 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (9, CAST(NEW.[Name] AS TEXT));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = CASE WHEN dirty = 2 THEN 2 ELSE 1 END, dirty_mask = dirty_mask | ((CASE WHEN OLD.[Color] IS NOT NEW.[Color] THEN 1 ELSE 0 END)),\n        hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 9 AND pk = CAST(NEW.[Name] AS TEXT);\nEND;\nCREATE TRIGGER [g9_Tag]]x_ad] AFTER DELETE ON [Tag]]x] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 2, dirty_mask = 0, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0\n        WHERE tid = 9 AND pk = CAST(OLD.[Name] AS TEXT) AND NOT (server_ver = 0 AND subs = 0 AND dirty = 1);\n    DELETE FROM g9_rows WHERE tid = 9 AND pk = CAST(OLD.[Name] AS TEXT) AND server_ver = 0 AND subs = 0 AND dirty = 1;\nEND;",
+        "createCommandTriggers": "CREATE TRIGGER [g9_Tag]]x_ci] AFTER INSERT ON [Tag]]x] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 9, CAST(NEW.[Name] AS TEXT));\nEND;\nCREATE TRIGGER [g9_Tag]]x_cu] AFTER UPDATE ON [Tag]]x] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 9, CAST(NEW.[Name] AS TEXT));\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 9, CAST(OLD.[Name] AS TEXT));\nEND;\nCREATE TRIGGER [g9_Tag]]x_cd] AFTER DELETE ON [Tag]]x] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 9, CAST(OLD.[Name] AS TEXT));\nEND;",
+        "dropTriggers": "DROP TRIGGER IF EXISTS [g9_Tag]]x_ai]; DROP TRIGGER IF EXISTS [g9_Tag]]x_au]; DROP TRIGGER IF EXISTS [g9_Tag]]x_ad]; DROP TRIGGER IF EXISTS [g9_Tag]]x_ci]; DROP TRIGGER IF EXISTS [g9_Tag]]x_cu]; DROP TRIGGER IF EXISTS [g9_Tag]]x_cd];",
+        "tid": 9
+      },
+      {
+        "serverName": "Wide.T",
+        "localName": "Wide",
+        "modelHash": "165b55f2bf7388258aa77647dc48a955",
+        "createTable": "CREATE TABLE IF NOT EXISTS [Wide] ([Id] INTEGER NOT NULL PRIMARY KEY, [C0] INTEGER, [C1] INTEGER, [C2] INTEGER, [C3] INTEGER, [C4] INTEGER, [C5] INTEGER, [C6] INTEGER, [C7] INTEGER, [C8] INTEGER, [C9] INTEGER, [C10] INTEGER, [C11] INTEGER, [C12] INTEGER, [C13] INTEGER, [C14] INTEGER, [C15] INTEGER, [C16] INTEGER, [C17] INTEGER, [C18] INTEGER, [C19] INTEGER, [C20] INTEGER, [C21] INTEGER, [C22] INTEGER, [C23] INTEGER, [C24] INTEGER, [C25] INTEGER, [C26] INTEGER, [C27] INTEGER, [C28] INTEGER, [C29] INTEGER, [C30] INTEGER, [C31] INTEGER, [C32] INTEGER, [C33] INTEGER, [C34] INTEGER, [C35] INTEGER, [C36] INTEGER, [C37] INTEGER, [C38] INTEGER, [C39] INTEGER, [C40] INTEGER, [C41] INTEGER, [C42] INTEGER, [C43] INTEGER, [C44] INTEGER, [C45] INTEGER, [C46] INTEGER, [C47] INTEGER, [C48] INTEGER, [C49] INTEGER, [C50] INTEGER, [C51] INTEGER, [C52] INTEGER, [C53] INTEGER, [C54] INTEGER, [C55] INTEGER, [C56] INTEGER, [C57] INTEGER, [C58] INTEGER, [C59] INTEGER, [C60] INTEGER, [C61] INTEGER)",
+        "createTableExact": "CREATE TABLE IF NOT EXISTS [Wide] ([Id] INTEGER NOT NULL PRIMARY KEY, [C0] INTEGER, [C1] INTEGER, [C2] INTEGER, [C3] INTEGER, [C4] INTEGER, [C5] INTEGER, [C6] INTEGER, [C7] INTEGER, [C8] INTEGER, [C9] INTEGER, [C10] INTEGER, [C11] INTEGER, [C12] INTEGER, [C13] INTEGER, [C14] INTEGER, [C15] INTEGER, [C16] INTEGER, [C17] INTEGER, [C18] INTEGER, [C19] INTEGER, [C20] INTEGER, [C21] INTEGER, [C22] INTEGER, [C23] INTEGER, [C24] INTEGER, [C25] INTEGER, [C26] INTEGER, [C27] INTEGER, [C28] INTEGER, [C29] INTEGER, [C30] INTEGER, [C31] INTEGER, [C32] INTEGER, [C33] INTEGER, [C34] INTEGER, [C35] INTEGER, [C36] INTEGER, [C37] INTEGER, [C38] INTEGER, [C39] INTEGER, [C40] INTEGER, [C41] INTEGER, [C42] INTEGER, [C43] INTEGER, [C44] INTEGER, [C45] INTEGER, [C46] INTEGER, [C47] INTEGER, [C48] INTEGER, [C49] INTEGER, [C50] INTEGER, [C51] INTEGER, [C52] INTEGER, [C53] INTEGER, [C54] INTEGER, [C55] INTEGER, [C56] INTEGER, [C57] INTEGER, [C58] INTEGER, [C59] INTEGER, [C60] INTEGER, [C61] INTEGER)",
+        "createTriggers": "CREATE TRIGGER [g9_Wide_ai] AFTER INSERT ON [Wide] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (10, CAST(NEW.[Id] AS TEXT));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 1, dirty_mask = 4611686018427387903, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 10 AND pk = CAST(NEW.[Id] AS TEXT);\nEND;\nCREATE TRIGGER [g9_Wide_au] AFTER UPDATE ON [Wide] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0 AND ((CASE WHEN OLD.[C0] IS NOT NEW.[C0] THEN 1 ELSE 0 END) | (CASE WHEN OLD.[C1] IS NOT NEW.[C1] THEN 2 ELSE 0 END) | (CASE WHEN OLD.[C2] IS NOT NEW.[C2] THEN 4 ELSE 0 END) | (CASE WHEN OLD.[C3] IS NOT NEW.[C3] THEN 8 ELSE 0 END) | (CASE WHEN OLD.[C4] IS NOT NEW.[C4] THEN 16 ELSE 0 END) | (CASE WHEN OLD.[C5] IS NOT NEW.[C5] THEN 32 ELSE 0 END) | (CASE WHEN OLD.[C6] IS NOT NEW.[C6] THEN 64 ELSE 0 END) | (CASE WHEN OLD.[C7] IS NOT NEW.[C7] THEN 128 ELSE 0 END) | (CASE WHEN OLD.[C8] IS NOT NEW.[C8] THEN 256 ELSE 0 END) | (CASE WHEN OLD.[C9] IS NOT NEW.[C9] THEN 512 ELSE 0 END) | (CASE WHEN OLD.[C10] IS NOT NEW.[C10] THEN 1024 ELSE 0 END) | (CASE WHEN OLD.[C11] IS NOT NEW.[C11] THEN 2048 ELSE 0 END) | (CASE WHEN OLD.[C12] IS NOT NEW.[C12] THEN 4096 ELSE 0 END) | (CASE WHEN OLD.[C13] IS NOT NEW.[C13] THEN 8192 ELSE 0 END) | (CASE WHEN OLD.[C14] IS NOT NEW.[C14] THEN 16384 ELSE 0 END) | (CASE WHEN OLD.[C15] IS NOT NEW.[C15] THEN 32768 ELSE 0 END) | (CASE WHEN OLD.[C16] IS NOT NEW.[C16] THEN 65536 ELSE 0 END) | (CASE WHEN OLD.[C17] IS NOT NEW.[C17] THEN 131072 ELSE 0 END) | (CASE WHEN OLD.[C18] IS NOT NEW.[C18] THEN 262144 ELSE 0 END) | (CASE WHEN OLD.[C19] IS NOT NEW.[C19] THEN 524288 ELSE 0 END) | (CASE WHEN OLD.[C20] IS NOT NEW.[C20] THEN 1048576 ELSE 0 END) | (CASE WHEN OLD.[C21] IS NOT NEW.[C21] THEN 2097152 ELSE 0 END) | (CASE WHEN OLD.[C22] IS NOT NEW.[C22] THEN 4194304 ELSE 0 END) | (CASE WHEN OLD.[C23] IS NOT NEW.[C23] THEN 8388608 ELSE 0 END) | (CASE WHEN OLD.[C24] IS NOT NEW.[C24] THEN 16777216 ELSE 0 END) | (CASE WHEN OLD.[C25] IS NOT NEW.[C25] THEN 33554432 ELSE 0 END) | (CASE WHEN OLD.[C26] IS NOT NEW.[C26] THEN 67108864 ELSE 0 END) | (CASE WHEN OLD.[C27] IS NOT NEW.[C27] THEN 134217728 ELSE 0 END) | (CASE WHEN OLD.[C28] IS NOT NEW.[C28] THEN 268435456 ELSE 0 END) | (CASE WHEN OLD.[C29] IS NOT NEW.[C29] THEN 536870912 ELSE 0 END) | (CASE WHEN OLD.[C30] IS NOT NEW.[C30] THEN 1073741824 ELSE 0 END) | (CASE WHEN OLD.[C31] IS NOT NEW.[C31] THEN 2147483648 ELSE 0 END) | (CASE WHEN OLD.[C32] IS NOT NEW.[C32] THEN 4294967296 ELSE 0 END) | (CASE WHEN OLD.[C33] IS NOT NEW.[C33] THEN 8589934592 ELSE 0 END) | (CASE WHEN OLD.[C34] IS NOT NEW.[C34] THEN 17179869184 ELSE 0 END) | (CASE WHEN OLD.[C35] IS NOT NEW.[C35] THEN 34359738368 ELSE 0 END) | (CASE WHEN OLD.[C36] IS NOT NEW.[C36] THEN 68719476736 ELSE 0 END) | (CASE WHEN OLD.[C37] IS NOT NEW.[C37] THEN 137438953472 ELSE 0 END) | (CASE WHEN OLD.[C38] IS NOT NEW.[C38] THEN 274877906944 ELSE 0 END) | (CASE WHEN OLD.[C39] IS NOT NEW.[C39] THEN 549755813888 ELSE 0 END) | (CASE WHEN OLD.[C40] IS NOT NEW.[C40] THEN 1099511627776 ELSE 0 END) | (CASE WHEN OLD.[C41] IS NOT NEW.[C41] THEN 2199023255552 ELSE 0 END) | (CASE WHEN OLD.[C42] IS NOT NEW.[C42] THEN 4398046511104 ELSE 0 END) | (CASE WHEN OLD.[C43] IS NOT NEW.[C43] THEN 8796093022208 ELSE 0 END) | (CASE WHEN OLD.[C44] IS NOT NEW.[C44] THEN 17592186044416 ELSE 0 END) | (CASE WHEN OLD.[C45] IS NOT NEW.[C45] THEN 35184372088832 ELSE 0 END) | (CASE WHEN OLD.[C46] IS NOT NEW.[C46] THEN 70368744177664 ELSE 0 END) | (CASE WHEN OLD.[C47] IS NOT NEW.[C47] THEN 140737488355328 ELSE 0 END) | (CASE WHEN OLD.[C48] IS NOT NEW.[C48] THEN 281474976710656 ELSE 0 END) | (CASE WHEN OLD.[C49] IS NOT NEW.[C49] THEN 562949953421312 ELSE 0 END) | (CASE WHEN OLD.[C50] IS NOT NEW.[C50] THEN 1125899906842624 ELSE 0 END) | (CASE WHEN OLD.[C51] IS NOT NEW.[C51] THEN 2251799813685248 ELSE 0 END) | (CASE WHEN OLD.[C52] IS NOT NEW.[C52] THEN 4503599627370496 ELSE 0 END) | (CASE WHEN OLD.[C53] IS NOT NEW.[C53] THEN 9007199254740992 ELSE 0 END) | (CASE WHEN OLD.[C54] IS NOT NEW.[C54] THEN 18014398509481984 ELSE 0 END) | (CASE WHEN OLD.[C55] IS NOT NEW.[C55] THEN 36028797018963968 ELSE 0 END) | (CASE WHEN OLD.[C56] IS NOT NEW.[C56] THEN 72057594037927936 ELSE 0 END) | (CASE WHEN OLD.[C57] IS NOT NEW.[C57] THEN 144115188075855872 ELSE 0 END) | (CASE WHEN OLD.[C58] IS NOT NEW.[C58] THEN 288230376151711744 ELSE 0 END) | (CASE WHEN OLD.[C59] IS NOT NEW.[C59] THEN 576460752303423488 ELSE 0 END) | (CASE WHEN OLD.[C60] IS NOT NEW.[C60] THEN 1152921504606846976 ELSE 0 END) | (CASE WHEN OLD.[C61] IS NOT NEW.[C61] THEN 2305843009213693952 ELSE 0 END)) <> 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (10, CAST(NEW.[Id] AS TEXT));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = CASE WHEN dirty = 2 THEN 2 ELSE 1 END, dirty_mask = dirty_mask | ((CASE WHEN OLD.[C0] IS NOT NEW.[C0] THEN 1 ELSE 0 END) | (CASE WHEN OLD.[C1] IS NOT NEW.[C1] THEN 2 ELSE 0 END) | (CASE WHEN OLD.[C2] IS NOT NEW.[C2] THEN 4 ELSE 0 END) | (CASE WHEN OLD.[C3] IS NOT NEW.[C3] THEN 8 ELSE 0 END) | (CASE WHEN OLD.[C4] IS NOT NEW.[C4] THEN 16 ELSE 0 END) | (CASE WHEN OLD.[C5] IS NOT NEW.[C5] THEN 32 ELSE 0 END) | (CASE WHEN OLD.[C6] IS NOT NEW.[C6] THEN 64 ELSE 0 END) | (CASE WHEN OLD.[C7] IS NOT NEW.[C7] THEN 128 ELSE 0 END) | (CASE WHEN OLD.[C8] IS NOT NEW.[C8] THEN 256 ELSE 0 END) | (CASE WHEN OLD.[C9] IS NOT NEW.[C9] THEN 512 ELSE 0 END) | (CASE WHEN OLD.[C10] IS NOT NEW.[C10] THEN 1024 ELSE 0 END) | (CASE WHEN OLD.[C11] IS NOT NEW.[C11] THEN 2048 ELSE 0 END) | (CASE WHEN OLD.[C12] IS NOT NEW.[C12] THEN 4096 ELSE 0 END) | (CASE WHEN OLD.[C13] IS NOT NEW.[C13] THEN 8192 ELSE 0 END) | (CASE WHEN OLD.[C14] IS NOT NEW.[C14] THEN 16384 ELSE 0 END) | (CASE WHEN OLD.[C15] IS NOT NEW.[C15] THEN 32768 ELSE 0 END) | (CASE WHEN OLD.[C16] IS NOT NEW.[C16] THEN 65536 ELSE 0 END) | (CASE WHEN OLD.[C17] IS NOT NEW.[C17] THEN 131072 ELSE 0 END) | (CASE WHEN OLD.[C18] IS NOT NEW.[C18] THEN 262144 ELSE 0 END) | (CASE WHEN OLD.[C19] IS NOT NEW.[C19] THEN 524288 ELSE 0 END) | (CASE WHEN OLD.[C20] IS NOT NEW.[C20] THEN 1048576 ELSE 0 END) | (CASE WHEN OLD.[C21] IS NOT NEW.[C21] THEN 2097152 ELSE 0 END) | (CASE WHEN OLD.[C22] IS NOT NEW.[C22] THEN 4194304 ELSE 0 END) | (CASE WHEN OLD.[C23] IS NOT NEW.[C23] THEN 8388608 ELSE 0 END) | (CASE WHEN OLD.[C24] IS NOT NEW.[C24] THEN 16777216 ELSE 0 END) | (CASE WHEN OLD.[C25] IS NOT NEW.[C25] THEN 33554432 ELSE 0 END) | (CASE WHEN OLD.[C26] IS NOT NEW.[C26] THEN 67108864 ELSE 0 END) | (CASE WHEN OLD.[C27] IS NOT NEW.[C27] THEN 134217728 ELSE 0 END) | (CASE WHEN OLD.[C28] IS NOT NEW.[C28] THEN 268435456 ELSE 0 END) | (CASE WHEN OLD.[C29] IS NOT NEW.[C29] THEN 536870912 ELSE 0 END) | (CASE WHEN OLD.[C30] IS NOT NEW.[C30] THEN 1073741824 ELSE 0 END) | (CASE WHEN OLD.[C31] IS NOT NEW.[C31] THEN 2147483648 ELSE 0 END) | (CASE WHEN OLD.[C32] IS NOT NEW.[C32] THEN 4294967296 ELSE 0 END) | (CASE WHEN OLD.[C33] IS NOT NEW.[C33] THEN 8589934592 ELSE 0 END) | (CASE WHEN OLD.[C34] IS NOT NEW.[C34] THEN 17179869184 ELSE 0 END) | (CASE WHEN OLD.[C35] IS NOT NEW.[C35] THEN 34359738368 ELSE 0 END) | (CASE WHEN OLD.[C36] IS NOT NEW.[C36] THEN 68719476736 ELSE 0 END) | (CASE WHEN OLD.[C37] IS NOT NEW.[C37] THEN 137438953472 ELSE 0 END) | (CASE WHEN OLD.[C38] IS NOT NEW.[C38] THEN 274877906944 ELSE 0 END) | (CASE WHEN OLD.[C39] IS NOT NEW.[C39] THEN 549755813888 ELSE 0 END) | (CASE WHEN OLD.[C40] IS NOT NEW.[C40] THEN 1099511627776 ELSE 0 END) | (CASE WHEN OLD.[C41] IS NOT NEW.[C41] THEN 2199023255552 ELSE 0 END) | (CASE WHEN OLD.[C42] IS NOT NEW.[C42] THEN 4398046511104 ELSE 0 END) | (CASE WHEN OLD.[C43] IS NOT NEW.[C43] THEN 8796093022208 ELSE 0 END) | (CASE WHEN OLD.[C44] IS NOT NEW.[C44] THEN 17592186044416 ELSE 0 END) | (CASE WHEN OLD.[C45] IS NOT NEW.[C45] THEN 35184372088832 ELSE 0 END) | (CASE WHEN OLD.[C46] IS NOT NEW.[C46] THEN 70368744177664 ELSE 0 END) | (CASE WHEN OLD.[C47] IS NOT NEW.[C47] THEN 140737488355328 ELSE 0 END) | (CASE WHEN OLD.[C48] IS NOT NEW.[C48] THEN 281474976710656 ELSE 0 END) | (CASE WHEN OLD.[C49] IS NOT NEW.[C49] THEN 562949953421312 ELSE 0 END) | (CASE WHEN OLD.[C50] IS NOT NEW.[C50] THEN 1125899906842624 ELSE 0 END) | (CASE WHEN OLD.[C51] IS NOT NEW.[C51] THEN 2251799813685248 ELSE 0 END) | (CASE WHEN OLD.[C52] IS NOT NEW.[C52] THEN 4503599627370496 ELSE 0 END) | (CASE WHEN OLD.[C53] IS NOT NEW.[C53] THEN 9007199254740992 ELSE 0 END) | (CASE WHEN OLD.[C54] IS NOT NEW.[C54] THEN 18014398509481984 ELSE 0 END) | (CASE WHEN OLD.[C55] IS NOT NEW.[C55] THEN 36028797018963968 ELSE 0 END) | (CASE WHEN OLD.[C56] IS NOT NEW.[C56] THEN 72057594037927936 ELSE 0 END) | (CASE WHEN OLD.[C57] IS NOT NEW.[C57] THEN 144115188075855872 ELSE 0 END) | (CASE WHEN OLD.[C58] IS NOT NEW.[C58] THEN 288230376151711744 ELSE 0 END) | (CASE WHEN OLD.[C59] IS NOT NEW.[C59] THEN 576460752303423488 ELSE 0 END) | (CASE WHEN OLD.[C60] IS NOT NEW.[C60] THEN 1152921504606846976 ELSE 0 END) | (CASE WHEN OLD.[C61] IS NOT NEW.[C61] THEN 2305843009213693952 ELSE 0 END)),\n        hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 10 AND pk = CAST(NEW.[Id] AS TEXT);\nEND;\nCREATE TRIGGER [g9_Wide_ad] AFTER DELETE ON [Wide] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 2, dirty_mask = 0, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0\n        WHERE tid = 10 AND pk = CAST(OLD.[Id] AS TEXT) AND NOT (server_ver = 0 AND subs = 0 AND dirty = 1);\n    DELETE FROM g9_rows WHERE tid = 10 AND pk = CAST(OLD.[Id] AS TEXT) AND server_ver = 0 AND subs = 0 AND dirty = 1;\nEND;",
+        "createCommandTriggers": "CREATE TRIGGER [g9_Wide_ci] AFTER INSERT ON [Wide] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 10, CAST(NEW.[Id] AS TEXT));\nEND;\nCREATE TRIGGER [g9_Wide_cu] AFTER UPDATE ON [Wide] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 10, CAST(NEW.[Id] AS TEXT));\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 10, CAST(OLD.[Id] AS TEXT));\nEND;\nCREATE TRIGGER [g9_Wide_cd] AFTER DELETE ON [Wide] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 10, CAST(OLD.[Id] AS TEXT));\nEND;",
+        "dropTriggers": "DROP TRIGGER IF EXISTS [g9_Wide_ai]; DROP TRIGGER IF EXISTS [g9_Wide_au]; DROP TRIGGER IF EXISTS [g9_Wide_ad]; DROP TRIGGER IF EXISTS [g9_Wide_ci]; DROP TRIGGER IF EXISTS [g9_Wide_cu]; DROP TRIGGER IF EXISTS [g9_Wide_cd];",
+        "tid": 10
+      },
+      {
+        "serverName": "Empty.T",
+        "localName": "Bare",
+        "modelHash": "3b6a6caea74c55a27db6b3c932b95b1f",
+        "createTable": "CREATE TABLE IF NOT EXISTS [Bare] ([Id] TEXT NOT NULL COLLATE NOCASE PRIMARY KEY)",
+        "createTableExact": "CREATE TABLE IF NOT EXISTS [Bare] ([Id] TEXT NOT NULL COLLATE NOCASE PRIMARY KEY)",
+        "createTriggers": "CREATE TRIGGER [g9_Bare_ai] AFTER INSERT ON [Bare] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (11, lower(NEW.[Id]));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 1, dirty_mask = 0, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 11 AND pk = lower(NEW.[Id]);\nEND;\nCREATE TRIGGER [g9_Bare_au] AFTER UPDATE ON [Bare] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0 AND (0) <> 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    INSERT OR IGNORE INTO g9_rows (tid, pk) VALUES (11, lower(NEW.[Id]));\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = CASE WHEN dirty = 2 THEN 2 ELSE 1 END, dirty_mask = dirty_mask | (0),\n        hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0, deleted = 0\n        WHERE tid = 11 AND pk = lower(NEW.[Id]);\nEND;\nCREATE TRIGGER [g9_Bare_ad] AFTER DELETE ON [Bare] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 0\nBEGIN\n    UPDATE g9_clock SET seq = seq + 1 WHERE id = 1;\n    UPDATE g9_rows SET local_seq = (SELECT seq FROM g9_clock WHERE id = 1), dirty = 2, dirty_mask = 0, hlc_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER), rejected = 0\n        WHERE tid = 11 AND pk = lower(OLD.[Id]) AND NOT (server_ver = 0 AND subs = 0 AND dirty = 1);\n    DELETE FROM g9_rows WHERE tid = 11 AND pk = lower(OLD.[Id]) AND server_ver = 0 AND subs = 0 AND dirty = 1;\nEND;",
+        "createCommandTriggers": "CREATE TRIGGER [g9_Bare_ci] AFTER INSERT ON [Bare] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 11, lower(NEW.[Id]));\nEND;\nCREATE TRIGGER [g9_Bare_cu] AFTER UPDATE ON [Bare] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 11, lower(NEW.[Id]));\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 11, lower(OLD.[Id]));\nEND;\nCREATE TRIGGER [g9_Bare_cd] AFTER DELETE ON [Bare] WHEN (SELECT applying FROM g9_ctx WHERE id = 1) = 2\nBEGIN\n    INSERT OR IGNORE INTO g9_command_rows (command_id, tid, pk) VALUES ((SELECT command_id FROM g9_ctx WHERE id = 1), 11, lower(OLD.[Id]));\nEND;",
+        "dropTriggers": "DROP TRIGGER IF EXISTS [g9_Bare_ai]; DROP TRIGGER IF EXISTS [g9_Bare_au]; DROP TRIGGER IF EXISTS [g9_Bare_ad]; DROP TRIGGER IF EXISTS [g9_Bare_ci]; DROP TRIGGER IF EXISTS [g9_Bare_cu]; DROP TRIGGER IF EXISTS [g9_Bare_cd];",
+        "tid": 11
+      }
+    ]
+  },
+  "storage": {
+    "dateTimeFormat": "yyyy-MM-dd'T'HH:mm:ss.fffffff",
+    "dateTimeMinLiteral": "'0001-01-01T00:00:00.0000000'",
+    "dateTimes": [
+      {
+        "ticks": "0",
+        "kind": 0,
+        "text": "0001-01-01T00:00:00.0000000"
+      },
+      {
+        "ticks": "3155378975999999999",
+        "kind": 0,
+        "text": "9999-12-31T23:59:59.9999999"
+      },
+      {
+        "ticks": "639268004961234567",
+        "kind": 1,
+        "text": "2026-10-05T12:34:56.1234567"
+      },
+      {
+        "ticks": "630822815990000000",
+        "kind": 0,
+        "text": "1999-12-31T23:59:59.0000000"
+      },
+      {
+        "ticks": "638447616000000001",
+        "kind": 2,
+        "text": "2024-02-29T00:00:00.0000001"
+      },
+      {
+        "ticks": "51013230000000",
+        "kind": 1,
+        "text": "0001-03-01T01:02:03.0000000"
+      },
+      {
+        "ticks": "662431392000000000",
+        "kind": 1,
+        "text": "2100-03-01T00:00:00.0000000"
+      }
+    ],
+    "dateTimeOffsets": [
+      {
+        "utcTicks": "639268004960000000",
+        "offsetMinutes": 210,
+        "text": "2026-10-05T16:04:56.0000000+03:30"
+      },
+      {
+        "utcTicks": "639028728009999999",
+        "offsetMinutes": -840,
+        "text": "2026-01-01T00:00:00.9999999-14:00"
+      },
+      {
+        "utcTicks": "0",
+        "offsetMinutes": 840,
+        "text": "0001-01-01T14:00:00.0000000+14:00"
+      },
+      {
+        "utcTicks": "3155378975990000000",
+        "offsetMinutes": 0,
+        "text": "9999-12-31T23:59:59.0000000+00:00"
+      },
+      {
+        "utcTicks": "639159066000000000",
+        "offsetMinutes": -150,
+        "text": "2026-06-01T08:00:00.0000000-02:30"
+      }
+    ],
+    "decimals": [
+      {
+        "lo": 0,
+        "mid": 0,
+        "hi": 0,
+        "scale": 0,
+        "negative": false,
+        "text": "0",
+        "double": "0000000000000000"
+      },
+      {
+        "lo": 150,
+        "mid": 0,
+        "hi": 0,
+        "scale": 2,
+        "negative": false,
+        "text": "1.50",
+        "double": "3ff8000000000000"
+      },
+      {
+        "lo": 150,
+        "mid": 0,
+        "hi": 0,
+        "scale": 2,
+        "negative": true,
+        "text": "-1.50",
+        "double": "bff8000000000000"
+      },
+      {
+        "lo": 1,
+        "mid": 0,
+        "hi": 0,
+        "scale": 1,
+        "negative": false,
+        "text": "0.1",
+        "double": "3fb999999999999a"
+      },
+      {
+        "lo": -1395630315,
+        "mid": 28744523,
+        "hi": 0,
+        "scale": 9,
+        "negative": false,
+        "text": "123456789.123456789",
+        "double": "419d6f34547e6b75"
+      },
+      {
+        "lo": -1,
+        "mid": -1,
+        "hi": -1,
+        "scale": 0,
+        "negative": false,
+        "text": "79228162514264337593543950335",
+        "double": "45f0000000000000"
+      },
+      {
+        "lo": -1,
+        "mid": -1,
+        "hi": -1,
+        "scale": 0,
+        "negative": true,
+        "text": "-79228162514264337593543950335",
+        "double": "c5f0000000000000"
+      },
+      {
+        "lo": 1,
+        "mid": 0,
+        "hi": 0,
+        "scale": 28,
+        "negative": false,
+        "text": "0.0000000000000000000000000001",
+        "double": "3a1fb0f6be50601a"
+      },
+      {
+        "lo": -1,
+        "mid": -1,
+        "hi": -1,
+        "scale": 3,
+        "negative": false,
+        "text": "79228162514264337593543950.335",
+        "double": "4550624dd2f1a9fc"
+      },
+      {
+        "lo": 1,
+        "mid": 0,
+        "hi": 0,
+        "scale": 10,
+        "negative": false,
+        "text": "0.0000000001",
+        "double": "3ddb7cdfd9d7bdbb"
+      },
+      {
+        "lo": 2675,
+        "mid": 0,
+        "hi": 0,
+        "scale": 3,
+        "negative": false,
+        "text": "2.675",
+        "double": "4005666666666666"
+      },
+      {
+        "lo": 100,
+        "mid": 0,
+        "hi": 0,
+        "scale": 0,
+        "negative": false,
+        "text": "100",
+        "double": "4059000000000000"
+      },
+      {
+        "lo": 1329790980,
+        "mid": 6984919,
+        "hi": 0,
+        "scale": 17,
+        "negative": false,
+        "text": "0.30000000000000004",
+        "double": "3fd3333333333334"
+      },
+      {
+        "lo": 792095801,
+        "mid": -1320247423,
+        "hi": 6,
+        "scale": 1,
+        "negative": false,
+        "text": "12345678901234567890.5",
+        "double": "43e56a95319d63e2"
+      }
+    ],
+    "realDecimals": [
+      {
+        "bits": "3fb999999999999a",
+        "sqliteText": "0.1",
+        "decimal": "0.1"
+      },
+      {
+        "bits": "3fd3333333333334",
+        "sqliteText": "0.30000000000000004",
+        "decimal": "0.30000000000000004"
+      },
+      {
+        "bits": "3ff0000000000000",
+        "sqliteText": "1.0",
+        "decimal": "1.0"
+      },
+      {
+        "bits": "405edd2f1a9fbe77",
+        "sqliteText": "123.456",
+        "decimal": "123.456"
+      },
+      {
+        "bits": "4415af1d78b58c40",
+        "sqliteText": "1.0e+20",
+        "decimal": "100000000000000000000"
+      },
+      {
+        "bits": "3e8421f5f40d8376",
+        "sqliteText": "1.5e-07",
+        "decimal": "0.00000015"
+      },
+      {
+        "bits": "43e56a95319d63e1",
+        "sqliteText": "1.2345678901234567e+19",
+        "decimal": "12345678901234567000"
+      },
+      {
+        "bits": "3fe9999999999999",
+        "sqliteText": "0.79999999999999993",
+        "decimal": "0.79999999999999993"
+      },
+      {
+        "bits": "4005666666666666",
+        "sqliteText": "2.675",
+        "decimal": "2.675"
+      },
+      {
+        "bits": "c00921fb54442d11",
+        "sqliteText": "-3.14159265358979",
+        "decimal": "-3.14159265358979"
+      },
+      {
+        "bits": "3ee4f8b588e368f1",
+        "sqliteText": "1.0e-05",
+        "decimal": "0.000010"
+      },
+      {
+        "bits": "4340000000000000",
+        "sqliteText": "9007199254740992.0",
+        "decimal": "9007199254740992.0"
+      },
+      {
+        "bits": "430c6bf526340000",
+        "sqliteText": "1000000000000000.0",
+        "decimal": "1000000000000000.0"
+      },
+      {
+        "bits": "3f201f31f46ed246",
+        "sqliteText": "0.000123",
+        "decimal": "0.000123"
+      }
+    ],
+    "parsedDateTimes": [
+      {
+        "text": "2026-10-05T12:34:56.1234567",
+        "ticks": "639268004961234567",
+        "kind": 0
+      },
+      {
+        "text": "2026-10-05 12:34:56",
+        "ticks": "639268004960000000",
+        "kind": 0
+      },
+      {
+        "text": "2026-10-05T12:34:56Z",
+        "ticks": "639268004960000000",
+        "kind": 1
+      },
+      {
+        "text": "2026-10-05",
+        "ticks": "639267552000000000",
+        "kind": 0
+      },
+      {
+        "text": "2026-10-05 12:34:56.123",
+        "ticks": "639268004961230000",
+        "kind": 0
+      },
+      {
+        "text": "0001-01-01T00:00:00.0000000",
+        "ticks": "0",
+        "kind": 0
+      }
+    ],
+    "parsedDateTimeOffsets": [
+      {
+        "text": "2026-10-05T12:34:56.1234567+03:30",
+        "utcTicks": "639267878961234567",
+        "offsetMinutes": 210
+      },
+      {
+        "text": "2026-10-05T12:34:56.0000000-14:00",
+        "utcTicks": "639268508960000000",
+        "offsetMinutes": -840
+      },
+      {
+        "text": "2026-10-05T12:34:56Z",
+        "utcTicks": "639268004960000000",
+        "offsetMinutes": 0
+      },
+      {
+        "text": "2026-10-05 12:34:56 +00:00",
+        "utcTicks": "639268004960000000",
+        "offsetMinutes": 0
+      }
+    ]
+  },
+  "hub": {
+    "json": {
+      "helloResult": "{\"type\":3,\"invocationId\":\"1\",\"result\":{\"epoch\":\"0f8fad5b-d9cb-469f-a165-70867728950e\",\"serverTimeUtc\":\"2026-10-05T12:34:56.7891234Z\",\"protocolVersion\":1,\"tables\":[{\"tableId\":3,\"name\":\"Operation.Pot\",\"keyColumn\":\"Id\",\"keyType\":7,\"columns\":[{\"name\":\"RidgeId\",\"type\":7,\"nullable\":true},{\"name\":\"Code\",\"type\":6,\"nullable\":false},{\"name\":\"Weight\",\"type\":5,\"nullable\":true}],\"computedColumns\":[\"Weight\"],\"readOnlyColumns\":[\"Code\"],\"missingColumns\":[\"Ghost\"],\"typeMismatchColumns\":[{\"name\":\"Count\",\"clientType\":2,\"serverType\":3}],\"direction\":1,\"conflictPolicy\":2}],\"unknownTables\":[\"Nope.Table\"],\"definitions\":[{\"name\":\"Site\",\"parameters\":[{\"name\":\"siteId\",\"type\":7,\"required\":true,\"isList\":false}],\"dependsOn\":[{\"name\":\"Sites\",\"required\":false}],\"tables\":[\"Operation.Pot\"],\"ephemeral\":true,\"ttlSeconds\":60,\"heavy\":true,\"moveOutPolicy\":1,\"reconcileIntervalMinutes\":30,\"definitionHash\":\"def1\"}],\"subscriptions\":[{\"key\":\"Site?siteId=0f8fad5b-d9cb-469f-a165-70867728950e\",\"action\":2,\"definitionHash\":\"def1\",\"authHash\":\"auth1\",\"message\":\"changed\"}],\"maxPushRows\":5000,\"maxPushBytes\":4000000000,\"error\":null}}\u001E",
+      "pushResult": "{\"type\":3,\"invocationId\":\"2\",\"result\":{\"batchId\":12,\"alreadyApplied\":true,\"accepted\":[{\"tableId\":3,\"keys\":[\"k1\",\"k2\"],\"versions\":[1,9007199254740993],\"deleted\":[false,true]}],\"rejections\":[{\"tableId\":3,\"key\":\"k3\",\"code\":\"G9S-REJ-CONSTRAINT\",\"message\":\"duplicate\",\"sqlState\":\"23505\",\"constraint\":\"UX_Pot_Code\",\"column\":\"Code\",\"details\":\"{\\\"a\\\":1}\"}],\"conflicts\":[{\"tableId\":3,\"key\":\"k4\",\"code\":\"G9S-CON-COLUMNS\",\"serverChangedMask\":2305843009213693957,\"partiallyApplied\":true},{\"tableId\":3,\"key\":\"k5\",\"code\":\"G9S-CON-SERVER-WINS\",\"serverChangedMask\":-1,\"partiallyApplied\":false}],\"canonicalFrames\":[\"RzlSQgEABAAAAAAAAAA=\"],\"commandResults\":[{\"commandId\":\"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d\",\"status\":1,\"code\":\"APP-1\",\"message\":\"no\",\"result\":\"{\\\"id\\\":7}\"}],\"error\":{\"code\":\"G9S-REJ-TOO-MANY\",\"message\":\"too many\",\"retryable\":false,\"details\":\"max 10\"}}}\u001E",
+      "pullPlan": "{\"type\":3,\"invocationId\":\"3\",\"result\":{\"token\":\"tok.en\",\"parts\":[{\"subscriptionKey\":\"Site\",\"tableId\":3,\"kind\":1,\"rows\":123,\"estimatedBytes\":5000000000}],\"totalRows\":123,\"estimatedBytes\":5000000000,\"cursors\":[{\"key\":\"Site\",\"cursor\":\"c:43\",\"definitionHash\":\"def1\",\"authHash\":\"auth1\"}],\"skipped\":[{\"key\":\"Other\",\"action\":6,\"definitionHash\":null,\"authHash\":null,\"message\":\"no\"}],\"error\":null}}\u001E",
+      "fullChunk": "{\"type\":2,\"invocationId\":\"4\",\"item\":{\"sequence\":3,\"payload\":\"AQID+v8=\",\"rowCount\":2,\"subscriptionKey\":\"Site?siteId=0f8fad5b-d9cb-469f-a165-70867728950e\",\"isFinal\":true,\"continuation\":{\"partIndex\":1,\"afterKey\":\"k\",\"nextSequence\":4},\"reconcileSummary\":{\"cursor\":\"c:44\",\"definitionHash\":\"def1\",\"authHash\":\"auth1\",\"mismatched\":[{\"tableId\":3,\"buckets\":[0,255]}]}}}\u001E",
+      "emptyChunk": "{\"type\":2,\"invocationId\":\"5\",\"item\":{\"sequence\":0,\"payload\":null,\"rowCount\":0,\"subscriptionKey\":null,\"isFinal\":false,\"continuation\":null,\"reconcileSummary\":null}}\u001E",
+      "changesAvailable": "{\"type\":1,\"target\":\"OnChangesAvailable\",\"arguments\":[{\"tables\":[\"Operation.Pot\",\"Base.Site\"]}]}\u001E",
+      "error": "{\"type\":3,\"invocationId\":\"6\",\"error\":\"An unexpected error occurred invoking 'Push' on the server. HubException: [G9S|G9S-SRV-BUSY|1] The server is busy.\"}\u001E",
+      "streamEnd": "{\"type\":3,\"invocationId\":\"7\"}\u001E"
+    },
+    "messagepack": {
+      "helloResult": "9806950380a131038aa545706f6368d8020f8fad5bd9cb469fa16570867728950ead53657276657254696d65557463d7ffbc2445206ac39970af50726f746f636f6c56657273696f6e01a65461626c6573918ba75461626c65496403a44e616d65ad4f7065726174696f6e2e506f74a94b6579436f6c756d6ea24964a74b65795479706507a7436f6c756d6e739383a44e616d65a752696467654964a45479706507a84e756c6c61626c65c383a44e616d65a4436f6465a45479706506a84e756c6c61626c65c283a44e616d65a6576569676874a45479706505a84e756c6c61626c65c3af436f6d7075746564436f6c756d6e7391a6576569676874af526561644f6e6c79436f6c756d6e7391a4436f6465ae4d697373696e67436f6c756d6e7391a547686f7374b3547970654d69736d61746368436f6c756d6e739183a44e616d65a5436f756e74aa436c69656e745479706502aa5365727665725479706503a9446972656374696f6e01ae436f6e666c696374506f6c69637902ad556e6b6e6f776e5461626c657391aa4e6f70652e5461626c65ab446566696e6974696f6e73918aa44e616d65a453697465aa506172616d65746572739184a44e616d65a6736974654964a45479706507a85265717569726564c3a649734c697374c2a9446570656e64734f6e9182a44e616d65a55369746573a85265717569726564c2a65461626c657391ad4f7065726174696f6e2e506f74a9457068656d6572616cc3aa54746c5365636f6e64733ca54865617679c3ad4d6f76654f7574506f6c69637901b85265636f6e63696c65496e74657276616c4d696e757465731eae446566696e6974696f6e48617368a464656631ad537562736372697074696f6e739185a34b6579d930536974653f7369746549643d30663866616435622d643963622d343639662d613136352d373038363737323839353065a6416374696f6e02ae446566696e6974696f6e48617368a464656631a84175746848617368a56175746831a74d657373616765a76368616e676564ab4d617850757368526f7773cd1388ac4d6178507573684279746573ceee6b2800a54572726f72c0",
+      "pushResult": "d904950380a1320388a7426174636849640cae416c72656164794170706c696564c3a841636365707465649184a75461626c65496403a44b65797392a26b31a26b32a856657273696f6e739201cf0020000000000001a744656c6574656492c2c3aa52656a656374696f6e739188a75461626c65496403a34b6579a26b33a4436f6465b24739532d52454a2d434f4e53545241494e54a74d657373616765a96475706c6963617465a853716c5374617465a53233353035aa436f6e73747261696e74ab55585f506f745f436f6465a6436f6c756d6ea4436f6465a744657461696c73a77b2261223a317da9436f6e666c696374739285a75461626c65496403a34b6579a26b34a4436f6465af4739532d434f4e2d434f4c554d4e53b15365727665724368616e6765644d61736bcf2000000000000005b05061727469616c6c794170706c696564c385a75461626c65496403a34b6579a26b35a4436f6465b34739532d434f4e2d5345525645522d57494e53b15365727665724368616e6765644d61736bffb05061727469616c6c794170706c696564c2af43616e6f6e6963616c4672616d657391c40e4739524201000400000000000000ae436f6d6d616e64526573756c74739185a9436f6d6d616e644964d802a1b2c3d4e5f64a7b8c9d0e1f2a3b4c5da653746174757301a4436f6465a54150502d31a74d657373616765a26e6fa6526573756c74a87b226964223a377da54572726f7284a4436f6465b04739532d52454a2d544f4f2d4d414e59a74d657373616765a8746f6f206d616e79a9526574727961626c65c2a744657461696c73a66d6178203130",
+      "pullPlan": "8b02950380a1330387a5546f6b656ea6746f6b2e656ea550617274739185af537562736372697074696f6e4b6579a453697465a75461626c65496403a44b696e6401a4526f77737bae457374696d617465644279746573cf000000012a05f200a9546f74616c526f77737bae457374696d617465644279746573cf000000012a05f200a7437572736f72739184a34b6579a453697465a6437572736f72a4633a3433ae446566696e6974696f6e48617368a464656631a84175746848617368a56175746831a7536b69707065649185a34b6579a54f74686572a6416374696f6e06ae446566696e6974696f6e48617368c0a84175746848617368c0a74d657373616765a26e6fa54572726f72c0",
+      "fullChunk": "8902940280a13487a853657175656e636503a75061796c6f6164c405010203faffa8526f77436f756e7402af537562736372697074696f6e4b6579d930536974653f7369746549643d30663866616435622d643963622d343639662d613136352d373038363737323839353065a7497346696e616cc3ac436f6e74696e756174696f6e83a950617274496e64657801a841667465724b6579a16bac4e65787453657175656e636504b05265636f6e63696c6553756d6d61727984a6437572736f72a4633a3434ae446566696e6974696f6e48617368a464656631a84175746848617368a56175746831aa4d69736d6174636865649182a75461626c65496403a74275636b6574739200ccff",
+      "emptyChunk": "5d940280a13587a853657175656e636500a75061796c6f6164c0a8526f77436f756e7400af537562736372697074696f6e4b6579c0a7497346696e616cc2ac436f6e74696e756174696f6ec0b05265636f6e63696c6553756d6d617279c0",
+      "changesAvailable": "3a960180c0b24f6e4368616e676573417661696c61626c659181a65461626c657392ad4f7065726174696f6e2e506f74a9426173652e5369746590",
+      "error": "7a950380a13601d972416e20756e6578706563746564206572726f72206f6363757272656420696e766f6b696e6720275075736827206f6e20746865207365727665722e20487562457863657074696f6e3a205b4739537c4739532d5352562d425553597c315d205468652073657276657220697320627573792e",
+      "streamEnd": "06940380a13702"
+    }
+  }
+}

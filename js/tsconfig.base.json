@@ -1,0 +1,24 @@
+{
+  // Shared compiler settings of the packages. Shipped code targets ES2019 with the ES2019 library: Lynx compiles the
+  // background thread for ES2015 and lacks newer runtime APIs (Object.hasOwn, Array#at, String#replaceAll, BigInt),
+  // so a newer API used here would typecheck and then fail on a device. Tests use a newer library (tsconfig.test.json).
+  "compilerOptions": {
+    "target": "ES2019",
+    "lib": ["ES2019", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "useDefineForClassFields": false,
+    "types": [],
+    "noEmit": true
+  }
+}

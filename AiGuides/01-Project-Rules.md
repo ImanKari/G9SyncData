@@ -77,6 +77,17 @@ Exceptions that follow platform convention: DI extension classes (`G9Sync…Exte
 - Integration tests only run against a disposable PostgreSQL server; they skip, not fail, when none answers.
 - A change is done when `dotnet build G9SyncData.slnx` is clean and both test suites pass.
 
+## Two clients, one change (ADR-0070)
+
+- The TypeScript/Lynx client in `js/` is the .NET client's twin. A feature, fix, option, error code, DTO field, frame byte
+  or SQL object is added to BOTH clients in the same change, with tests on both sides
+  ([21-TypeScript-And-Lynx.md](21-TypeScript-And-Lynx.md)). `js/packages/syncdata/PARITY.md` moves with it.
+- A change to the wire, a hash, a storage form or the local schema regenerates the golden vectors
+  (`G9_UPDATE_GOLDEN=1`) and makes the other side pass in the same change.
+- `G9SyncDataVersion` is the version of the npm packages too (`js/scripts/check-versions.mjs`).
+- Code under `js/packages/*/src` ships to Lynx's background thread: ES2019, no BigInt, `TextEncoder`, `URL`, `btoa`,
+  `crypto` or `globalThis` timers (`npm run check:lynx`).
+
 ## Documentation
 
 - Public types and members carry XML docs that say what they guarantee, not what they are called.

@@ -21,6 +21,15 @@ dotnet pack G9SyncData.slnx -c Release                          # → artifacts/
 dotnet run -c Release --project benchmarks/G9SyncData.Benchmarks # disposable PostgreSQL; writes benchmarks/results/latest.md
 ```
 
+The TypeScript/Lynx twin (`js/`, Node 22.12+; [21-TypeScript-And-Lynx.md](21-TypeScript-And-Lynx.md)):
+
+```powershell
+cd js; npm ci; npm run verify              # versions, typecheck, unit tests, Lynx sandbox, build, Lynx runtime gate
+npm run test:interop -w packages/syncdata  # against the real sample server + database parity with the .NET client (disposable PostgreSQL)
+npm run test:android-jvm -w packages/lynx; npm run check:android-module -w packages/lynx; npm run test:ios-core -w packages/lynx
+npm run pack:all                           # → js/artifacts/npm
+```
+
 When a build fails, filter the noise:
 
 ```powershell

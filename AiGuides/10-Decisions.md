@@ -1602,3 +1602,53 @@ Sync does not NEED it - every stream is resumable at the protocol level (ADR-003
 
 **Consequences.** Off by default because it costs server memory per connection (the buffer) and needs WebSockets end to end; a
 proxy that downgrades to long polling silently disables it. Enable it after measuring reconnect frequency, not before.
+
+## ADR-0070 — The TypeScript/Lynx client is a twin in this repository, held to the .NET client by bytes
+
+**Status:** accepted (2026-10-05).
+
+**Context.** AgriPad moves from MAUI to Lynx. The device side of G9SyncData — engine, SQLite store, SignalR transport —
+has to exist in TypeScript, on a runtime (PrimJS) without BigInt, TextEncoder, URL or a release-build WebSocket. A
+separate repository would drift from the .NET client the first week; a port nobody checks against the original is a
+second protocol implementation with its own bugs.
+
+**Decision.** The TypeScript client lives in `js/` of this repository as two npm packages, `@g9tm/syncdata` and
+`@g9tm/syncdata-lynx`, with the family's version (`G9SyncDataVersion`, checked by `js/scripts/check-versions.mjs`). Every
+change lands on both clients in the same change (01-Project-Rules). Parity is proven, not reviewed: .NET writes golden
+vectors (frames, hashes, keys, schema SQL, storage forms, hub messages) that the TypeScript tests must reproduce, the
+TypeScript tests write the requests the .NET server's own hub protocols must parse, the TypeScript client syncs against
+the real sample server, and the database it writes is compared with the .NET client's. The transport is built on the
+npm twins of G9SignalRSuperNetCore (2.10). The .NET packages do not change.
+
+**Consequences.** A wire, hash, storage or schema change costs a golden-vector regeneration and both implementations.
+The local database is the same file for both clients: a device migrating from the MAUI app to the Lynx app keeps its
+data, its pending changes and its identity. The pipeline gains a Node job and npm publishing.
+
+## ADR-0071 — The TypeScript store reaches the .NET store's database state through SQL, not through SQLite's C API
+
+**Status:** accepted (2026-10-05).
+
+**Context.** The .NET store drives SQLite through SQLitePCL.raw: one prepared statement per row, a decision per result,
+and `SQLITE_DBCONFIG_ENABLE_TRIGGER` to skip trigger evaluation during an apply. On Lynx the store reaches SQLite only
+through a driver (G9LynxControls' `G9SqliteDriver`), where every call is a bridge round trip and no connection setting is
+exposed.
+
+**Decision.** The row path queues its statements and runs them in batches (1,500 statements per call by default). The
+per-row decisions move into SQL: the metadata upsert reads `changes()` of the row upsert before it (rewrite the metadata
+when the row changed, otherwise only when the metadata differs), and the clock moves with
+`UPDATE g9_clock … WHERE changes() > 0` — so `local_seq` values, `g9_rows` and the clock are exactly the .NET store's.
+For a staged pull of at least 5,000 rows, with no foreign trigger in the database, the store drops its own capture and
+command triggers inside the apply transaction and re-creates them from their stored SQL before commit. Values to push
+are read with `CAST(… AS TEXT)` where .NET parses SQLite's text (decimals, strings). int64 values stay exact as `G9Long`.
+
+**Consequences.** Proven by the database-parity interop test (every `g9_*` row, the schema, app rows and storage classes
+equal to the .NET client's after the same sync). Small applies evaluate the capture triggers (reported, 17). A DDL change
+during a large apply bumps the schema cookie, so other connections re-prepare their statements once.
+
+**Addendum to ADR-0071 (2026-10-05, after the first device run).** Releasing rows (unsubscribe, access revoked, expired
+ephemeral subscription) follows the same principle: `disposeReleasedRows` reads the released rows' metadata, pending
+commands and app rows in bulk, lets the revocation policy decide row by row in the order the .NET store walks them, and
+batches the writes with explicit `local_seq` values (`clock + n`), then moves the clock once by the number of rows. That
+is exact because disposing a row writes nothing another row's decision reads — the store's connections run with foreign
+keys off — and it falls back to the row-by-row path while a foreign trigger exists. Measured: 25,000 rows in 6.3 s instead
+of 850 s on the Android emulator (LES-0051).

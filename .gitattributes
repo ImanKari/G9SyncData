@@ -13,3 +13,5 @@
 *.png binary
 *.jpg binary
 *.ico binary
+# Shell scripts run under bash (WSL, Linux agents): LF in every checkout.
+*.sh text eol=lf

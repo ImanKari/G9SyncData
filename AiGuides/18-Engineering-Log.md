@@ -448,3 +448,57 @@ anywhere - a leftover from a previous sync library on an upgraded device - disab
 instead of 2.3 s for 500,000 rows, with nothing in any log to say why. The apply now names the triggers that stopped it (event 20112,
 `G9CApplyDiagnostics.ForeignTriggers`). Lesson: an optimisation with a precondition must report when the precondition fails, or its
 absence is indistinguishable from slow hardware.
+
+## LES-0046 — 2026-10-05 · .NET writes a double in fixed notation up to exponent 16, not 14
+
+`double.ToString()` (shortest round trip) switches to `E+XX` only when the decimal exponent reaches 17 (`1E+17`, but
+`10000000000000000` and `1000000000000000`), and below -4 (`1E-05`). The first TypeScript port assumed .NET's old "G15"
+threshold and the golden vectors caught it on 1e15. Computed columns hash this text, so one digit of difference would
+have made every reconciliation of a REAL computed column move rows forever. Lesson: format rules come from the vectors,
+not from memory of the documentation.
+
+## LES-0047 — 2026-10-05 · Nerdbank.MessagePack writes PascalCase keys, every field, and GUIDs as extension 2
+
+The JSON wire is camelCase with nulls; the MessagePack wire is PascalCase (no naming policy), writes default and null
+values too, encodes `Guid` as extension type 2 with the 16 bytes in big-endian (text) order, and `DateTime` as the
+timestamp extension. None of this is in a spec the JS client could read; the golden hub messages pinned it, and the .NET
+test parsing the TypeScript-written requests proved the other direction.
+
+## LES-0048 — 2026-10-05 · SQLite prints a REAL with 15 digits, or 17 — never the shortest
+
+`CAST(0.1 + 0.7 AS TEXT)` is `0.79999999999999993` (17 digits) although `0.7999999999999999` round-trips, and `1e15` is
+`1000000000000000.0`. The .NET store pushes a REAL-stored decimal as `decimal.Parse` of exactly that text, so the
+TypeScript store selects `CAST(column AS TEXT)` instead of formatting the double itself — no JavaScript formatter would
+reproduce SQLite's choice.
+
+## LES-0049 — 2026-10-05 · The .NET store's trigger SQL carries the line endings of the checkout it was built from
+
+The capture triggers are C# raw string literals: a build from a Windows checkout (CRLF) stores triggers with CRLF in
+`sqlite_master`, a Linux build LF. SQLite does not care, and the store compares triggers by name and model hash, never by
+text — but a byte comparison of two stores' schemas must normalise line endings.
+
+## LES-0050 — 2026-10-05 · One `Object` parameter and a Lynx native module has no methods at all
+
+The first run on a real Lynx runtime (Android emulator, Lynx 4.1.0) failed before the first sync: every method of
+`G9SyncDataLynxModule`, `G9SignalRLynxModule` and G9LynxControls' `G9SqliteModule` / `G9HostModule` was `undefined` in
+JS. `@lynx-js/autolink-codegen` 0.6.0 writes every function, object, array and ArrayBuffer parameter of the generated
+Android spec as `java.lang.Object` (the Kotlin modules overrode them as `Any?`); Lynx's `LynxMethodWrapper` throws
+`Got unknown param class: Object` while building the FIRST such signature, and `LynxModuleWrapper.findMethods` gives up on
+the whole module. Every check before the device passed: the module compiled, the Autolink provider registered it, the
+JVM cores were green, the Lynx-shaped sandbox (which stands in for the bridge) ran the full sync. Lessons: a compile check
+is not a bridge check — `LynxBridgeSignatureTest` now runs Lynx's own signature builder over the compiled module; a
+generator's output is an input to verify, not an authority (`scripts/android-bridge-types.mjs --fix` runs after it);
+and a second, hidden bug sat behind the first — kapt needs `androidx.annotation` on the library's own compile classpath
+(Lynx's POMs declare it at runtime scope), which the `android-check` project had masked with annotation stubs.
+
+## LES-0051 — 2026-10-05 · On Lynx every SQL statement is a bridge crossing — and Node hides it
+
+On the emulator, unsubscribing from 25,000 rows took 850 s — 96 % of the whole device run — while the 50,000-row
+download and apply took 13 s. The store disposed each released row like the .NET store does: read its metadata, look for
+a pending command, read the app row, decide, delete, tombstone, move the clock — about 6 driver calls per row (150,272
+`G9SqliteModule.run` calls, ~5.7 ms each). In Node the driver is in-process and the same loop is invisible.
+`disposeReleasedRows` reads everything in three queries, lets the policy decide in the same order and batches the writes
+with each row's explicit `local_seq` (the value the row-by-row path takes from the clock): 6.3 s on the same emulator
+(the whole run: 1,386 SQLite driver calls instead of 151,332, 39.5 s instead of 883 s), and the database is identical (`revocation.test.ts` compares both paths for every revocation outcome; the interop test
+compares with the .NET client). Lesson: on a bridged driver, count driver calls per row the way one counts queries per
+request; a Node-only suite cannot see this cost. Still per row: move-outs inside a pull (17-Known-Limitations).

@@ -24,7 +24,7 @@ TestResults/
 *.db-wal
 *.db-shm
 
-# NuGet
+# NuGet (the repository-root restore folder only: js/packages/ holds the npm packages)
 *.nupkg
 *.snupkg
-packages/
+/packages/

@@ -1,0 +1,35 @@
+{
+  "name": "g9syncdata-lynx-android-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Device test host: the G9SyncData interop scenario on a real Lynx runtime (PrimJS, Android) with the real native modules (G9SyncDataLynxModule, G9SignalRLynxModule, G9SqliteModule). NOT a member of the js/ npm workspace.",
+  "scripts": {
+    "pack:g9lynx": "node scripts/pack-g9lynx.mjs",
+    "build": "rspeedy build",
+    "apk": "node scripts/gradle.mjs :app:assembleDebug",
+    "device-test": "node scripts/device-test.mjs"
+  },
+  "dependencies": {
+    "@g9lynx/foundation": "file:vendor/g9lynx-foundation-0.0.0.tgz",
+    "@g9lynx/native": "file:vendor/g9lynx-native-0.0.0.tgz",
+    "@g9lynx/sqlite": "file:vendor/g9lynx-sqlite-0.0.0.tgz",
+    "@g9tm/signalr-supernetcore-client": "file:../../vendor/g9tm-signalr-supernetcore-client-2.10.0.tgz",
+    "@g9tm/signalr-supernetcore-lynx": "file:../../vendor/g9tm-signalr-supernetcore-lynx-2.10.0.tgz",
+    "@g9tm/syncdata": "file:../../artifacts/npm/g9tm-syncdata-1.2.0.tgz",
+    "@g9tm/syncdata-lynx": "file:../../artifacts/npm/g9tm-syncdata-lynx-1.2.0.tgz",
+    "@lynx-js/react": "0.126.2",
+    "@microsoft/signalr": "10.0.11",
+    "@microsoft/signalr-protocol-msgpack": "10.0.11",
+    "@msgpack/msgpack": "2.8.0"
+  },
+  "devDependencies": {
+    "@lynx-js/react-rsbuild-plugin": "0.20.3",
+    "@lynx-js/rspeedy": "0.18.0",
+    "@lynx-js/types": "4.3.0",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "name": "@g9tm/syncdata",
+  "version": "1.2.0",
+  "description": "TypeScript twin of the G9SyncData .NET client for Lynx, Node and browsers: the sync engine, the G9RowBatch protocol, the SQLite client store (same schema as the .NET store) and the SignalR transport.",
+  "license": "MIT",
+  "author": "Iman Kari (G9TM)",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite/index.d.ts",
+      "import": "./dist/sqlite/index.js",
+      "default": "./dist/sqlite/index.js"
+    },
+    "./signalr": {
+      "types": "./dist/signalr/index.d.ts",
+      "import": "./dist/signalr/index.js",
+      "default": "./dist/signalr/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js",
+      "default": "./dist/node/index.js"
+    },
+    "./brotli-js": {
+      "types": "./dist/brotli-js/index.d.ts",
+      "import": "./dist/brotli-js/index.js",
+      "default": "./dist/brotli-js/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "PARITY.md",
+    "LICENSE.md",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "keywords": [
+    "sync",
+    "offline-first",
+    "sqlite",
+    "signalr",
+    "lynx",
+    "g9"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "test:interop": "vitest run --config vitest.interop.config.ts",
+    "test:watch": "vitest",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "@g9tm/signalr-supernetcore-client": "^2.10.0",
+    "@microsoft/signalr": "^10.0.0",
+    "@microsoft/signalr-protocol-msgpack": "^10.0.0",
+    "@msgpack/msgpack": "^2.8.0"
+  },
+  "peerDependenciesMeta": {
+    "@g9tm/signalr-supernetcore-client": {
+      "optional": true
+    },
+    "@microsoft/signalr": {
+      "optional": true
+    },
+    "@microsoft/signalr-protocol-msgpack": {
+      "optional": true
+    },
+    "@msgpack/msgpack": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@g9tm/signalr-supernetcore-client": "file:../../vendor/g9tm-signalr-supernetcore-client-2.10.0.tgz",
+    "@microsoft/signalr": "^10.0.11",
+    "@microsoft/signalr-protocol-msgpack": "^10.0.11",
+    "@msgpack/msgpack": "2.8.0",
+    "@types/node": "^22.15.0",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.1"
+  }
+}

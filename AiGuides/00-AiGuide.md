@@ -43,6 +43,7 @@ the agriculture repository root.
 | Adopting in AgriPad / migrating from Dotmim | [16-AgriPad-Integration.md](16-AgriPad-Integration.md) |
 | Before promising a feature | [17-Known-Limitations.md](17-Known-Limitations.md) |
 | Performance numbers, benchmarks | [19-Performance.md](19-Performance.md) |
+| The TypeScript/Lynx client, or any change the .NET client and it must share | [21-TypeScript-And-Lynx.md](21-TypeScript-And-Lynx.md), then `js/packages/syncdata/PARITY.md` |
 
 ## Chapters
 
@@ -68,6 +69,7 @@ the agriculture repository root.
 | 17 | [17-Known-Limitations.md](17-Known-Limitations.md) | Hard limits and open work |
 | 18 | [18-Engineering-Log.md](18-Engineering-Log.md) | Dated root causes and surprises |
 | 19 | [19-Performance.md](19-Performance.md) | Benchmark method, results, what they do and do not prove |
+| 21 | [21-TypeScript-And-Lynx.md](21-TypeScript-And-Lynx.md) | The TypeScript/Lynx twin: packages, the both-sides rule, how it matches .NET, the parity tests, releasing |
 | 20 | [20-Infrastructure-PostgreSQL.md](20-Infrastructure-PostgreSQL.md) | **Logical replication: what was changed and why, required settings, roles, monitoring, operational risks, the Ops checklist and the runbook.** Read before enabling WAL capture in any environment |
 
 ## Source map
@@ -89,5 +91,8 @@ the agriculture repository root.
 | `benchmarks/experiments/SqliteApplyExperiment` | a raw-SQLite rig with NO library code: what SQLite itself can do, so the store's design can be judged against it ([19](19-Performance.md), ADR-0058). Outside the solution and the repository's build props on purpose |
 | `tests/G9SyncData.Tests` | codec, digest parity, parameters, JSON, SQLite store, generated model |
 | `tests/G9SyncData.IntegrationTests` | end-to-end over real PostgreSQL + SQLite, in-memory and real SignalR |
+| `js/packages/syncdata` | `@g9tm/syncdata`: the TypeScript twin of the client packages (`src/client`, `src/sqlite`, `src/signalr`, `src/protocol`, `src/abstractions`), `PARITY.md`, `test/golden` (vectors from `Protocol/JsGoldenVectorsTests.cs`), `test/interop` (against the sample server) |
+| `js/packages/lynx` | `@g9tm/syncdata-lynx`: the Brotli native module (Android, iOS, Lynxtron) and the Lynx transport wiring |
+| `js/apps/lynx-android-host` | the device test host: the interop scenario on PrimJS on an Android emulator |
 | `build/G9SyncData.Library.props` | imported by every redistributable library: AOT/trim analyzers |
 | `Directory.Build.props`, `Directory.Packages.props`, `global.json`, `nuget.config` | the self-contained build seam (ADR-0002) |

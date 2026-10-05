@@ -58,3 +58,14 @@ classify failures by code, never by message (plan P-19).
 | `G9S-SRV-BUSY` | the server is at `MaxConcurrentPulls` / `MaxConcurrentPushes` and the wait ran out (ADR-0062) | engine retries with backoff |
 | `G9S-MODEL-TYPE-MISMATCH` | a client column's type differs from the server's and `FailOnTypeMismatch` is on (ADR-0061) | developer error: fix the mirror entity |
 | `G9S-UNKNOWN` | not classified | a bug: classify it |
+
+## Lynx native module codes
+
+`@g9tm/syncdata-lynx`'s Brotli module answers with its own codes; they never reach a run result as such — a frame that
+cannot be decoded fails the apply as a malformed frame, and the module's code is in the message.
+
+| Code | Meaning |
+|---|---|
+| `G9SYNC-BROTLI-ARG` | no data, or an expected length outside 0 … 576 MiB |
+| `G9SYNC-BROTLI-INVALID` | corrupt stream, or one that decodes to a different length than the frame header says |
+| `G9SYNC-BROTLI-UNAVAILABLE` | no native decoder (module not linked); use `jsBrotliDecompressor()` of `@g9tm/syncdata/brotli-js` |

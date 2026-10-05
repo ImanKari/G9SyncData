@@ -28,6 +28,8 @@
     <ProjectReference Include="..\..\src\G9SyncData.Abstractions\G9SyncData.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Protocol\G9SyncData.Protocol.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+    <!-- The hub protocols of the TypeScript parity vectors (Protocol/JsGoldenVectorsTests.cs): Nerdbank MessagePack and the SignalR JSON protocol. -->
+    <ProjectReference Include="..\..\src\G9SyncData.Client.SignalR\G9SyncData.Client.SignalR.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Server.EfCore\G9SyncData.Server.EfCore.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Server\G9SyncData.Server.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.SourceGenerators\G9SyncData.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />

@@ -239,6 +239,45 @@ jobs:
         env:
           G9SYNC_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=g9sync-tests;Database=postgres
 
+      # ──────────────────────────────────────────────────────────────────────────────────────────
+      # The TypeScript/Lynx twin (js/: @g9tm/syncdata + @g9tm/syncdata-lynx, ADR-0070). Same version, same release:
+      # verified, run against the real sample server on this job's PostgreSQL (the interop and Lynx-sandbox suites
+      # create and drop g9t_js_* databases), its Android module checked, and packed BEFORE anything is published.
+      - task: NodeTool@0
+        displayName: 'Node.js 22 (TypeScript/Lynx packages)'
+        inputs:
+          versionSpec: '22.x'
+
+      - script: npm ci --no-audit --no-fund && npm run verify
+        displayName: 'TypeScript/Lynx - versions, typecheck, unit + golden tests, Lynx sandbox vs the sample server, build, Lynx runtime gate'
+        workingDirectory: js
+        env:
+          CI: 'true'
+          G9SYNC_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=g9sync-tests;Database=postgres
+
+      - script: npm run test:interop -w packages/syncdata
+        displayName: 'TypeScript - interop with the real sample server (JSON + MessagePack) and database parity with the .NET client'
+        workingDirectory: js
+        env:
+          CI: 'true'
+          G9SYNC_TEST_PG: Host=localhost;Port=5432;Username=postgres;Password=g9sync-tests;Database=postgres
+
+      - script: npm run test:android-jvm -w packages/lynx && npm run check:android-module -w packages/lynx
+        displayName: 'Lynx - Brotli module core on the JVM, module compile check (Autolink provider)'
+        workingDirectory: js
+        env:
+          JAVA_HOME: $(JAVA_HOME_17_X64)
+
+      - script: npm run pack:all
+        displayName: 'TypeScript/Lynx - pack'
+        workingDirectory: js
+
+      - task: PublishPipelineArtifact@1
+        displayName: 'Attach the npm tarballs'
+        inputs:
+          targetPath: js/artifacts/npm
+          artifact: npm
+
       # Slots survive a dropped database, so a leak here wedges the NEXT run rather than this one.
       # Reported, not failed: a leak is worth seeing, and failing a green test run over cleanup would
       # bury the result that matters.
@@ -439,3 +478,39 @@ jobs:
                 throw "$($failures.Count) package(s) failed to publish."
             }
             Write-Host "All packages published (or already present — skip-duplicate)."
+
+      # The npm packages (1.2+), after the NuGet ones and under the same rule: release only, a version already on npm is
+      # skipped (re-running a release is harmless). Needs the secret variable NpmToken (an automation token of the npm
+      # organisation g9tm); without it the step says so and the tarballs stay attached above.
+      - task: PowerShell@2
+        displayName: 'Publish npm packages (@g9tm)'
+        condition: and(succeeded(), eq(variables.isRelease, true))
+        env:
+          NPM_TOKEN: $(NpmToken)
+        inputs:
+          targetType: 'inline'
+          workingDirectory: js
+          script: |
+            if ([string]::IsNullOrWhiteSpace($env:NPM_TOKEN) -or $env:NPM_TOKEN -eq '$(NpmToken)') {
+                Write-Host "##vso[task.logissue type=warning]NpmToken is not set: the npm packages were packed (artifact 'npm') but not published."
+                exit 0
+            }
+            $npmrc = Join-Path $env:AGENT_TEMPDIRECTORY 'g9tm.npmrc'
+            Set-Content -LiteralPath $npmrc -Value "//registry.npmjs.org/:_authToken=$($env:NPM_TOKEN)`nregistry=https://registry.npmjs.org/"
+            try {
+                foreach ($tarball in Get-ChildItem -Path 'artifacts/npm' -Filter '*.tgz') {
+                    $manifest = (& tar -xOzf $tarball.FullName package/package.json) | ConvertFrom-Json
+                    $id = "$($manifest.name)@$($manifest.version)"
+                    $existing = & npm view $id version --userconfig $npmrc 2>$null
+                    if ($LASTEXITCODE -eq 0 -and $existing) {
+                        Write-Host "$id is already on npm; skipping."
+                        continue
+                    }
+                    & npm publish $tarball.FullName --access public --userconfig $npmrc
+                    if ($LASTEXITCODE -ne 0) { throw "npm publish failed for $id (exit code $LASTEXITCODE)." }
+                    Write-Host "Published $id"
+                }
+            }
+            finally {
+                Remove-Item -LiteralPath $npmrc -Force -ErrorAction SilentlyContinue
+            }

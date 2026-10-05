@@ -1,0 +1,27 @@
+{
+  "name": "g9syncdata-js",
+  "private": true,
+  "type": "module",
+  "description": "npm workspace of the G9SyncData TypeScript/Lynx twins (published packages live in packages/*).",
+  "workspaces": [
+    "packages/syncdata",
+    "packages/lynx"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm test --workspaces",
+    "test:lynxsim": "npm run test:lynxsim --workspaces --if-present",
+    "check:versions": "node scripts/check-versions.mjs",
+    "check:lynx": "node scripts/check-lynx-runtime.mjs",
+    "verify": "npm run check:versions && npm run typecheck && npm test && npm run test:lynxsim && npm run build && npm run check:lynx",
+    "pack:all": "node scripts/pack-all.mjs"
+  },
+  "devDependencies": {
+    "acorn": "^8.15.0",
+    "esbuild": "^0.28.2"
+  }
+}

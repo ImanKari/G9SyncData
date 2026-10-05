@@ -1,0 +1,2 @@
+# Shell scripts run in WSL/Linux bash: a CRLF checkout (core.autocrlf=true) would break them.
+*.sh text eol=lf

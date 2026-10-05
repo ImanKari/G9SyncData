@@ -99,3 +99,17 @@ Read before promising a feature. Remove an entry only in the change that lifts i
   save ~1.9 s of device load (ADR-0041).
 - Echo suppression (ADR-0011): not built — the correct design saves under half of ~78 bytes and 0.035 ms per pushed row (ADR-0042).
 - AgriPad adoption beyond the shadow pilot ([16](16-AgriPad-Integration.md)): device runs, then per-table cut-over from Dotmim — each needs the owner's go-ahead.
+
+## TypeScript / Lynx client (ADR-0070, ADR-0071)
+
+| Limit | Why | Workaround |
+|---|---|---|
+| DateTime text storage only in the default format `yyyy-MM-dd'T'HH:mm:ss.fffffff` | the .NET store accepts any format string; the twin implements the default one | keep the default, or `dateTimeStorage: Ticks` |
+| Small applies (< `skipTriggersMinRows` staged rows) evaluate the capture triggers | no `SQLITE_DBCONFIG_ENABLE_TRIGGER` through a driver; dropping and re-creating triggers is not worth it for a delta | — |
+| Reconciliation hashes rows in JavaScript (MD5 per key and per row) | no `md5` in SQLite, no WebCrypto MD5 | measured on Node only; a device measurement of a large reconcile is pending ([21](21-TypeScript-And-Lynx.md)) |
+| Push frames are uncompressed on Lynx | no Brotli encoder on the background thread | none needed: a push is small; every server reads both |
+| `Guid.Parse`'s "X" form is not accepted | not used by G9SyncData data | — |
+| No in-process server for tests (`G9CInMemorySyncTransport`) | no JavaScript server engine | `G9FaultInjectingTransport` over the SignalR transport against the sample server |
+| No Dotmim retirement, no OpenTelemetry meter | MAUI-only migration; no OTel on Lynx | log through `G9SyncLogger` |
+| A move-out inside a pull (a row leaving a subscription's scope, Delete policy) is disposed row by row: ~7 driver calls per row | its decision must see what the pull queued before it | measured on the emulator at ~34 ms per row, so losing 25,000 rows' scope in one pull costs ~14 min on Lynx (an unsubscribe of the same rows: 6.3 s, LES-0051). Follow-up: group consecutive move-outs the way `disposeReleasedRows` does — after a move-out parity scenario exists |
+| iOS and a minified (R8) Android build are not run on a device yet | no Mac here; the device host is a Debug APK | `js/packages/lynx/Native-Validation-Pending.md` |

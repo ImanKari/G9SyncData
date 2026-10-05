@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@g9tm/syncdata": [
+        "../syncdata/src/index.ts"
+      ],
+      "@g9tm/syncdata/signalr": [
+        "../syncdata/src/signalr/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "generated/**/*.ts"
+  ]
+}

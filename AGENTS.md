@@ -26,10 +26,17 @@ frame byte as public API.
 - **Databases.** Integration tests create and drop their own databases, so they only ever run against a disposable
   PostgreSQL server (`G9SYNC_TEST_PG`, default `localhost:15433`). Never point tests or samples at a shared or production
   database. Never print or store passwords.
+- **Two clients, one change.** `js/` holds the TypeScript/Lynx twin of the client packages (`@g9tm/syncdata`,
+  `@g9tm/syncdata-lynx`). Anything added to or fixed in either client is done in the other in the same change, with tests
+  on both sides and `js/packages/syncdata/PARITY.md` updated; wire, hash, storage and schema changes regenerate the golden
+  vectors (`G9_UPDATE_GOLDEN=1`). Run `npm run verify` in `js/` (and `npm run test:interop -w packages/syncdata`) next to
+  the .NET suites. See [21-TypeScript-And-Lynx.md](AiGuides/21-TypeScript-And-Lynx.md).
 - **Git.** Never commit, push or open a pull request unless the user asks in that turn.
 
 ## Environment
 
 - .NET SDK 10.0.1xx or later (`global.json` rolls forward to the latest feature band).
+- Node.js 22.12+ for `js/` (Node 24 here); JDK 17+ and Gradle for the Lynx module's Android checks; WSL Ubuntu with
+  GNUstep for its iOS core test.
 - NativeAOT publish on Windows needs the Visual Studio C++ build tools.
 - Shell: PowerShell on Windows; commands in the guides are PowerShell unless marked otherwise.

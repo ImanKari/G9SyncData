@@ -1,0 +1,27 @@
+node_modules/
+dist/
+*.tgz
+# ...except the G9SignalRSuperNetCore npm twins the lock file installs from (until they are on npm): `npm ci` needs them
+!vendor/*.tgz
+coverage/
+artifacts/
+# Android/iOS build output of the native module checks
+packages/lynx/android/build/
+packages/lynx/android/.gradle/
+packages/lynx/jvm/build/
+packages/lynx/jvm/.gradle/
+packages/lynx/jvm/.kotlin/
+packages/*/android-check/build/
+packages/*/android-check/.gradle/
+packages/*/android-check/.kotlin/
+packages/*/android-check/*/build/
+packages/lynx/build/
+# Scratch databases of the tests (the root .gitignore ignores *.db too)
+packages/*/test/.tmp/
+# Device test hosts (js/apps/*): their own npm installs and native build output
+apps/*/node_modules/
+apps/*/dist/
+apps/**/build/
+apps/**/.gradle/
+apps/**/.kotlin/
+apps/**/*.apk

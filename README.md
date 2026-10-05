@@ -1,7 +1,9 @@
 # G9SyncData
 
 Offline-first data sync for .NET: **PostgreSQL** on the server, **SQLite** on devices, **SignalR** in between — exact,
-resumable, observable and **NativeAOT-compatible** from the first line.
+resumable, observable and **NativeAOT-compatible** from the first line. Devices can also be **Lynx** (or any TypeScript)
+apps: the client has a TypeScript twin in this repository, [`@g9tm/syncdata`](js/packages/syncdata/README.md), held to
+the .NET client byte for byte.
 
 ```
  PostgreSQL ──capture──▶ G9SyncData.Server ──SignalR (G9SignalRSuperNetCore)──▶ G9SyncData.Client ──▶ SQLite
@@ -9,7 +11,7 @@ resumable, observable and **NativeAOT-compatible** from the first line.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.1.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.2.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -20,6 +22,21 @@ resumable, observable and **NativeAOT-compatible** from the first line.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.2.0
+
+- **A TypeScript and Lynx client.** `@g9tm/syncdata` (engine, SQLite store, SignalR transport, protocol) and
+  `@g9tm/syncdata-lynx` (a Brotli native module for Android/iOS/Lynxtron, the transport over the G9 native WebSocket)
+  live in [`js/`](js/) and release with this version. The local database is the same file for both clients — a device
+  moving from the MAUI app to a Lynx app keeps its rows, its pending changes and its identity (ADR-0070, ADR-0071).
+- **Proven, not reviewed:** golden vectors written by .NET and reproduced by TypeScript (frames, hashes, keys, schema
+  SQL, storage forms, hub messages), requests written by TypeScript and parsed by the server's own hub protocols, the
+  TypeScript client against the real sample server over JSON and MessagePack (50,000 rows, push, pokes, reconcile), and
+  its database compared with the .NET client's after the same sync — identical; and the whole sync on a real Lynx runtime
+  (PrimJS on an Android emulator, the native modules as packed: both protocols in ~40 s,
+  [js/apps/lynx-android-host](js/apps/lynx-android-host/README.md)). [AiGuides/21](AiGuides/21-TypeScript-And-Lynx.md).
+- **Rule from now on:** every change lands on both clients in the same change.
+- The .NET packages are unchanged apart from the version.
 
 ## Packages
 
@@ -36,6 +53,7 @@ the server ones.
 | `G9SyncData.Testing` | test helpers for building suites against the engine |
 | `G9SyncData.Client` / `.Server` / `.Abstractions` / `.Protocol` | pulled in for you; name directly only when writing your own store or transport |
 | `G9SyncData.SourceGenerators` | **normally not referenced** — see below |
+| npm `@g9tm/syncdata` (+ `@g9tm/syncdata-lynx` on Lynx) | the device app is TypeScript: Lynx, Node, a browser — [js/packages/syncdata](js/packages/syncdata/README.md) |
 
 ```bash
 dotnet add package G9SyncData.Client.Sqlite
@@ -235,7 +253,15 @@ dotnet test tests/G9SyncData.IntegrationTests
 $env:G9SYNC_ANDROID = "auto"; dotnet test tests/G9SyncData.IntegrationTests --filter "FullyQualifiedName~Android"
 ```
 
-Details: [AiGuides/03-Build-Test-Release.md](AiGuides/03-Build-Test-Release.md) and [AiGuides/12-Testing.md](AiGuides/12-Testing.md).
+The TypeScript/Lynx twin (Node 22.12+):
+
+```powershell
+cd js; npm ci; npm run verify                  # versions, typecheck, unit + golden tests, Lynx sandbox, build, Lynx runtime gate
+npm run test:interop -w packages/syncdata      # against the real sample server, plus database parity with the .NET client
+```
+
+Details: [AiGuides/03-Build-Test-Release.md](AiGuides/03-Build-Test-Release.md), [AiGuides/12-Testing.md](AiGuides/12-Testing.md)
+and [AiGuides/21-TypeScript-And-Lynx.md](AiGuides/21-TypeScript-And-Lynx.md).
 
 ## Documentation
 

@@ -1,0 +1,86 @@
+{
+  "name": "@g9tm/syncdata-lynx",
+  "version": "1.2.0",
+  "description": "Lynx support for the G9SyncData TypeScript client: a Brotli native module (Android org.brotli decoder, iOS Compression framework, Lynxtron/Node zlib) for the sync frames, and the transport over @g9tm/signalr-supernetcore-lynx.",
+  "license": "MIT",
+  "author": "Iman Kari (G9TM)",
+  "homepage": "https://github.com/ImanKari/G9SyncData/tree/main/js/packages/lynx",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ImanKari/G9SyncData.git",
+    "directory": "js/packages/lynx"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./lynxtron": {
+      "types": "./dist/lynxtron/index.d.ts",
+      "import": "./dist/lynxtron/index.js",
+      "default": "./dist/lynxtron/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "android/build.gradle.kts",
+    "android/consumer-rules.pro",
+    "android/src/main",
+    "ios/g9tm-syncdata-lynx.podspec",
+    "ios/src",
+    "generated",
+    "types",
+    "lynx.lib.json",
+    "README.md",
+    "LICENSE.md",
+    "Native-Validation-Pending.md"
+  ],
+  "keywords": [
+    "sync",
+    "offline",
+    "lynx",
+    "brotli",
+    "g9",
+    "native-module"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node ../syncdata/scripts/clean.mjs",
+    "build": "node ../syncdata/scripts/clean.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run && node scripts/android-bridge-types.mjs",
+    "test:android-jvm": "node scripts/run-gradle.mjs -p jvm test",
+    "check:android-module": "node scripts/run-gradle.mjs -p android-check build",
+    "test:ios-core": "node scripts/test-ios-core.mjs",
+    "fixtures:brotli": "node scripts/make-brotli-fixtures.mjs",
+    "codegen": "lynx-autolink-codegen && node scripts/android-bridge-types.mjs --fix",
+    "prepack": "npm run build",
+    "test:lynxsim": "vitest run --config vitest.lynxsim.config.ts"
+  },
+  "peerDependencies": {
+    "@g9tm/syncdata": "1.2.0",
+    "@g9tm/signalr-supernetcore-lynx": "^2.10.0",
+    "@g9tm/signalr-supernetcore-client": "^2.10.0",
+    "@microsoft/signalr": "^10.0.0"
+  },
+  "devDependencies": {
+    "@g9tm/signalr-supernetcore-client": "file:../../vendor/g9tm-signalr-supernetcore-client-2.10.0.tgz",
+    "@g9tm/signalr-supernetcore-lynx": "file:../../vendor/g9tm-signalr-supernetcore-lynx-2.10.0.tgz",
+    "@g9tm/syncdata": "1.2.0",
+    "@lynx-js/autolink-codegen": "0.6.0",
+    "@microsoft/signalr": "^10.0.11",
+    "@types/node": "^22.15.0",
+    "esbuild": "^0.28.2",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.1"
+  }
+}

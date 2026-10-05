@@ -1,0 +1,3 @@
+# Brotli streams are bytes: `* text=auto` would treat a stream without a NUL byte (empty.br is one byte) as text.
+*.br binary
+manifest.txt text eol=lf

@@ -7,6 +7,9 @@
 | `tests/G9SyncData.Tests` | nothing | G9RowBatch codec round trips; C#↔SQL digest parity (golden values); parameters and subscription keys; JSON contexts; SQLite store capture, push batching, acknowledgement, apply protection; generated model and indexes |
 | `tests/G9SyncData.IntegrationTests` | disposable PostgreSQL 13+ | end-to-end sync between real PostgreSQL and real SQLite, over the in-memory transport and over real SignalR (JSON and MessagePack) |
 | `tests/G9SyncData.DeviceTests.Android` + `IntegrationTests/Android` | an Android device or emulator, opt-in (`G9SYNC_ANDROID`) | the client library and large-site syncs on a real Android runtime, with device measurements (below) |
+| `js/packages/syncdata` (`npm test`, `npm run test:interop`) | nothing; the interop suite needs the disposable PostgreSQL | the TypeScript twin: golden vectors written by `Protocol/JsGoldenVectorsTests.cs`, the engine and store against the real sample server over both hub protocols, the database it writes compared with the .NET client's, and the bulk release path compared with the row-by-row one (`revocation.test.ts`) ([21](21-TypeScript-And-Lynx.md)) |
+| `js/packages/lynx` (`npm test`, `npm run test:lynxsim`, native suites) | the lynxsim suite needs the disposable PostgreSQL | the Lynx package: the Brotli native module's cores, the Android parameter types (`android-bridge-types.mjs`, `LynxBridgeSignatureTest`), and the whole sync in a Lynx-shaped runtime |
+| `js/apps/lynx-android-host` (`node scripts/device-test.mjs --install --protocol both`) | an Android emulator, the disposable PostgreSQL, the sample server built Debug | the whole sync on a real Lynx runtime (PrimJS) with the real native modules; see its README |
 
 ```powershell
 dotnet test tests/G9SyncData.Tests
