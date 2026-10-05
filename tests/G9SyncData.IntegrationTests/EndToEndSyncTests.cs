@@ -323,6 +323,34 @@ public sealed class EndToEndSyncTests(ITestOutputHelper output)
     }
 
     [PostgresFact]
+    public async Task Subscriptions_created_in_the_same_millisecond_are_pulled_in_creation_order()
+    {
+        // Creation order decides whose rows are applied first, and so every local_seq. A tie in CreatedUtc used to fall
+        // back to the store's listing (by key — here by a GUID parameter), so two devices doing the same thing could
+        // number their rows differently (LES-0052). The TypeScript engine sorts the same way (engine.test.ts).
+        await using var harness = await SyncHarness.CreateAsync(output);
+        var createdFirst = new Guid("ffffffff-0000-4000-8000-000000000001"); // sorts LAST by key
+        var createdSecond = new Guid("00000000-0000-4000-8000-000000000002"); // sorts FIRST by key
+        await harness.InsertSiteAsync(createdFirst, "First");
+        await harness.InsertSiteAsync(createdSecond, "Second");
+        await harness.InsertPotsAsync(createdFirst, 3);
+        await harness.InsertPotsAsync(createdSecond, 3);
+        await using var client = await harness.CreateClientAsync();
+        await client.Engine.SubscribeAsync("sites");
+        await client.SyncOkAsync();
+        await client.Engine.SubscribeAsync("site-pots", SitePots(createdFirst));
+        await client.Engine.SubscribeAsync("site-pots", SitePots(createdSecond));
+        await client.ExecAsync("UPDATE g9_subscriptions SET created_utc = 1000 WHERE name = 'site-pots'");
+        await client.SyncOkAsync();
+        Assert.Equal(6, await client.CountAsync("Pot"));
+
+        const string seq = "SELECT {0}(r.local_seq) FROM g9_rows r JOIN Pot p ON p.Id = r.pk WHERE p.SiteId = $p0";
+        var lastOfFirst = Convert.ToInt64(await client.ScalarAsync(string.Format(seq, "max"), createdFirst.ToString()));
+        var firstOfSecond = Convert.ToInt64(await client.ScalarAsync(string.Format(seq, "min"), createdSecond.ToString()));
+        Assert.True(lastOfFirst < firstOfSecond, $"the subscription created first was applied after the other ({lastOfFirst} >= {firstOfSecond})");
+    }
+
+    [PostgresFact]
     public async Task A_change_uploaded_by_one_device_reaches_another_device()
     {
         await using var harness = await SyncHarness.CreateAsync(output);

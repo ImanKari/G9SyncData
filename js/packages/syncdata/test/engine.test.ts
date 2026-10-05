@@ -10,7 +10,8 @@ import { G9SyncEngine } from '../src/client/engine.js';
 import { G9ESyncOutcome, G9ESyncPriority, type G9SyncEngineOptions } from '../src/client/runs.js';
 import type { G9SyncTransport } from '../src/client/transport.js';
 import { nodeSqliteDriver } from '../src/node/index.js';
-import type { G9DtHelloResult, G9DtPullPlan, G9DtPushResult, G9DtSyncChunk } from '../src/protocol/dtos.js';
+import { G9SyncParameters } from '../src/abstractions/parameters.js';
+import type { G9DtHelloResult, G9DtPullPlan, G9DtPullRequest, G9DtPushResult, G9DtSyncChunk } from '../src/protocol/dtos.js';
 import { G9SqliteSyncStore } from '../src/sqlite/store.js';
 
 const model = new G9SyncClientModelBuilder().table('farm.Note', 'Note', (t) => t.key('Id').column('Text', G9ESyncColumnType.String)).build();
@@ -53,7 +54,20 @@ class FakeTransport implements G9SyncTransport {
         },
       ],
       unknownTables: [],
-      definitions: [],
+      definitions: [
+        {
+          name: 'notes',
+          parameters: [{ name: 'Group', type: G9ESyncColumnType.String, required: true, isList: false }],
+          dependsOn: [],
+          tables: ['farm.Note'],
+          ephemeral: false,
+          ttlSeconds: 0,
+          heavy: false,
+          moveOutPolicy: 0,
+          reconcileIntervalMinutes: 0,
+          definitionHash: 'd1',
+        },
+      ],
       subscriptions: [],
       maxPushRows: 0,
       maxPushBytes: 0,
@@ -67,8 +81,11 @@ class FakeTransport implements G9SyncTransport {
     return this.pushScript();
   }
 
-  async planPull(): Promise<G9DtPullPlan> {
+  planned: string[][] = [];
+
+  async planPull(request: G9DtPullRequest): Promise<G9DtPullPlan> {
     this.calls.push('planPull');
+    this.planned.push(request.subscriptions.map((s) => s.parameters['Group'] ?? s.name));
     return { token: 't', parts: [], totalRows: 0, estimatedBytes: 0, cursors: [], skipped: [], error: null };
   }
 
@@ -153,6 +170,20 @@ describe('G9SyncEngine (scripted transport)', () => {
     expect(result.outcome).toBe(G9ESyncOutcome.Failed);
     expect(result.error?.code).toBe(G9SyncErrorCodes.RejectValidation);
     expect((await engine.getPendingSummary()).totalRows).toBe(1);
+  });
+
+  it('plans subscriptions created in the same millisecond in creation (slot) order, not in key order', async () => {
+    // The .NET engine orders them the same way (OrderBy CreatedUtc, ThenBy Slot, ThenBy Key ordinal). Before, a tie fell
+    // back to the store's listing (by key), so a random GUID parameter decided which subscription's rows were applied
+    // first, and with it every local_seq (LES-0052: the interop parity test failed on a slower CI agent).
+    const { engine, transport, exec } = await setup();
+    const later = await engine.subscribe('notes', new G9SyncParameters().setString('Group', 'z-created-first'));
+    const earlier = await engine.subscribe('notes', new G9SyncParameters().setString('Group', 'a-created-second'));
+    expect(later.key > earlier.key).toBe(true);
+    expect(later.slot).toBeLessThan(earlier.slot);
+    await exec('UPDATE g9_subscriptions SET created_utc = 1000');
+    await engine.sync({ push: false, subscriptions: [later.key, earlier.key] });
+    expect(transport.planned.at(-1)).toEqual(['z-created-first', 'a-created-second']);
   });
 
   it('acknowledged rows stop being pending; the progress stream ends at 1 and is monotonic', async () => {

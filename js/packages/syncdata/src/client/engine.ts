@@ -892,8 +892,12 @@ export class G9SyncEngine {
       ordered.push(record);
     };
 
-    // OrderBy is a stable sort.
-    const sorted = roots.map((r, i) => ({ r, i })).sort((a, b) => a.r.createdUtcMs - b.r.createdUtcMs || a.i - b.i);
+    // Creation order. Two subscriptions created in the same millisecond keep it through their slots (handed out lowest
+    // free first), then the key, ordinal (JS `<` compares UTF-16 units, like StringComparer.Ordinal) — never the order
+    // the store happened to list them in (by key: a random GUID decided which site's rows came first, LES-0052).
+    const sorted = roots
+      .map((r, i) => ({ r, i }))
+      .sort((a, b) => a.r.createdUtcMs - b.r.createdUtcMs || a.r.slot - b.r.slot || (a.r.key < b.r.key ? -1 : a.r.key > b.r.key ? 1 : 0) || a.i - b.i);
     for (const { r } of sorted) await visit(r);
     return ordered;
   }

@@ -491,7 +491,13 @@ public sealed partial class G9CSyncEngine
             ordered.Add(record);
         }
 
-        foreach (var root in roots.OrderBy(r => r.CreatedUtc)) await VisitAsync(root).ConfigureAwait(false);
+        // Creation order. Two subscriptions created in the same millisecond keep it through their slots (handed out lowest
+        // free first), then the key — never the order the store happened to list them in (by key: a random GUID decided
+        // which site's rows came first, LES-0052). The TypeScript engine sorts the same way.
+        foreach (var root in roots.OrderBy(r => r.CreatedUtc).ThenBy(r => r.Slot).ThenBy(r => r.Key, StringComparer.Ordinal))
+        {
+            await VisitAsync(root).ConfigureAwait(false);
+        }
         return ordered;
     }
 

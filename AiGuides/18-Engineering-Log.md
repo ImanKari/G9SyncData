@@ -502,3 +502,16 @@ with each row's explicit `local_seq` (the value the row-by-row path takes from t
 (the whole run: 1,386 SQLite driver calls instead of 151,332, 39.5 s instead of 883 s), and the database is identical (`revocation.test.ts` compares both paths for every revocation outcome; the interop test
 compares with the .NET client). Lesson: on a bridged driver, count driver calls per row the way one counts queries per
 request; a Node-only suite cannot see this cost. Still per row: move-outs inside a pull (17-Known-Limitations).
+
+## LES-0052 — 2026-10-06 · Two subscriptions created in the same millisecond were pulled in GUID order
+
+The database-parity interop test (TypeScript store vs .NET store after the same sync) passed on every Windows run and
+failed on the first Linux CI run: one pot had `local_seq` 3 in one database and 25003 in the other — the two sites'
+25,000 rows were applied in opposite orders. Both engines pull subscriptions in creation order (`CreatedUtc`, in
+milliseconds) and a tie fell back to the order the store lists them in: by key, and the key carries the site's GUID.
+Whether two `subscribe` calls land in the same millisecond depends on the machine, so whether the sites came in creation
+or in GUID order did too — on each device separately. Both engines now break the tie by slot (handed out lowest free
+first, so creation order), then by key ordinal; `engine.test.ts` and
+`EndToEndSyncTests.Subscriptions_created_in_the_same_millisecond_are_pulled_in_creation_order` fail on the old rule.
+Lesson: a sort key with millisecond resolution is a tie waiting to happen — every ordering that feeds stored state needs
+a total order, and a parity test should run where timing differs from the developer's machine.
