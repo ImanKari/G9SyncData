@@ -491,6 +491,10 @@ jobs:
           targetType: 'inline'
           workingDirectory: js
           script: |
+            # npm writes to stderr on success too (notices; E404 from `npm view` for a first publish). Under the task's
+            # ErrorActionPreference=Stop, Windows PowerShell turns that into a terminating error even with 2>$null
+            # (build 526): exit codes decide here, and a failed publish throws below.
+            $ErrorActionPreference = 'Continue'
             # Not '$' + '(NpmToken)' written as one macro: Azure expands it inside this script as well, and the check
             # then compared the token with itself (build 514 published NuGet but skipped npm as 'not set').
             if ([string]::IsNullOrWhiteSpace($env:NPM_TOKEN) -or $env:NPM_TOKEN -eq ('$' + '(NpmToken)')) {
