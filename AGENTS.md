@@ -31,6 +31,12 @@ frame byte as public API.
   on both sides and `js/packages/syncdata/PARITY.md` updated; wire, hash, storage and schema changes regenerate the golden
   vectors (`G9_UPDATE_GOLDEN=1`). Run `npm run verify` in `js/` (and `npm run test:interop -w packages/syncdata`) next to
   the .NET suites. See [21-TypeScript-And-Lynx.md](AiGuides/21-TypeScript-And-Lynx.md).
+- **One version, one scope.** Every npm package of `js/` is published under the npm organization `g9tm` (`@g9tm/…`) and
+  carries exactly `G9SyncDataVersion` — the .NET packages' version, never one of its own (`js/scripts/check-versions.mjs`).
+- **CI is Azure Pipelines only** (definition 28). It tests, packs and publishes NuGet + npm, then mirrors the repository
+  to GitHub. GitHub is a read-only copy: no workflows there (`.github/workflows` must not exist).
+- **Consumers move with a release.** After a new version is on nuget.org/npm, upgrade every consumer (AgriPad app,
+  Server.Mobile, …) and bump the consumer's own version.
 - **Git.** Never commit, push or open a pull request unless the user asks in that turn.
 
 ## Environment

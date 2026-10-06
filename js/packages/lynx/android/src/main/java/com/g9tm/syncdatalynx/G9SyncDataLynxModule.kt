@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @LynxNativeModule(name = "G9SyncDataLynxModule")
 class G9SyncDataLynxModule(context: LynxContext) : G9SyncDataLynxModuleSpec(context) {
   companion object {
-    const val VERSION = "1.2.1"
+    const val VERSION = "1.2.2"
 
     private val decoders: ExecutorService by lazy {
       val count = AtomicInteger()

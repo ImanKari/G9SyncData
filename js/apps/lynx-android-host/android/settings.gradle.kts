@@ -1,6 +1,6 @@
 // Device test host of @g9tm/syncdata + @g9tm/syncdata-lynx (run: ../scripts/device-test.mjs). Lynx Autolink links the three native
 // libraries from this app's node_modules: @g9tm/syncdata-lynx (G9SyncDataLynxModule, Brotli),
-// @g9tm/signalr-supernetcore-lynx (G9SignalRLynxModule, WebSocket) and @g9lynx/native (G9SqliteModule, G9HostModule).
+// @g9tm/signalr-supernetcore-lynx (G9SignalRLynxModule, WebSocket) and @g9tm/lynxcontrols-native (G9SqliteModule, G9HostModule).
 pluginManagement {
   repositories {
     google()

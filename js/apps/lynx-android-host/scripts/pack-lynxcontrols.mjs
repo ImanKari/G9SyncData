@@ -1,5 +1,6 @@
-// Packs the G9LynxControls packages the host needs (@g9lynx/foundation, @g9lynx/sqlite, @g9lynx/native — version 0.0.0,
-// not on npm) from the sibling checkout into vendor/, where package.json installs them from. Reads that repository
+// Packs the G9LynxControls packages the host needs (@g9tm/lynxcontrols-foundation, -sqlite, -native, version = the
+// pinned G9MAUIControls version) from the sibling checkout into vendor/, where package.json installs them from — so the
+// device test runs the working tree, published or not. Reads that repository
 // only (npm pack --ignore-scripts writes the tarball here). Run before `npm install` when G9LynxControls changed.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';

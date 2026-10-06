@@ -4,7 +4,7 @@
 # for iOS 12+: below 15, capabilities() reports brotli: false and brotliDecompress fails with G9SYNC-BROTLI-UNAVAILABLE.
 Pod::Spec.new do |s|
   s.name = 'g9tm-syncdata-lynx'
-  s.version = '1.2.1'
+  s.version = '1.2.2'
   s.summary = 'G9SyncDataLynxModule: Brotli decompression (Compression framework) for the G9SyncData Lynx client.'
   s.homepage = 'https://github.com/ImanKari/G9SyncData'
   s.license = { :type => 'MIT' }
@@ -12,6 +12,9 @@ Pod::Spec.new do |s|
   s.platform = :ios, '15.0'
   s.source = { :path => '.' }
   s.source_files = 'src/**/*.{h,m}'
+  # Keep src/'s folders in the public headers: G9SyncDataLynxModule.h imports "generated/G9SyncDataLynxModuleSpec.h", which a flattened
+  # Pods/Headers/Public cannot resolve from the host app (found building an iOS host on macOS, 2026-10-06).
+  s.header_mappings_dir = 'src'
   s.frameworks = 'Foundation'
   s.libraries = 'compression'
   s.requires_arc = true

@@ -7,7 +7,7 @@ A small Lynx Android app (`com.g9tm.syncdatahost`, not AgriPad) that runs `@g9tm
 |---|---|---|
 | `G9SyncDataLynxModule` | `@g9tm/syncdata-lynx` (this repository, as packed) | Brotli decompression of the sync frames |
 | `G9SignalRLynxModule` | `@g9tm/signalr-supernetcore-lynx` (G9SignalRSuperNetCore, as packed) | the binary WebSocket (a release Lynx build has none) |
-| `G9SqliteModule`, `G9HostModule` | `@g9lynx/native` (G9LynxControls) | the SQLite driver and the app data directory |
+| `G9SqliteModule`, `G9HostModule` | `@g9tm/lynxcontrols-native` (G9LynxControls) | the SQLite driver and the app data directory |
 
 The scenario (`../../packages/syncdata/test/interop/scenario.ts`) is the one the Node interop and Lynx-sandbox suites
 run: 2 sites × 25,000 pots downloaded and applied, edits pushed, a second client receiving them, a server insert arriving
@@ -27,7 +27,7 @@ and a sibling `G9LynxControls` checkout that has been built.
 # once, and whenever a dependency changed
 dotnet build ../../../samples/G9SyncData.Samples.Server -c Debug
 (cd ../.. && npm run pack:all)               # js/artifacts/npm/*.tgz — the packages under test
-npm run pack:g9lynx                          # G9LynxControls → vendor/*.tgz (gitignored)
+npm run pack:lynxcontrols                    # G9LynxControls (sibling checkout) → vendor/*.tgz (gitignored)
 npm install
 
 npm run build                                # rspeedy → dist/main.lynx.bundle

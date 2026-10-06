@@ -1,6 +1,6 @@
 {
   "name": "@g9tm/syncdata-lynx",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Lynx support for the G9SyncData TypeScript client: a Brotli native module (Android org.brotli decoder, iOS Compression framework, Lynxtron/Node zlib) for the sync frames, and the transport over @g9tm/signalr-supernetcore-lynx.",
   "license": "MIT",
   "author": "Iman Kari (G9TM)",
@@ -67,15 +67,15 @@
     "test:lynxsim": "vitest run --config vitest.lynxsim.config.ts"
   },
   "peerDependencies": {
-    "@g9tm/syncdata": "1.2.1",
-    "@g9tm/signalr-supernetcore-lynx": "^2.10.0",
-    "@g9tm/signalr-supernetcore-client": "^2.10.0",
+    "@g9tm/syncdata": "1.2.2",
+    "@g9tm/signalr-supernetcore-lynx": "^2.10.1",
+    "@g9tm/signalr-supernetcore-client": "^2.10.1",
     "@microsoft/signalr": "^10.0.0"
   },
   "devDependencies": {
-    "@g9tm/signalr-supernetcore-client": "file:../../vendor/g9tm-signalr-supernetcore-client-2.10.0.tgz",
-    "@g9tm/signalr-supernetcore-lynx": "file:../../vendor/g9tm-signalr-supernetcore-lynx-2.10.0.tgz",
-    "@g9tm/syncdata": "1.2.1",
+    "@g9tm/signalr-supernetcore-client": "2.10.1",
+    "@g9tm/signalr-supernetcore-lynx": "2.10.1",
+    "@g9tm/syncdata": "1.2.2",
     "@lynx-js/autolink-codegen": "0.6.0",
     "@microsoft/signalr": "^10.0.11",
     "@types/node": "^22.15.0",

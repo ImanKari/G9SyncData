@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# Builds and runs the iOS Brotli core (ios/src/core/G9SyncDataBrotliCore.m) with its Linux suite: clang + GNUstep base,
-# and libbrotlidec (runtime library only) as the stand-in for Apple's Compression framework.
+# Builds and runs the iOS Brotli core (ios/src/core/G9SyncDataBrotliCore.m) with its suite (ios/Tests/linux/main.m).
+# Linux: clang + GNUstep base, and libbrotlidec (runtime library only) as the stand-in for Apple's Compression framework.
 # Needs: apt-get install -y clang make libgnustep-base-dev gobjc libbrotli1. On Windows `npm run test:ios-core` runs this
 # in WSL.
+# macOS: Apple clang against the real Foundation, and the module's own Apple decoder (ios/src/core/G9SyncDataAppleBrotli.h)
+# decodes the vectors - N-SD-02. Nothing to install beyond the Xcode command line tools.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+out=build/ios-core
+mkdir -p "$out"
+if [ "$(uname -s)" = Darwin ]; then
+  clang -fobjc-arc -framework Foundation -lcompression -DG9_HAVE_APPLE_COMPRESSION -Werror=objc-method-access \
+    -Wno-unused-parameter -o "$out/ios-core-tests" ios/src/core/G9SyncDataBrotliCore.m ios/Tests/linux/main.m
+  exec "$out/ios-core-tests"
+fi
 flags=$(gnustep-config --objc-flags | tr ' ' '\n' | grep -v '^-M' | tr '\n' ' ')
 libs=$(gnustep-config --base-libs)
 if [ -z "$flags" ] || [ -z "$libs" ]; then
@@ -19,8 +28,6 @@ if [ -n "$brotli" ]; then
 else
   echo "warning: libbrotlidec.so.1 not found; the test vectors are skipped (apt-get install -y libbrotli1)" >&2
 fi
-out=build/ios-core
-mkdir -p "$out"
 # shellcheck disable=SC2086
 clang $flags -fobjc-runtime=gcc ${gcc_include:+-I$gcc_include} -Wno-unused-command-line-argument -Werror=objc-method-access \
   -Wno-unused-parameter -o "$out/ios-core-tests" ios/src/core/G9SyncDataBrotliCore.m ios/Tests/linux/main.m \

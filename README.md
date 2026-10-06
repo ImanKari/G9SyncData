@@ -11,7 +11,7 @@ the .NET client byte for byte.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.2.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.2.2.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -22,6 +22,21 @@ the .NET client byte for byte.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.2.2
+
+- **On G9SignalRSuperNetCore 2.10.1** — the .NET transports (NuGet) and the TypeScript transport (npm) both depend on
+  2.10.1 now (2.10.0 plus the iOS Lynx pod's header fix); the TypeScript workspace installs
+  `@g9tm/signalr-supernetcore-client` / `-lynx` from npm instead of vendored tarballs.
+- **One version, everywhere:** every npm package of this repository carries exactly the .NET packages' version
+  (`G9SyncDataVersion`); `js/scripts/check-versions.mjs` fails the build otherwise (AGENTS.md, AiGuides/21).
+- **CI is Azure Pipelines only.** GitHub is a read-only mirror the pipeline pushes after the tests and the publish.
+- **The iOS Brotli decode is proven on Apple's own decoder** (N-SD-02, N-SD-04): the core suite runs on macOS with the
+  module's real `compression_decode_buffer` decoder over the test vectors and broken streams, and a macOS CI job gates the
+  publish. A stream missing its last byte is rejected on iOS like everywhere else.
+- **The iOS pod builds in a host app**: `g9tm-syncdata-lynx` keeps its header folders (`header_mappings_dir`), so a host
+  importing `G9SyncDataLynxModule.h` finds `generated/G9SyncDataLynxModuleSpec.h`. Proven by building the module into a
+  real iOS host against Lynx 4.0.3 on macOS (it registers on the host's `LynxConfig`).
 
 ## What's new in 1.2.1
 

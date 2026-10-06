@@ -1,13 +1,17 @@
 // The iOS Brotli core (ios/src/core/G9SyncDataBrotliCore.m) on Linux with clang + GNUstep base: the same checks as
 // the Kotlin G9BrotliCoreTest over the same test vectors (test/fixtures/brotli), so both platforms answer the module
-// contract alike. Apple's Compression framework does not exist here: the decoder handed to the core is libbrotlidec
-// (Google's C decoder, the one Node and .NET embed) behind compression_decode_buffer's contract. The real Apple decode
-// is pending on macOS (Native-Validation-Pending.md, N-SD-02).
-// Run: npm run test:ios-core (Windows: inside WSL Ubuntu 24.04 with clang, libgnustep-base-dev, gobjc, libbrotli1).
+// contract alike. On Linux the Compression framework does not exist: the decoder handed to the core is libbrotlidec
+// (Google's C decoder, the one Node and .NET embed) behind compression_decode_buffer's contract. On macOS it is the
+// module's own Apple decoder (ios/src/core/G9SyncDataAppleBrotli.h, G9_HAVE_APPLE_COMPRESSION) - N-SD-02.
+// Run: npm run test:ios-core (Windows: inside WSL Ubuntu 24.04 with clang, libgnustep-base-dev, gobjc, libbrotli1;
+// macOS: Apple clang, nothing to install).
 #import <Foundation/Foundation.h>
 #include <math.h>
 #include <stdint.h>
 #import "../../src/core/G9SyncDataBrotliCore.h"
+#ifdef G9_HAVE_APPLE_COMPRESSION
+#import "../../src/core/G9SyncDataAppleBrotli.h"
+#endif
 
 static int failures = 0;
 static int checks = 0;
@@ -40,6 +44,15 @@ static NSInteger linuxBrotli(uint8_t *destination, size_t capacity, const uint8_
   if (result == BROTLI_DECODER_RESULT_SUCCESS) return (NSInteger)written;
   return written == capacity ? (NSInteger)capacity : -1;
 }
+#endif
+
+// The decoder the test vectors run through: Apple's on macOS, libbrotlidec on Linux, none without either.
+#if defined(G9_HAVE_APPLE_COMPRESSION)
+#define G9_VECTOR_DECODER G9SyncDataAppleBrotli
+#define G9_VECTOR_DECODER_NAME "Apple's Compression framework (the module's decoder)"
+#elif defined(G9_HAVE_LIBBROTLIDEC)
+#define G9_VECTOR_DECODER linuxBrotli
+#define G9_VECTOR_DECODER_NAME "libbrotlidec"
 #endif
 
 /** Stand-in decoders for the core's own rules (independent of any Brotli library). */
@@ -116,8 +129,8 @@ int main(void) {
                             [unavailable isEqual:@"G9SYNC-BROTLI-UNAVAILABLE"]);
 
     // capabilities
-    NSDictionary *caps = [[G9SyncDataBrotliCore capabilitiesWithVersion:@"1.2.1" platform:@"ios" brotli:NO] objectForKey:@"value"];
-    CHECK("capabilities version", [[caps objectForKey:@"version"] isEqual:@"1.2.1"]);
+    NSDictionary *caps = [[G9SyncDataBrotliCore capabilitiesWithVersion:@"1.2.2" platform:@"ios" brotli:NO] objectForKey:@"value"];
+    CHECK("capabilities version", [[caps objectForKey:@"version"] isEqual:@"1.2.2"]);
     CHECK("capabilities platform", [[caps objectForKey:@"platform"] isEqual:@"ios"]);
     CHECK("capabilities brotli", [[caps objectForKey:@"brotli"] isKindOfClass:[NSNumber class]] && ![[caps objectForKey:@"brotli"] boolValue]);
 
@@ -148,7 +161,7 @@ int main(void) {
     CHECK("decoder error", [code([G9SyncDataBrotliCore decompress:some expectedLength:5 decoder:failingDecoder]) isEqual:invalid]);
     CHECK("empty input", [code([G9SyncDataBrotliCore decompress:[NSData data] expectedLength:0 decoder:failingDecoder]) isEqual:invalid]);
 
-#ifdef G9_HAVE_LIBBROTLIDEC
+#ifdef G9_VECTOR_DECODER
     // every vector decodes to exactly its original (length + CRC-32 from manifest.txt)
     NSString *manifest = [NSString stringWithContentsOfFile:[fixturesDir() stringByAppendingPathComponent:@"manifest.txt"]
                                                    encoding:NSUTF8StringEncoding
@@ -163,37 +176,48 @@ int main(void) {
       }
       NSString *name = [parts objectAtIndex:0];
       NSInteger length = [[parts objectAtIndex:1] integerValue];
-      NSData *out = value([G9SyncDataBrotliCore decompress:fixture(name) expectedLength:(double)length decoder:linuxBrotli]);
+      NSData *out = value([G9SyncDataBrotliCore decompress:fixture(name) expectedLength:(double)length decoder:G9_VECTOR_DECODER]);
       CHECK([name UTF8String], (NSInteger)[out length] == length);
       CHECK([name UTF8String], [[NSString stringWithFormat:@"%08x", crc32Of(out)] isEqual:[parts objectAtIndex:3]]);
       vectors++;
     }
     CHECK("four vectors", vectors == 4);
     const uint8_t fortyTwo[] = {0x2a};
-    CHECK("one byte", [value([G9SyncDataBrotliCore decompress:fixture(@"one-byte.br") expectedLength:1 decoder:linuxBrotli]) isEqual:[NSData dataWithBytes:fortyTwo length:1]]);
-    CHECK("empty stream", [value([G9SyncDataBrotliCore decompress:fixture(@"empty.br") expectedLength:0 decoder:linuxBrotli]) length] == 0);
+    CHECK("one byte", [value([G9SyncDataBrotliCore decompress:fixture(@"one-byte.br") expectedLength:1 decoder:G9_VECTOR_DECODER]) isEqual:[NSData dataWithBytes:fortyTwo length:1]]);
+    CHECK("empty stream", [value([G9SyncDataBrotliCore decompress:fixture(@"empty.br") expectedLength:0 decoder:G9_VECTOR_DECODER]) length] == 0);
 
     // an output length other than expected
     NSData *mixed = fixture(@"mixed-300k.br");
-    CHECK("mixed: expected - 1", [code([G9SyncDataBrotliCore decompress:mixed expectedLength:307199 decoder:linuxBrotli]) isEqual:invalid]);
-    CHECK("mixed: expected + 1", [code([G9SyncDataBrotliCore decompress:mixed expectedLength:307201 decoder:linuxBrotli]) isEqual:invalid]);
-    CHECK("one byte as 0", [code([G9SyncDataBrotliCore decompress:fixture(@"one-byte.br") expectedLength:0 decoder:linuxBrotli]) isEqual:invalid]);
-    CHECK("empty as 1", [code([G9SyncDataBrotliCore decompress:fixture(@"empty.br") expectedLength:1 decoder:linuxBrotli]) isEqual:invalid]);
+    CHECK("mixed: expected - 1", [code([G9SyncDataBrotliCore decompress:mixed expectedLength:307199 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    CHECK("mixed: expected + 1", [code([G9SyncDataBrotliCore decompress:mixed expectedLength:307201 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    CHECK("one byte as 0", [code([G9SyncDataBrotliCore decompress:fixture(@"one-byte.br") expectedLength:0 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    CHECK("empty as 1", [code([G9SyncDataBrotliCore decompress:fixture(@"empty.br") expectedLength:1 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
 
     // corrupt and truncated streams (the same derivations as the Kotlin and vitest suites)
     NSMutableData *flipped = [NSMutableData dataWithData:mixed];
     ((uint8_t *)[flipped mutableBytes])[2] ^= 0xff;
-    CHECK("flipped head byte", [code([G9SyncDataBrotliCore decompress:flipped expectedLength:307200 decoder:linuxBrotli]) isEqual:invalid]);
-    CHECK("not brotli", [code([G9SyncDataBrotliCore decompress:bytesOf("G9SyncData: this is not a Brotli stream.") expectedLength:40 decoder:linuxBrotli]) isEqual:invalid]);
+    CHECK("flipped head byte", [code([G9SyncDataBrotliCore decompress:flipped expectedLength:307200 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    CHECK("not brotli", [code([G9SyncDataBrotliCore decompress:bytesOf("G9SyncData: this is not a Brotli stream.") expectedLength:40 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
     NSMutableData *ff = [NSMutableData dataWithLength:16];
     memset([ff mutableBytes], 0xff, 16);
-    CHECK("16 x 0xff", [code([G9SyncDataBrotliCore decompress:ff expectedLength:0 decoder:linuxBrotli]) isEqual:invalid]);
-    CHECK("no bytes", [code([G9SyncDataBrotliCore decompress:[NSData data] expectedLength:0 decoder:linuxBrotli]) isEqual:invalid]);
-    CHECK("truncated half", [code([G9SyncDataBrotliCore decompress:[mixed subdataWithRange:NSMakeRange(0, [mixed length] / 2)] expectedLength:307200 decoder:linuxBrotli]) isEqual:invalid]);
-    CHECK("truncated last byte", [code([G9SyncDataBrotliCore decompress:[mixed subdataWithRange:NSMakeRange(0, [mixed length] - 1)] expectedLength:307200 decoder:linuxBrotli]) isEqual:invalid]);
-    printf("ios brotli core: test vectors decoded with libbrotlidec\n");
+    CHECK("16 x 0xff", [code([G9SyncDataBrotliCore decompress:ff expectedLength:0 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    CHECK("no bytes", [code([G9SyncDataBrotliCore decompress:[NSData data] expectedLength:0 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    CHECK("truncated half", [code([G9SyncDataBrotliCore decompress:[mixed subdataWithRange:NSMakeRange(0, [mixed length] / 2)] expectedLength:307200 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    NSData *cut = [mixed subdataWithRange:NSMakeRange(0, [mixed length] - 1)];
+    NSMutableData *trailing = [NSMutableData dataWithData:mixed];
+    [trailing appendData:bytesOf("tail")];
+    // Bytes after a complete stream: the one-shot decoders on both sides of this suite (libbrotlidec's
+    // BrotliDecoderDecompress, Apple's compression_decode_buffer) stop at the stream's end and ignore the rest, so the
+    // core returns the exact bytes (N-SD-04); Android (org.brotli) and Lynxtron (node:zlib) reject it. Recorded, not
+    // asserted: the bytes are right either way, and the frame's own length check stands behind it.
+    NSData *whole = value([G9SyncDataBrotliCore decompress:mixed expectedLength:307200 decoder:G9_VECTOR_DECODER]);
+    NSDictionary *trailingReply = [G9SyncDataBrotliCore decompress:trailing expectedLength:307200 decoder:G9_VECTOR_DECODER];
+    printf("N-SD-04 bytes after the end: %s\n", ok(trailingReply) ? ([value(trailingReply) isEqual:whole] ? "accepted, exact bytes" : "accepted, WRONG bytes") : [code(trailingReply) UTF8String]);
+    // A stream cut inside its final empty block: rejected by both (Apple's on macOS 26.6 arm64, 2026-10-06 - N-SD-04).
+    CHECK("truncated last byte", [code([G9SyncDataBrotliCore decompress:cut expectedLength:307200 decoder:G9_VECTOR_DECODER]) isEqual:invalid]);
+    printf("ios brotli core: test vectors decoded with %s\n", G9_VECTOR_DECODER_NAME);
 #else
-    printf("ios brotli core: libbrotlidec.so.1 not found, test vectors SKIPPED (apt-get install -y libbrotli1)\n");
+    printf("ios brotli core: no Brotli decoder (Linux: libbrotlidec.so.1 not found - apt-get install -y libbrotli1), test vectors SKIPPED\n");
 #endif
 
     printf("ios brotli core: %d checks, %d failures\n", checks, failures);

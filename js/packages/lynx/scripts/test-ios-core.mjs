@@ -1,5 +1,6 @@
-// `npm run test:ios-core`: builds and runs the iOS Brotli core with its Linux suite (scripts/test-ios-core.sh) —
-// directly on Linux, inside WSL (G9_WSL_DISTRO, default Ubuntu-24.04) on Windows. macOS runs the full module in Xcode.
+// `npm run test:ios-core`: builds and runs the iOS Brotli core with its suite (scripts/test-ios-core.sh) —
+// directly on Linux and macOS (Apple clang + the real Compression framework), inside WSL (G9_WSL_DISTRO, default
+// Ubuntu-24.04) on Windows.
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

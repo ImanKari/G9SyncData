@@ -1,8 +1,6 @@
 node_modules/
 dist/
 *.tgz
-# ...except the G9SignalRSuperNetCore npm twins the lock file installs from (until they are on npm): `npm ci` needs them
-!vendor/*.tgz
 coverage/
 artifacts/
 # Android/iOS build output of the native module checks

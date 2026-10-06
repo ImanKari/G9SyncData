@@ -94,8 +94,21 @@ variables:
 #    real device or emulator, which a hosted agent does not have. Do not chase those to zero.
 
 jobs:
+  # The iOS Brotli core of @g9tm/syncdata-lynx against the REAL Compression framework: Apple clang, Foundation, and the
+  # module's own decoder (ios/src/core/G9SyncDataAppleBrotli.h) over the test vectors and the broken streams (N-SD-02,
+  # N-SD-04). The Linux job can only stand libbrotlidec in for Apple's decoder. Two minutes; nothing is published without it.
+  - job: ios_core
+    displayName: iOS Brotli core (macOS, Apple Compression)
+    pool:
+      vmImage: macos-latest
+    timeoutInMinutes: 15
+    steps:
+      - script: bash js/packages/lynx/scripts/test-ios-core.sh
+        displayName: 'iOS Brotli core - Apple clang + Compression framework'
+
   - job: build_test_publish
     displayName: Build, test, pack and publish
+    dependsOn: ios_core
     timeoutInMinutes: 90
     steps:
 

@@ -10,7 +10,7 @@ Lynx support for [`@g9tm/syncdata`](../syncdata/README.md), the TypeScript twin 
   trip.
 - **`useLynxBrotli()`** — makes the native decoder the default for every frame the store and the engine read.
 
-Version 1.2.1, released with `@g9tm/syncdata` and the .NET packages.
+Version 1.2.2, released with `@g9tm/syncdata` and the .NET packages.
 
 ## Install
 
@@ -57,7 +57,7 @@ npm test                    # the JS wrapper over fake native modules
 npm run test:lynxsim        # the whole sync against the real .NET sample server, in a Lynx-shaped sandbox (needs the disposable PostgreSQL)
 npm run test:android-jvm    # the Kotlin core on a JVM
 npm run check:android-module # compiles the module against Lynx 4.1.0, checks the Autolink provider
-npm run test:ios-core       # the iOS core under GNUstep (WSL)
+npm run test:ios-core       # the iOS core: Apple clang + Compression on macOS, GNUstep + libbrotlidec on Linux/WSL
 ```
 
 ## License

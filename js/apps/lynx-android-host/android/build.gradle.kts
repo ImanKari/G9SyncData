@@ -25,8 +25,8 @@ autolinked.removeIf { library ->
   !androidDir.path.startsWith(ownNodeModules.path + File.separator)
 }
 
-// No library needs patching any more: @g9tm/syncdata-lynx 1.2.0, @g9tm/signalr-supernetcore-lynx 2.10.0 and
-// G9LynxControls' @g9lynx/native declare the parameter types Lynx's Android bridge accepts (Callback, ReadableMap,
+// No library needs patching any more: @g9tm/syncdata-lynx 1.2.0, @g9tm/signalr-supernetcore-lynx 2.10.1 and
+// G9LynxControls' @g9tm/lynxcontrols-native declare the parameter types Lynx's Android bridge accepts (Callback, ReadableMap,
 // ReadableArray, byte[] — codegen 0.6.0 wrote Object, and one Object parameter left a module without methods in JS,
 // G9SyncData LES-0050), and they supply androidx.annotation for kapt themselves. Each repository guards both with
 // scripts/android-bridge-types.mjs and LynxBridgeSignatureTest, so this host builds every library as packed.

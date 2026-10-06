@@ -19,10 +19,16 @@ build when an npm package, a `VERSION` constant or a native module disagrees.
 | `@g9tm/syncdata-lynx` (`js/packages/lynx`) | the Brotli native module `G9SyncDataLynxModule` (Android `org.brotli:dec`, iOS Compression, Lynxtron zlib), `createLynxSyncTransport`, `useLynxBrotli` |
 
 The transport is built on `@g9tm/signalr-supernetcore-client` (and on Lynx `@g9tm/signalr-supernetcore-lynx`, whose
-native WebSocket is the only one a Lynx release build has) — the npm twins of G9SignalRSuperNetCore 2.10. Until those
-are on npm, `js/vendor/*.tgz` holds their packed tarballs; replace them with registry versions after the first publish.
-A re-packed tarball changes its hash: delete its entry from `js/package-lock.json` and run `npm install`, or `npm ci`
-fails with EINTEGRITY (the device host's lock pins the tarballs the same way).
+native WebSocket is the only one a Lynx release build has) — the npm twins of G9SignalRSuperNetCore, installed from
+npm (since 1.2.2; 1.2.0–1.2.1 vendored their tarballs before they were published).
+
+**Versions.** Every npm package here carries exactly `G9SyncDataVersion` — never a version of its own — and releases in
+the same pipeline run as the NuGet packages (`js/scripts/check-versions.mjs`). The packages live in the npm organization
+`g9tm` (scope `@g9tm`), like every G9 package. The device host installs G9LynxControls' `@g9tm/lynxcontrols-*`.
+
+**CI.** Azure Pipelines (G9SyncData, definition 28) is the only CI: it tests, packs and publishes, then mirrors the
+repository to GitHub. GitHub is a read-only copy; nothing runs there. Its `ios_core` job (macos-latest) runs
+`test:ios-core` against Apple's real Compression framework before the main job may publish.
 
 `js/packages/syncdata/PARITY.md` maps every .NET type to its twin and lists every deliberate difference. Read it before
 changing either side.
@@ -77,7 +83,7 @@ writes `Object` for every function, object, array and ArrayBuffer, so:
 | Golden vectors (TS → .NET) | `npm test` writes `js-vectors.json`; the .NET test parses it with the server's hub protocols | every request the TypeScript client sends deserializes to the .NET sample |
 | Interop | `npm run test:interop` (in `js/packages/syncdata`) | the TypeScript client against the real sample server: 50,000 rows, push, pokes, reconcile, unsubscribe, JSON and MessagePack; and the database it writes equals the .NET client's |
 | Lynx sandbox | `npm run test:lynxsim` (in `js/packages/lynx`) | the same scenario in a Lynx-shaped runtime with the native modules behind a copying bridge |
-| Native | `npm run test:android-jvm`, `check:android-module`, `test:ios-core` (in `js/packages/lynx`) | the Brotli module's cores, Autolink registration, and every `@LynxMethod` signature through Lynx's own builder |
+| Native | `npm run test:android-jvm`, `check:android-module`, `test:ios-core` (in `js/packages/lynx`) | the Brotli module's cores, Autolink registration, and every `@LynxMethod` signature through Lynx's own builder; `test:ios-core` on macOS decodes with the module's own Apple decoder (`ios/src/core/G9SyncDataAppleBrotli.h`), on Linux/WSL with libbrotlidec standing in |
 | Device | `js/apps/lynx-android-host` ([README](../js/apps/lynx-android-host/README.md)) | the whole scenario on PrimJS (Lynx 4.1.0) on an Android 16 emulator with the real native modules — Brotli, the binary WebSocket, G9LynxControls' SQLite: both protocols PASS, ~40 s each (2026-10-05) |
 
 `G9_UPDATE_GOLDEN=1` regenerates either golden file after an intended change — then make the other side pass in the same

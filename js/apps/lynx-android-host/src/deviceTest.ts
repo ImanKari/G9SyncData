@@ -1,9 +1,9 @@
 // The device twin of packages/lynx/test/lynxsim/entry.ts: the @g9tm/syncdata interop scenario on Lynx's background
-// thread (PrimJS) with the REAL native modules — G9SqliteModule (@g9lynx/native) as the SQLite driver,
+// thread (PrimJS) with the REAL native modules — G9SqliteModule (@g9tm/lynxcontrols-native) as the SQLite driver,
 // G9SignalRLynxModule (@g9tm/signalr-supernetcore-lynx) as the WebSocket, G9SyncDataLynxModule (@g9tm/syncdata-lynx) as
 // the Brotli decoder — against the real .NET sample server. Every line goes to the console (logcat, tag lynx) prefixed
 // `G9SYNC-DEVICE ` and to the page.
-import { createNativeHostServices, createNativeSqliteDriver } from '@g9lynx/native';
+import { createNativeHostServices, createNativeSqliteDriver } from '@g9tm/lynxcontrols-native';
 import { getG9SignalRNative } from '@g9tm/signalr-supernetcore-lynx';
 import { G9ESyncHubProtocol } from '@g9tm/syncdata/signalr';
 import { createLynxSyncTransport, getG9SyncDataNative, useLynxBrotli, VERSION } from '@g9tm/syncdata-lynx';
@@ -90,7 +90,7 @@ export async function runDeviceTest(config: DeviceTestConfig, sink: DeviceTestSi
     emit(`@g9tm/syncdata-lynx ${VERSION}: G9SyncDataLynxModule ${brotli ? 'linked' : 'MISSING'}` + (brotli ? ' ' + JSON.stringify(await brotli.capabilities()) : ''));
     emit(`@g9tm/signalr-supernetcore-lynx: G9SignalRLynxModule ${getG9SignalRNative() ? 'linked' : 'MISSING'}`);
     const driver = createNativeSqliteDriver();
-    emit(`@g9lynx/native: G9SqliteModule linked ${JSON.stringify(await driver.capabilities())}`);
+    emit(`@g9tm/lynxcontrols-native: G9SqliteModule linked ${JSON.stringify(await driver.capabilities())}`);
     const dataDir = await createNativeHostServices().appDataDirectory();
     emit(`app data directory: ${dataDir}`);
 
