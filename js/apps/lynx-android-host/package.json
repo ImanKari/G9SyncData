@@ -11,9 +11,9 @@
     "device-test": "node scripts/device-test.mjs"
   },
   "dependencies": {
-    "@g9tm/lynxcontrols-foundation": "file:vendor/g9tm-lynxcontrols-foundation-1.4.0.tgz",
-    "@g9tm/lynxcontrols-native": "file:vendor/g9tm-lynxcontrols-native-1.4.0.tgz",
-    "@g9tm/lynxcontrols-sqlite": "file:vendor/g9tm-lynxcontrols-sqlite-1.4.0.tgz",
+    "@g9tm/lynxcontrols-foundation": "1.4.0",
+    "@g9tm/lynxcontrols-native": "1.4.0",
+    "@g9tm/lynxcontrols-sqlite": "1.4.0",
     "@g9tm/signalr-supernetcore-client": "2.10.1",
     "@g9tm/signalr-supernetcore-lynx": "2.10.1",
     "@g9tm/syncdata": "file:../../artifacts/npm/g9tm-syncdata-1.2.2.tgz",

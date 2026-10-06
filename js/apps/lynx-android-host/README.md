@@ -21,14 +21,15 @@ This folder is **not** part of the `js/` npm workspace: it has its own `package.
 
 Needs: Node 22.12+, the .NET SDK, an Android SDK with an emulator (or a device) running, a JDK 17+ (Android Studio's
 jbr works), Gradle 8.14, the disposable PostgreSQL (`G9SYNC_TEST_PG`, default `localhost:15433` — never a shared server),
-and a sibling `G9LynxControls` checkout that has been built.
+and network access to npm (`@g9tm/lynxcontrols-*` 1.4.0 come from the registry).
 
 ```bash
 # once, and whenever a dependency changed
 dotnet build ../../../samples/G9SyncData.Samples.Server -c Debug
 (cd ../.. && npm run pack:all)               # js/artifacts/npm/*.tgz — the packages under test
-npm run pack:lynxcontrols                    # G9LynxControls (sibling checkout) → vendor/*.tgz (gitignored)
 npm install
+# Testing UNPUBLISHED G9LynxControls changes instead: pack the sibling checkout into vendor/ (gitignored) and install
+# those tarballs over the registry ones — npm run pack:lynxcontrols && npm install --no-save vendor/*.tgz
 
 npm run build                                # rspeedy → dist/main.lynx.bundle
 npm run apk                                  # Gradle → android/app/build/outputs/apk/debug/app-debug.apk
