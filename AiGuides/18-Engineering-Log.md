@@ -515,3 +515,59 @@ first, so creation order), then by key ordinal; `engine.test.ts` and
 `EndToEndSyncTests.Subscriptions_created_in_the_same_millisecond_are_pulled_in_creation_order` fail on the old rule.
 Lesson: a sort key with millisecond resolution is a tie waiting to happen — every ordering that feeds stored state needs
 a total order, and a parity test should run where timing differs from the developer's machine.
+
+## LES-0053 — 2026-10-10 · Opening the store cost 296 bridge calls on every app start
+
+The first AgriPad Lynx build counted the store's driver calls before measuring anything else (LES-0051's lesson): with
+AgriPad's 47 tables, `initialize` made 534 calls on a fresh database and 296 on every later start — ~1.7 s of pure bridge
+round trips (5.7 ms each on the emulator) before the app could show a site, every cold start. Each table read its
+g9_tables row, checked the table, read its columns and counted its triggers one statement at a time, which costs nothing
+in process (.NET, Node) and dominates on a bridge. The TypeScript store now reads all of it in one call and writes in one
+batch, in the per-table path's statement order, with new tids written explicitly so triggers can be created in the same
+batch: 14 calls per start (`provision.test.ts` compares the two paths' databases). Lesson: the per-table and per-row
+counts of the start-up path matter as much as the apply's; a fixed startup cost is paid on every launch.
+
+## LES-0054 — 2026-10-10 · A move-out cost ~34 ms on Lynx — and AgriPad produces them in every reconcile
+
+LES-0051 made releasing rows bulk for an unsubscribe and left the move-out INSIDE a pull or a reconciliation row by row
+(~8 driver calls per row) because "its decision must see what the pull queued before it". In AgriPad that path is not
+rare: a placement that stops being current is a move-out in the next delta, and every tree replanted elsewhere leaves
+`farm-site`'s query and is moved out by the 12-hour reconciliation — an office replanting a block meant minutes of bridge
+calls on every tablet. The constraint only needs everything queued BEFORE the run to be flushed before the run reads,
+and the keys of one run to be distinct (one row's membership update must not change another row's decision): then the
+run's membership updates go in one batch and the released rows through `disposeReleasedRows`, the same reads, decisions
+and explicit `local_seq` values as row by row (`moveout.test.ts` compares every revocation outcome, the clock and the
+changed keys). 2,000 move-outs: under 30 driver calls instead of ~16,000. Lesson: a constraint written next to a slow
+path is a hypothesis about ordering — state the exact condition, and the fast path usually fits inside it.
+
+## LES-0055 — 2026-10-10 · A sync with nothing to download cost 216 bridge calls
+
+With LES-0053 fixed, the AgriPad Lynx smoke counted driver calls per run and found a no-change delta of one site at
+216 calls — ~1.2 s of bridge on the emulator for every automatic tick and every site open. The histogram named them:
+`saveHello` wrote each of the 47 negotiated tables with its own statement (and its own `DROP TRIGGER` script for the 27
+download-only tables), set the definitions' move-out policies one by one, and `readRowsChangedAfter` asked g9_rows
+once per table. None of it depends on an earlier statement's result except one rare read, so it is one batch and one
+`UNION ALL` now (`hello.test.ts` compares the per-table path's database). Lesson: count calls per RUN, not only per row
+— a fixed cost multiplied by "every 5 minutes" and "every site open" is the one users feel.
+
+## LES-0056 — 2026-10-10 · A third of a site's first download was PRAGMAs
+
+AgriPad's largest site downloads as 229 chunks; staging each one cost ~7 driver calls — `PRAGMA journal_mode`,
+`PRAGMA synchronous`, the switch to NORMAL, begin, insert, commit, the switch back — so 916 of the download's 3,089
+bridge calls (~5 s on the emulator) asked the same two questions about the same connection. The store's connections
+set their journal mode when they open and nothing else touches their `synchronous`, so the answers are read once per
+connection, and the chunk's insert runs as one atomic driver call: 3 calls per chunk. Lesson: a "cheap" check repeated
+per unit of streaming is a per-unit cost — cache what cannot change for the life of the object that owns it.
+
+## LES-0057 — 2026-10-10 · Pushing one row cost 16 s on a farm device
+
+AgriPad Lynx saved one map drawing and the run's Pushing phase took 12–17 s while the server accepted the batch in
+169 ms. A slow-call trace in the app's driver wrapper named one statement: `buildPushBatch`'s pending-row read,
+`... WHERE dirty <> 0 AND rejected = 0 AND tid IN (<every uploadable table>) ORDER BY local_seq LIMIT $max`. With the
+tid list in the WHERE, SQLite searched g9_rows' primary key by tid — all 486k rows of the device — and sorted them in
+a temp B-tree, ignoring the partial `g9_rows_dirty` index that holds only the pending rows already in `local_seq` order.
+`+tid IN (...)` takes tid out of index selection: the plan becomes `SCAN g9_rows USING INDEX g9_rows_dirty`, Pushing
+588 ms (both twins: push.ts and G9CSqliteSyncStore.Push.cs). The other `dirty <> 0` reads already used the index.
+Lesson: a partial index is only a candidate — check `EXPLAIN QUERY PLAN` on a full-size database, because an `IN` on a
+leading primary-key column outbids it, and the cost grows with rows the query never returns.
+

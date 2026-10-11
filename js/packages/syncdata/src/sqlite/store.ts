@@ -35,7 +35,7 @@ import {
 import type { G9DtBackfillRequest, G9DtHelloResult, G9DtNegotiatedTable, G9DtPushResult, G9DtSyncChunk, G9DtTableDigest } from '../protocol/dtos.js';
 import * as apply from './apply.js';
 import * as commands from './commands.js';
-import { asNumber, asOptionalString, asString, G9AsyncLock, G9SqliteConnection } from './connection.js';
+import { asNumber, asOptionalString, asString, G9AsyncLock, G9SqliteConnection, G9StatementBatch, statementsOf } from './connection.js';
 import type { G9SessionToken } from './driver.js';
 import {
   byTid,
@@ -163,7 +163,7 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
         if ((await meta(connection, 'client_id')) === null) await setMeta(connection, 'client_id', newGuid());
         if ((await meta(connection, 'next_batch_id')) === null) await setMeta(connection, 'next_batch_id', '1');
         await this._verifyIncarnation(connection);
-        for (const table of model.tables) tables.push(await this._provisionTable(connection, table));
+        for (const table of await this._provisionTables(connection, model.tables)) tables.push(table);
       });
       this._model = model;
       this.byLocal = new Map(tables.map((t) => [t.model.localName.toLowerCase(), t] as [string, LocalTable]));
@@ -172,77 +172,101 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
     });
   }
 
-  private async _provisionTable(connection: G9SqliteConnection, table: G9SyncClientTable): Promise<LocalTable> {
-    const hash = modelHash(table);
-    let tid = -1;
-    let existingHash: string | null = null;
-    let negotiatedJson: string | null = null;
-    let syncedJson: string | null = null;
-    let isNew = false;
-    const found = (await connection.query('SELECT tid, model_hash, negotiated_json, synced_columns FROM g9_tables WHERE local_name = $n', { $n: table.localName }))[0];
-    if (found) {
-      tid = asNumber(found[0]);
-      existingHash = asString(found[1]);
-      negotiatedJson = asOptionalString(found[2]);
-      syncedJson = asOptionalString(found[3]);
+  /**
+   * Provisions every model table (`ProvisionTable` of the .NET store, for all tables at once).
+   *
+   * The .NET store asks SQLite per table (~6 statements each) because a statement costs nothing in process. Through a
+   * bridged driver every call is a round trip (~5.7 ms on the Android emulator: 296 calls = 1.7 s on EVERY app start, 534
+   * on the first), so this reads everything the decisions need in ONE call — g9_tables, the tables, their columns, the
+   * triggers and the AUTOINCREMENT counter — and runs the resulting statements in ONE batch, in exactly the order the
+   * per-table path runs them. New tables get their tid explicitly (the value AUTOINCREMENT would hand out, in model
+   * order), so the triggers can be written in the same batch. Same objects, same rows, same order (PARITY.md).
+   */
+  private async _provisionTables(connection: G9SqliteConnection, models: readonly G9SyncClientTable[]): Promise<LocalTable[]> {
+    const [registered, tableNames, columns, triggers, sequence] = await connection.runStatements([
+      ...statementsOf('SELECT tid, local_name, model_hash, negotiated_json, synced_columns, server_name FROM g9_tables'),
+      ...statementsOf("SELECT name FROM sqlite_master WHERE type = 'table'"),
+      ...statementsOf("SELECT m.name, p.name FROM sqlite_master AS m JOIN pragma_table_info(m.name) AS p WHERE m.type = 'table'"),
+      ...statementsOf("SELECT name FROM sqlite_master WHERE type = 'trigger'"),
+      ...statementsOf("SELECT (SELECT seq FROM sqlite_sequence WHERE name = 'g9_tables'), (SELECT max(tid) FROM g9_tables)"),
+    ]);
+    const known = new Map<string, readonly (string | number | null)[]>();
+    for (const row of registered?.rows ?? []) known.set(asString(row[1]), row as readonly (string | number | null)[]);
+    const existingTables = new Set((tableNames?.rows ?? []).map((r) => asString(r[0]).toLowerCase()));
+    const columnsByTable = new Map<string, Set<string>>();
+    for (const row of columns?.rows ?? []) {
+      const table = asString(row[0]).toLowerCase();
+      let set = columnsByTable.get(table);
+      if (!set) columnsByTable.set(table, (set = new Set<string>()));
+      set.add(asString(row[1]).toLowerCase());
     }
-    if (tid < 0) {
-      await connection.exec("INSERT INTO g9_tables (local_name, server_name, model_hash) VALUES ($n, $s, '')", { $n: table.localName, $s: table.serverName });
-      tid = asNumber(await connection.scalar('SELECT last_insert_rowid()'));
-      isNew = true;
-    } else {
-      await connection.exec('UPDATE g9_tables SET server_name = $s WHERE tid = $t', { $s: table.serverName, $t: tid });
-    }
+    const triggerNames = new Set((triggers?.rows ?? []).map((r) => asString(r[0])));
+    const counters = sequence?.rows[0] ?? [];
+    let nextTid = Math.max(asNumber(counters[0]), asNumber(counters[1])) + 1;
 
-    const exists = (await connection.scalar("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $n COLLATE NOCASE", { $n: table.localName })) !== null;
-    if (!exists) {
-      await connection.exec(createTable(table, this.options));
-    } else {
-      const existing = new Set((await connection.query('SELECT name FROM pragma_table_info($n)', { $n: table.localName })).map((r) => asString(r[0]).toLowerCase()));
-      for (const column of table.columns) {
-        if (existing.has(column.name.toLowerCase())) continue;
-        await connection.exec('ALTER TABLE ' + quote(table.localName) + ' ADD COLUMN ' + columnDefinition(column, this.options));
-        this.log('information', 20102, `Added column ${table.localName}.${column.name} from the client model`);
+    const batch = new G9StatementBatch(connection, Number.MAX_SAFE_INTEGER);
+    const result: LocalTable[] = [];
+    for (const table of models) {
+      const hash = modelHash(table);
+      const found = known.get(table.localName);
+      let tid: number;
+      let existingHash: string | null = null;
+      let negotiatedJson: string | null = null;
+      let syncedJson: string | null = null;
+      const isNew = !found;
+      if (found) {
+        tid = asNumber(found[0]);
+        existingHash = asString(found[2]);
+        negotiatedJson = asOptionalString(found[3]);
+        syncedJson = asOptionalString(found[4]);
+        if (asString(found[5]) !== table.serverName) batch.add('UPDATE g9_tables SET server_name = $s WHERE tid = $t', { $s: table.serverName, $t: tid });
+      } else {
+        tid = nextTid++;
+        batch.add("INSERT INTO g9_tables (tid, local_name, server_name, model_hash) VALUES ($t, $n, $s, '')", { $t: tid, $n: table.localName, $s: table.serverName });
       }
-    }
-    for (const index of table.indexes) {
-      await connection.exec(
-        `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS ${quote(index.name)} ON ${quote(table.localName)} (${index.columns.map(quote).join(', ')})`,
-      );
-    }
 
-    const negotiated = readPersistedNegotiated(negotiatedJson);
-    const captureWanted = !negotiated || negotiated.direction !== G9ESyncDirection.DownloadOnly;
-    const triggerCount = asNumber(
-      await connection.scalar("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ($a, $b, $c)", {
-        $a: 'g9_' + table.localName + '_ai',
-        $b: 'g9_' + table.localName + '_au',
-        $c: 'g9_' + table.localName + '_ad',
-      }),
-    );
-    const commandTriggerCount = asNumber(
-      await connection.scalar("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ($a, $b, $c)", {
-        $a: 'g9_' + table.localName + '_ci',
-        $b: 'g9_' + table.localName + '_cu',
-        $c: 'g9_' + table.localName + '_cd',
-      }),
-    );
-    if (existingHash !== hash || (captureWanted && triggerCount !== 3) || commandTriggerCount !== 3) {
-      await connection.exec(dropTriggers(table));
-      if (captureWanted) await connection.exec(createTriggers(table, tid));
-      await connection.exec(createCommandTriggers(table, tid));
-      if (existingHash !== null && existingHash.length > 0 && existingHash !== hash) {
-        // Column order may have changed: pending rows upload every column rather than trusting old mask bits.
-        await connection.exec('UPDATE g9_rows SET dirty_mask = $m WHERE tid = $t AND dirty = 1', { $m: allColumnsMask(table.columns.length), $t: tid });
+      const exists = existingTables.has(table.localName.toLowerCase());
+      if (!exists) {
+        batch.add(createTable(table, this.options));
+      } else {
+        const existing = columnsByTable.get(table.localName.toLowerCase()) ?? new Set<string>();
+        for (const column of table.columns) {
+          if (existing.has(column.name.toLowerCase())) continue;
+          batch.add('ALTER TABLE ' + quote(table.localName) + ' ADD COLUMN ' + columnDefinition(column, this.options));
+          this.log('information', 20102, `Added column ${table.localName}.${column.name} from the client model`);
+        }
       }
-      await connection.exec('UPDATE g9_tables SET model_hash = $h WHERE tid = $t', { $h: hash, $t: tid });
+      for (const index of table.indexes) {
+        batch.add(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS ${quote(index.name)} ON ${quote(table.localName)} (${index.columns.map(quote).join(', ')})`);
+      }
+
+      const negotiated = readPersistedNegotiated(negotiatedJson);
+      const captureWanted = !negotiated || negotiated.direction !== G9ESyncDirection.DownloadOnly;
+      const has = (suffix: string): number => (triggerNames.has('g9_' + table.localName + '_' + suffix) ? 1 : 0);
+      const triggerCount = has('ai') + has('au') + has('ad');
+      const commandTriggerCount = has('ci') + has('cu') + has('cd');
+      if (existingHash !== hash || (captureWanted && triggerCount !== 3) || commandTriggerCount !== 3) {
+        batch.add(dropTriggers(table));
+        if (captureWanted) batch.add(createTriggers(table, tid));
+        batch.add(createCommandTriggers(table, tid));
+        if (existingHash !== null && existingHash.length > 0 && existingHash !== hash) {
+          // Column order may have changed: pending rows upload every column rather than trusting old mask bits.
+          batch.add('UPDATE g9_rows SET dirty_mask = $m WHERE tid = $t AND dirty = 1', { $m: allColumnsMask(table.columns.length), $t: tid });
+        }
+        batch.add('UPDATE g9_tables SET model_hash = $h WHERE tid = $t', { $h: hash, $t: tid });
+      }
+      if (isNew && exists) {
+        const localName = table.localName;
+        batch.add(`INSERT OR IGNORE INTO g9_rows (tid, pk) SELECT $t, ${keyExpression(table, 'b')} FROM ${quote(localName)} AS b`, { $t: tid }, (results) => {
+          const adopted = results[0]?.changes ?? 0;
+          if (adopted > 0) this.log('information', 20103, `Adopted ${adopted} existing rows of ${localName} into change capture`);
+        });
+      }
+      const synced = syncedJson === null ? [] : (JSON.parse(syncedJson) as string[]);
+      result.push(new LocalTable(table, tid, negotiated, Array.isArray(synced) ? synced.map(String) : []));
     }
-    if (isNew && exists) {
-      const adopted = await connection.exec(`INSERT OR IGNORE INTO g9_rows (tid, pk) SELECT $t, ${keyExpression(table, 'b')} FROM ${quote(table.localName)} AS b`, { $t: tid });
-      if (adopted > 0) this.log('information', 20103, `Adopted ${adopted} existing rows of ${table.localName} into change capture`);
-    }
-    const synced = syncedJson === null ? [] : (JSON.parse(syncedJson) as string[]);
-    return new LocalTable(table, tid, negotiated, Array.isArray(synced) ? synced.map(String) : []);
+    await batch.flush();
+    return result;
   }
 
   /** ADR-0067: a database restored from a backup or copied from another device gets a new identity. */
@@ -305,49 +329,74 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
     };
   }
 
+  /**
+   * Records a Hello (`SaveHello`): epoch, clock offset, definitions, every negotiated table and the capture each needs.
+   * The .NET store writes table by table; through a bridged driver that was ~90 calls on EVERY run for AgriPad's 47
+   * tables (LES-0055), so the writes go in ONE batch, in the same order, after one read for the only per-table
+   * question (does a table with newly negotiated columns hold rows?). Same database.
+   */
   async saveHello(hello: G9DtHelloResult): Promise<void> {
     const model = this.ensureInitialized();
     await this.writeLock.run(async () => {
       const connection = this.writer();
       const updates: { local: LocalTable; negotiated: G9DtNegotiatedTable; synced: string[] }[] = [];
       await connection.transaction('immediate', async () => {
-        await setMeta(connection, 'epoch', hello.epoch);
-        await setMeta(connection, 'last_hello_utc', String(nowMs()));
-        await setMeta(connection, 'server_offset_ms', String(Math.trunc(hello.serverTimeUtcMs - Date.now())));
-        await setMeta(connection, 'definitions_json', persistedJson(hello.definitions));
-        await setMeta(connection, 'tables_json', persistedJson(hello.tables));
+        const batch = new G9StatementBatch(connection, this.options.statementsPerBatch);
+        const metaUpsert = 'INSERT INTO g9_meta (key, value) VALUES ($k, $v) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
+        batch.add(metaUpsert, { $k: 'epoch', $v: hello.epoch });
+        batch.add(metaUpsert, { $k: 'last_hello_utc', $v: String(nowMs()) });
+        batch.add(metaUpsert, { $k: 'server_offset_ms', $v: String(Math.trunc(hello.serverTimeUtcMs - Date.now())) });
+        batch.add(metaUpsert, { $k: 'definitions_json', $v: persistedJson(hello.definitions) });
+        batch.add(metaUpsert, { $k: 'tables_json', $v: persistedJson(hello.tables) });
         // Kept per subscription: a caller who loses access stops being told the definition (ADR-0048).
         for (const definition of hello.definitions) {
-          await connection.exec('UPDATE g9_subscriptions SET move_out_policy = $p WHERE name = $n', { $p: definition.moveOutPolicy, $n: definition.name });
+          batch.add('UPDATE g9_subscriptions SET move_out_policy = $p WHERE name = $n', { $p: definition.moveOutPolicy, $n: definition.name });
         }
+
+        // Which tables get new columns, and which of those already hold rows: one read for all of them.
+        const resolved: { local: LocalTable; negotiated: G9DtNegotiatedTable; names: string[]; added: string[] }[] = [];
         for (const negotiated of hello.tables) {
           const clientTable = model.findByServerName(negotiated.name);
           const local = clientTable ? this.byLocal.get(clientTable.localName.toLowerCase()) : undefined;
           if (!local) continue;
           const names = negotiated.columns.map((c) => c.name);
+          const added = local.negotiated === null ? [] : names.filter((n) => !local.syncedColumns.some((s) => s.toLowerCase() === n.toLowerCase()));
+          resolved.push({ local, negotiated, names, added });
+        }
+        const askHolding = resolved.filter((r) => r.added.length > 0).map((r) => r.local.tid);
+        const holding = new Set<number>();
+        if (askHolding.length > 0) {
+          const rows = await connection.query(
+            'SELECT DISTINCT tid FROM g9_rows WHERE deleted = 0 AND tid IN (SELECT value FROM json_each($tids))',
+            { $tids: JSON.stringify(askHolding) },
+          );
+          for (const r of rows) holding.add(asNumber(r[0]));
+        }
+
+        for (const { local, negotiated, names, added } of resolved) {
           let synced: string[];
           if (local.negotiated === null) {
             synced = names;
           } else {
             synced = local.syncedColumns.slice();
-            const added = names.filter((n) => !synced.some((s) => s.toLowerCase() === n.toLowerCase()));
-            if (added.length > 0 && (await connection.scalar('SELECT 1 FROM g9_rows WHERE tid = $t AND deleted = 0 LIMIT 1', { $t: local.tid })) === null) {
+            if (added.length > 0 && !holding.has(local.tid)) {
               for (const a of added) synced.push(a);
             }
           }
-          await connection.exec('UPDATE g9_tables SET server_table_id = $s, negotiated_json = $j, synced_columns = $c WHERE tid = $t', {
+          batch.add('UPDATE g9_tables SET server_table_id = $s, negotiated_json = $j, synced_columns = $c WHERE tid = $t', {
             $s: negotiated.tableId,
             $j: persistedJson(negotiated),
             $c: persistedJson(synced),
             $t: local.tid,
           });
           if (negotiated.direction === G9ESyncDirection.DownloadOnly) {
-            await connection.exec(dropTriggers(local.model));
+            batch.add(dropTriggers(local.model));
           } else if (local.negotiated && local.negotiated.direction === G9ESyncDirection.DownloadOnly) {
-            await connection.exec(dropTriggers(local.model) + createTriggers(local.model, local.tid));
+            batch.add(dropTriggers(local.model) + createTriggers(local.model, local.tid));
           }
           updates.push({ local, negotiated, synced });
         }
+        await batch.flush();
       });
       for (const { local, negotiated, synced } of updates) {
         local.negotiated = negotiated;

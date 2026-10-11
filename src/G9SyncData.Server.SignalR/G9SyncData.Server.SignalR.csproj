@@ -9,8 +9,32 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!--
+    Transport source mode. PACKAGE MODE IS THE DEFAULT and the only one CI builds.
+
+    -p:UseG9SignalRSource=true swaps the two G9SignalRSuperNetCore packages for ProjectReferences into a local
+    checkout (default: the sibling G9Libraries\G9SignalRSuperNetCore), so a transport fix can be tested in a real
+    server before it is published. Pass it as a GLOBAL property (-p: on the command line) - it has to reach this
+    project during restore as well as build, and a property set in a consuming csproj does not.
+    The source generator is named explicitly as an analyzer: the package ships it under analyzers/ and it flows
+    transitively, but a ProjectReference carries compiled output, not packaging rules (G9SignalRSuperNetCore.Server
+    references it with PrivateAssets="all"). Without it G9SyncHub compiles with no generated twin.
+    First used 2026-10-10 by Agriculture.Server.Mobile's docker image (AgriPad Lynx, agent A6).
+  -->
+  <PropertyGroup>
+    <G9SignalRSourceRoot Condition="'$(G9SignalRSourceRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\G9SignalRSuperNetCore\G9SignalRSuperNetCore\</G9SignalRSourceRoot>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(UseG9SignalRSource)' != 'true'">
     <PackageReference Include="G9SignalRSuperNetCore.Server" />
     <PackageReference Include="G9SignalRSuperNetCore.Server.MessagePack" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseG9SignalRSource)' == 'true'">
+    <ProjectReference Include="$(G9SignalRSourceRoot)G9SignalRSuperNetCore.Server\G9SignalRSuperNetCore.Server.csproj" />
+    <ProjectReference Include="$(G9SignalRSourceRoot)G9SignalRSuperNetCore.Server.MessagePack\G9SignalRSuperNetCore.Server.MessagePack.csproj" />
+    <ProjectReference Include="$(G9SignalRSourceRoot)G9SignalRSuperNetCore.SourceGenerator\G9SignalRSuperNetCore.SourceGenerator.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

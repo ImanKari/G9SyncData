@@ -1652,3 +1652,11 @@ batches the writes with explicit `local_seq` values (`clock + n`), then moves th
 is exact because disposing a row writes nothing another row's decision reads — the store's connections run with foreign
 keys off — and it falls back to the row-by-row path while a foreign trigger exists. Measured: 25,000 rows in 6.3 s instead
 of 850 s on the Android emulator (LES-0051).
+
+**Second addendum to ADR-0071 (2026-10-10, AgriPad Lynx).** Two more paths follow it. A run of move-outs (one MoveOut
+section of a pull, or a reconciliation's move-out keys) queues its membership updates, flushes once and disposes the
+released rows through `disposeReleasedRows` (`moveOutMany`; row by row for an ephemeral subscription, a Keep policy,
+duplicate keys or a foreign trigger) — LES-0054. And `initialize` provisions every table from one bulk read and one
+batch in the per-table statement order, giving new tables their AUTOINCREMENT tid explicitly — LES-0053. Both are
+TypeScript-only: the .NET store runs in process, where a statement costs nothing to cross. The per-run bookkeeping
+(`saveHello`, the protected rows an apply reads) is batched the same way — LES-0055.

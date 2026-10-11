@@ -60,7 +60,24 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
   released rows in bulk (`disposeReleasedRows`): metadata, pending commands and app rows read in three queries, the
   revocation policy deciding in the .NET store's order, writes batched with each row's explicit `local_seq`, the clock
   moved once. Same database (`test/revocation.test.ts` against the row-by-row path, interop parity against .NET); row
-  by row while a foreign trigger exists. A move-out inside a pull stays row by row.
+  by row while a foreign trigger exists. A run of move-outs (a MoveOut section of a pull, a reconciliation's move-out
+  keys) goes the same way (`moveOutMany`): every membership update queued and flushed once, then the released rows
+  disposed in bulk — same database as `moveOut` row by row (`test/moveout.test.ts`); row by row for an ephemeral
+  subscription, a Keep policy, duplicate keys or a foreign trigger.
+- **Provisioning.** `initialize` reads everything its decisions need (g9_tables, the tables and their columns, the
+  triggers, the AUTOINCREMENT counter) in ONE driver call and runs the resulting statements in ONE batch, in the order
+  the .NET store's per-table `ProvisionTable` runs them; a new table gets its tid explicitly (the value AUTOINCREMENT
+  would hand out, in model order) so its triggers are written in the same batch. Same objects, rows, tids and counter
+  (`test/provision.test.ts` compares both paths on fresh, reopened, evolved and repaired databases). AgriPad's 47 tables:
+  14 driver calls on every start instead of 296, 17 instead of 534 on the first.
+- **Per-run bookkeeping.** `saveHello` writes the meta rows, the definitions' move-out policies and every negotiated
+  table (with its capture triggers) in ONE batch, after one read for the only per-table question (does a table with
+  newly negotiated columns hold rows?); the rows an apply protects (`readRowsChangedAfter`) are read with one
+  `UNION ALL` statement instead of a query per table. Same database (`test/hello.test.ts`). AgriPad: a no-change sync
+  of a site went from 216 driver calls to ~40.
+- **Staging a chunk.** One atomic driver call (`runAtomic`) instead of begin + insert + commit, and the connection's
+  journal mode and `synchronous` read once per connection rather than per chunk: 3 calls per chunk instead of ~7
+  (`test/staging.test.ts`). Same rows, same durability window.
 - **Two sessions.** A writer session under the store's lock and a reader session, instead of a pool.
 - **Reading values to push.** Decimal and String columns are selected as `CAST(… AS TEXT)`: exactly the text .NET's
   `GetString` / `GetDecimal` parse.

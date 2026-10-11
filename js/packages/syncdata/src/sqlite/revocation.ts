@@ -195,6 +195,7 @@ export async function disposeReleasedRows(
   reason: G9ERevocationReason,
   subscriptionKey: string | null,
   report: G9ApplyReport | null,
+  onRemoved?: (tid: number, key: string) => void,
 ): Promise<number> {
   const released = (await connection.query(releasedSql, releasedParams)).map((r) => ({ tid: asNumber(r[0]), key: asString(r[1]) }));
   if (released.length === 0) return 0;
@@ -245,7 +246,10 @@ export async function disposeReleasedRows(
     if (!table) continue;
     const state = states.get(id(row.tid, row.key)) ?? emptyState();
     const plan = planDisposal(store, table, row.key, state, reason, subscriptionKey, report, '$seq', { $seq: base.add(G9Long.fromNumber(++advanced)) });
-    if (plan.removed) removed++;
+    if (plan.removed) {
+      removed++;
+      onRemoved?.(row.tid, row.key);
+    }
     for (const statement of plan.statements) if (batch.add(statement.script, statement.params)) await batch.flush();
   }
   await batch.flush();

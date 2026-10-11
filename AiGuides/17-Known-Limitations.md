@@ -111,5 +111,4 @@ Read before promising a feature. Remove an entry only in the change that lifts i
 | `Guid.Parse`'s "X" form is not accepted | not used by G9SyncData data | — |
 | No in-process server for tests (`G9CInMemorySyncTransport`) | no JavaScript server engine | `G9FaultInjectingTransport` over the SignalR transport against the sample server |
 | No Dotmim retirement, no OpenTelemetry meter | MAUI-only migration; no OTel on Lynx | log through `G9SyncLogger` |
-| A move-out inside a pull (a row leaving a subscription's scope, Delete policy) is disposed row by row: ~7 driver calls per row | its decision must see what the pull queued before it | measured on the emulator at ~34 ms per row, so losing 25,000 rows' scope in one pull costs ~14 min on Lynx (an unsubscribe of the same rows: 6.3 s, LES-0051). Follow-up: group consecutive move-outs the way `disposeReleasedRows` does — after a move-out parity scenario exists |
 | iOS and a minified (R8) Android build are not run on a device yet | no Mac here; the device host is a Debug APK | `js/packages/lynx/Native-Validation-Pending.md` |

@@ -72,7 +72,11 @@ writes `Object` for every function, object, array and ArrayBuffer, so:
 | Apply | one prepared statement per row, decisions from results | statements batched per driver call; decisions in SQL (`changes()`), same database state |
 | Triggers off during an apply | `SQLITE_DBCONFIG_ENABLE_TRIGGER` | library triggers dropped and re-created inside the transaction (large staged pulls only) |
 | Values to push | `GetString` / `GetDecimal` on the cell | `CAST(… AS TEXT)` for Decimal and String columns — the same text |
+| Staging a downloaded chunk | begin, insert, commit; journal mode + synchronous read per chunk | one atomic call; the two PRAGMAs read once per connection — 3 calls per chunk (`staging.test.ts`) |
+| Per-run bookkeeping (`saveHello`, the rows an apply protects) | per table: an UPDATE (+ trigger DDL), a query | one batch / one `UNION ALL` read — same database (`hello.test.ts`) |
+| Provisioning the model's tables (`initialize`) | per table: read g9_tables, the table, its columns and triggers, then DDL (~6 statements) | one bulk read, one batch in the same statement order, explicit tids for new tables — same database (`provision.test.ts`); 14 calls per start for AgriPad's 47 tables instead of 296 |
 | Releasing many rows (unsubscribe, access revoked, expired ephemeral) | per row: read, decide, write, `++sequence` | `disposeReleasedRows`: everything read in bulk, the policy decides in the same order, writes batched with each row's explicit `local_seq` — same state (`revocation.test.ts`, interop parity); row by row while a foreign trigger exists |
+| A run of move-outs (a MoveOut section of a pull, a reconciliation's move-out keys) | per row: clear the bit, dispose, `++sequence` | `moveOutMany`: membership updates in one batch, then `disposeReleasedRows` — same state (`moveout.test.ts`); row by row for ephemeral / Keep / duplicate keys / a foreign trigger |
 | Number text in hashes | `double.ToString()` (shortest round trip, scientific from exponent 17 or below -4) | `formatDouble`, pinned by the golden vectors |
 
 ## The tests that hold the two sides together

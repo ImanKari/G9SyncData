@@ -174,6 +174,20 @@ export class G9SqliteConnection {
     }
   }
 
+  /**
+   * Runs statements in ONE transaction and ONE bridge call (`atomic` batch) when no transaction is open on this
+   * connection; inside an open one, they simply join it. Equivalent to begin + statements + commit, two calls fewer.
+   */
+  async runAtomic(statements: readonly G9DriverStatement[], signal?: AbortSignal): Promise<G9SqlResult[]> {
+    if (statements.length === 0) return [];
+    if (this.tx) return this.runStatements(statements, signal);
+    try {
+      return await this.driver.run(this.session, statements, signal ? { atomic: true, signal } : { atomic: true });
+    } catch (error) {
+      throw wrap(error, statements.length === 1 ? statements[0]?.sql : undefined);
+    }
+  }
+
   /** `ExecuteNonQuery`: the summed changes of every statement. */
   async exec(script: string, params?: G9Params): Promise<number> {
     const results = await this.runStatements(statementsOf(script, params));

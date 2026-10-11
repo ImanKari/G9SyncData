@@ -43,7 +43,10 @@ public sealed partial class G9CSqliteSyncStore
             var offsetMs = long.TryParse(Meta(connection, transaction, "server_offset_ms"), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var offset) ? offset : 0;
 
             var rows = new List<(long Tid, string Key, long Dirty, long Mask, long Base, long Seq, long Hlc)>();
-            var sql = "SELECT tid, pk, dirty, dirty_mask, server_ver, local_seq, coalesce(hlc_ms, 0) FROM g9_rows WHERE dirty <> 0 AND rejected = 0 AND tid IN (" +
+            // `+tid`: the unary plus keeps the tid list from driving the plan. Without it SQLite searches the primary key by
+            // tid — every row of every uploadable table (486k on a farm device) — and sorts them, instead of walking the
+            // partial g9_rows_dirty index, which holds only the pending rows and is already in local_seq order.
+            var sql = "SELECT tid, pk, dirty, dirty_mask, server_ver, local_seq, coalesce(hlc_ms, 0) FROM g9_rows WHERE dirty <> 0 AND rejected = 0 AND +tid IN (" +
                       string.Join(',', uploadable.Keys.Select(k => k.ToString(CultureInfo.InvariantCulture))) + ")" +
                       (inflightMax is null ? string.Empty : " AND local_seq <= $imax") + " ORDER BY local_seq LIMIT $max";
             var commands = ReadPendingCommands(connection, transaction, inflightBatch, Math.Max(1, maxRows));

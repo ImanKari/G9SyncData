@@ -60,8 +60,11 @@ export async function buildPushBatch(store: StoreInternals, tables: readonly G9D
       const offsetMs = offsetText !== null && /^[+-]?\d+$/.test(offsetText) ? Number(offsetText) : 0;
 
       const tids = Array.from(uploadable.keys());
+      // `+tid`: the unary plus keeps the tid list from driving the plan. Without it SQLite searches the primary key by
+      // tid — every row of every uploadable table (486k on a farm device, 16 s on the bridge) — and sorts them, instead
+      // of walking the partial g9_rows_dirty index, which holds only the pending rows and is already in local_seq order.
       const sql =
-        'SELECT tid, pk, dirty, dirty_mask, server_ver, local_seq, coalesce(hlc_ms, 0) FROM g9_rows WHERE dirty <> 0 AND rejected = 0 AND tid IN (' +
+        'SELECT tid, pk, dirty, dirty_mask, server_ver, local_seq, coalesce(hlc_ms, 0) FROM g9_rows WHERE dirty <> 0 AND rejected = 0 AND +tid IN (' +
         tids.join(',') +
         ')' +
         (inflightMax === null ? '' : ' AND local_seq <= $imax') +

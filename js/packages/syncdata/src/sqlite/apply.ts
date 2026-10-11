@@ -14,10 +14,10 @@ import { G9ApplyReport, G9ERevocationReason, REASON_TABLE_NOT_EMPTY, type G9Appl
 import { G9EPullPartKind, type G9DtBackfillRequest, type G9DtNegotiatedTable, type G9DtPullPlan } from '../protocol/dtos.js';
 import { G9ERowBatchOp, G9RowBatchFormatError } from '../protocol/rowBatch/format.js';
 import { openRowBatch, type G9RowBatchReader } from '../protocol/rowBatch/reader.js';
-import { asNumber, asString, G9StatementBatch, type G9SqliteConnection } from './connection.js';
-import type { G9SqlResult, G9SqlValue } from './driver.js';
+import { asNumber, asString, G9StatementBatch, statementsOf, type G9SqliteConnection } from './connection.js';
+import type { G9DriverStatement, G9SqlResult, G9SqlValue } from './driver.js';
 import { findByServerName, keyValue, meta, nowMs, persistedJson, readPersistedDefinitions, readSubscriptions, type LocalTable, type StoreInternals } from './internals.js';
-import { disposeReleasedRow, REVOKED_REJECTION_CODE } from './revocation.js';
+import { disposeReleasedRow, disposeReleasedRows, REVOKED_REJECTION_CODE } from './revocation.js';
 import { bit, EPHEMERAL_SLOT, quote } from './sql.js';
 import { frameValueToSql } from './values.js';
 
@@ -39,6 +39,8 @@ export class ApplyContext {
   readonly droppedTriggers: { name: string; sql: string }[] = [];
   rows = 0;
   hasRevoked = false;
+  /** The database holds a trigger the library did not create: bulk disposals would not be exact (row by row then). */
+  hasForeignTriggers = false;
   private readonly _dirtyTables = new Set<number>();
   private readonly _tableTime = new Map<string, number>();
   private readonly _progress: ((rows: number) => void) | null;
@@ -161,8 +163,9 @@ export async function beginApply(
 
   const diagnostics = context.report.diagnostics;
   diagnostics.transactions = 1;
+  const foreign = await foreignTriggerNames(store, connection);
+  context.hasForeignTriggers = foreign.length > 0;
   if (store.options.skipTriggersDuringApply) {
-    const foreign = await foreignTriggerNames(store, connection);
     if (foreign.length > 0) {
       for (const name of foreign.slice(0, 10)) diagnostics.foreignTriggers.push(name);
     } else if (options.skipTriggers) {
@@ -217,11 +220,22 @@ export async function foreignTriggerNames(store: StoreInternals, connection: G9S
   return foreign;
 }
 
-/** Rows changed after a sequence, table by table (`g9_rows_feed (tid, local_seq)` serves each read). */
+/**
+ * Rows changed after a sequence, table by table (`g9_rows_feed (tid, local_seq)` serves each part) — as ONE statement:
+ * a query per table cost a bridge call per table on every apply (LES-0055).
+ */
 export async function readRowsChangedAfter(store: StoreInternals, connection: G9SqliteConnection, sequence: number, add: (tid: number, key: string) => void): Promise<void> {
-  for (const table of store.byLocal.values()) {
-    for (const r of await connection.query('SELECT pk FROM g9_rows WHERE tid = $t AND local_seq > $c', { $t: table.tid, $c: sequence })) add(table.tid, asString(r[0]));
+  const tids = Array.from(store.byLocal.values()).map((table) => table.tid);
+  // SQLite allows 500 terms in a compound SELECT: one statement per 400 tables, all in one driver call.
+  const statements: G9DriverStatement[] = [];
+  for (let i = 0; i < tids.length; i += 400) {
+    const sql = tids
+      .slice(i, i + 400)
+      .map((tid) => `SELECT ${tid} AS tid, pk FROM g9_rows WHERE tid = ${tid} AND local_seq > $c`)
+      .join(' UNION ALL ');
+    for (const statement of statementsOf(sql, { $c: sequence })) statements.push(statement);
   }
+  for (const result of await connection.runStatements(statements)) for (const r of result.rows) add(asNumber(r[0]), asString(r[1]));
 }
 
 /** Rows each table receives from snapshot parts of a plan, by server table id. */
@@ -264,11 +278,24 @@ async function deferIndexes(store: StoreInternals, context: ApplyContext, snapsh
   }
 }
 
+/**
+ * What `downloadDurability` reads of a connection, read ONCE per connection: the store's connections set their journal
+ * mode when they open and nobody else touches their `synchronous`, so asking again for every staged chunk only cost two
+ * bridge calls per chunk (LES-0056).
+ */
+const durabilityOf = new WeakMap<G9SqliteConnection, { wal: boolean; synchronous: number }>();
+
 /** `synchronous=NORMAL` while a transaction writes only server-derived data (WAL only); returns the restore action. */
 export async function downloadDurability(store: StoreInternals, connection: G9SqliteConnection): Promise<(() => Promise<void>) | null> {
   if (!store.options.synchronousNormalForDownloads) return null;
-  if (asString(await connection.scalar('PRAGMA journal_mode')).toLowerCase() !== 'wal') return null;
-  const previous = asNumber(await connection.scalar('PRAGMA synchronous'));
+  let known = durabilityOf.get(connection);
+  if (!known) {
+    const wal = asString(await connection.scalar('PRAGMA journal_mode')).toLowerCase() === 'wal';
+    known = { wal, synchronous: wal ? asNumber(await connection.scalar('PRAGMA synchronous')) : 0 };
+    durabilityOf.set(connection, known);
+  }
+  if (!known.wal) return null;
+  const previous = known.synchronous;
   if (previous <= 1) return null;
   await connection.exec('PRAGMA synchronous = NORMAL');
   return async () => {
@@ -305,11 +332,12 @@ export async function applyFrame(store: StoreInternals, context: ApplyContext, f
       case G9ERowBatchOp.Tombstone:
         while (reader.readRow()) await applyTombstone(context, table, reader.key, reader.version);
         break;
-      case G9ERowBatchOp.MoveOut:
-        while (reader.readRow()) {
-          if (slot >= 0) await moveOut(store, context, table, reader.key, subscriptionKey as string, slot, ephemeral, policy);
-        }
+      case G9ERowBatchOp.MoveOut: {
+        const keys: string[] = [];
+        while (reader.readRow()) keys.push(reader.key);
+        if (slot >= 0) await moveOutMany(store, context, table, keys, subscriptionKey as string, slot, ephemeral, policy);
         break;
+      }
     }
     context.addTableTime(table.model.localName, context.rows - rowsBefore, Date.now() - started);
   }
@@ -465,6 +493,50 @@ export async function moveOut(
   const removed = await disposeReleasedRow(store, context.connection, table, key, G9ERevocationReason.LeftScope, subscriptionKey, context.report);
   await context.connection.exec(BUMP);
   if (removed) context.addChanged(table.model.localName, key);
+}
+
+/**
+ * A run of move-outs of one table (a MoveOut section of a frame, or a reconciliation's move-out keys), with the database
+ * state the row-by-row {@link moveOut} leaves. Row by row a released row costs ~8 driver calls (flush, read metadata,
+ * commands, the app row, the writes, the clock): ~34 ms per row on the Android emulator, minutes for a large office
+ * change. Here every membership update is queued and flushed once, then the released rows are disposed in bulk by
+ * disposeReleasedRows — read in three queries, decided in the same order, written in batches with each row's explicit
+ * local_seq (the clock's value the row-by-row path gives it), the clock moved once by the number of rows. Exact for the
+ * same reasons as an unsubscribe (ADR-0071 addendum) plus one: the keys of a run are distinct, so no row's membership
+ * update can change another row's decision. Ephemeral subscriptions, a Keep policy, duplicate keys or a foreign trigger
+ * take the row-by-row path.
+ */
+export async function moveOutMany(
+  store: StoreInternals,
+  context: ApplyContext,
+  table: LocalTable,
+  keys: readonly string[],
+  subscriptionKey: string,
+  slot: number,
+  ephemeral: boolean,
+  policy: G9EMoveOutPolicy,
+): Promise<void> {
+  if (keys.length === 0) return;
+  const distinct = new Set(keys).size === keys.length;
+  if (keys.length === 1 || ephemeral || policy !== G9EMoveOutPolicy.Delete || !distinct || context.hasForeignTriggers) {
+    for (const key of keys) await moveOut(store, context, table, key, subscriptionKey, slot, ephemeral, policy);
+    return;
+  }
+  const notBit = bit(slot).not();
+  for (const key of keys) await context.queue('UPDATE g9_rows SET subs = subs & $n WHERE tid = $t AND pk = $pk', { $n: notBit, $t: table.tid, $pk: key });
+  context.report.moveOuts += keys.length;
+  // The disposal reads the rows: run what is queued (this run's membership updates and everything the pull queued before).
+  await context.flush();
+  await disposeReleasedRows(
+    store,
+    context.connection,
+    'SELECT $tid AS tid, j.value AS pk FROM json_each($keys) AS j ORDER BY j.key',
+    { $tid: table.tid, $keys: JSON.stringify(keys) },
+    G9ERevocationReason.LeftScope,
+    subscriptionKey,
+    context.report,
+    (_tid, key) => context.addChanged(table.model.localName, key),
+  );
 }
 
 /** `AddMembership`. */
@@ -662,7 +734,7 @@ export async function applyReconcile(
             await addMembership(context, local, key, subscription.slot, subscription.ephemeral ? subscriptionKey : null);
             context.report.membershipAdded++;
           }
-          for (const key of moveOutKeys) await moveOut(store, context, local, key, subscriptionKey, subscription.slot, subscription.ephemeral, policy);
+          await moveOutMany(store, context, local, moveOutKeys, subscriptionKey, subscription.slot, subscription.ephemeral, policy);
         }
         await endApply(context);
         return context.report;

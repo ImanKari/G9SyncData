@@ -16,7 +16,7 @@ import type {
 } from '../client/storeTypes.js';
 import type { G9DtNegotiatedTable, G9DtSyncChunk, G9DtTableDigest } from '../protocol/dtos.js';
 import { readContinuation, readPullPlan } from '../protocol/wire.js';
-import { asLong, asNumber, asOptionalString, asString, type G9SqliteConnection } from './connection.js';
+import { asLong, asNumber, asOptionalString, asString, statementsOf, type G9SqliteConnection } from './connection.js';
 import type { G9SqlValue } from './driver.js';
 import { findByServerName, getLocal, persistedJson, readSubscriptions, type LocalTable, type StoreInternals } from './internals.js';
 import { allColumnsMask, bit, keyExpression, literal, NOW_MS, quote } from './sql.js';
@@ -119,20 +119,18 @@ export async function stageChunk(store: StoreInternals, runId: string, chunk: G9
     const connection = store.writer();
     const restore = await durability(connection);
     try {
-      await connection.transaction('immediate', async () => {
-        await connection.exec(
-          'INSERT OR REPLACE INTO g9_stage (run_id, seq, subscription_key, row_count, continuation_json, payload) VALUES ($r, $s, $k, $n, $c, $p)',
-          {
-            $r: runId,
-            $s: chunk.sequence,
-            $k: chunk.subscriptionKey ?? null,
-            $n: chunk.rowCount,
-            $c: chunk.continuation ? persistedJson(chunk.continuation) : null,
-            $p: chunk.payload ?? null,
-          },
-        );
-        if (chunk.isFinal) await connection.exec('UPDATE g9_stage_runs SET complete = 1 WHERE run_id = $r', { $r: runId });
-      });
+      // One transaction, one bridge call (a chunk used to cost ~7: PRAGMA reads, begin, insert, commit — LES-0056).
+      await connection.runAtomic([
+        ...statementsOf('INSERT OR REPLACE INTO g9_stage (run_id, seq, subscription_key, row_count, continuation_json, payload) VALUES ($r, $s, $k, $n, $c, $p)', {
+          $r: runId,
+          $s: chunk.sequence,
+          $k: chunk.subscriptionKey ?? null,
+          $n: chunk.rowCount,
+          $c: chunk.continuation ? persistedJson(chunk.continuation) : null,
+          $p: chunk.payload ?? null,
+        }),
+        ...(chunk.isFinal ? statementsOf('UPDATE g9_stage_runs SET complete = 1 WHERE run_id = $r', { $r: runId }) : []),
+      ]);
     } finally {
       if (restore) await restore();
     }
