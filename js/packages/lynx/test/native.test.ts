@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { crc32 } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
-import { VERSION } from '../src/index.js';
 import { createG9SyncDataBridge, exposeG9SyncData, type G9SyncDataBridgeEnvelope } from '../src/lynxtron/index.js';
 import {
   G9NativeModuleError,
@@ -21,6 +20,9 @@ import {
   setG9SyncDataNative,
   type G9SyncDataNative,
 } from '../src/native.js';
+
+// The version the bridge reports is the package's (check-versions keeps every copy equal); read without importing the runtime.
+const VERSION = (JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { version: string }).version;
 
 const { Arg: ARG, Invalid: INVALID, Unavailable: UNAVAILABLE } = G9SyncBrotliErrorCode;
 
