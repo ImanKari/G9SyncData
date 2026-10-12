@@ -135,6 +135,29 @@ internal sealed class G9DtTokenPart
     public G9EPullPartKind Kind { get; set; }
     public string? PreviousSnapshot { get; set; }
     public List<string> Columns { get; set; } = [];
+
+    /// <summary>
+    ///     The file of a <see cref="G9EPullPartKind.SnapshotFile" /> part: everything needed to build it again, so the pull - or its resume -
+    ///     can be served by any instance (ADR-0072).
+    /// </summary>
+    public G9DtTokenFile? File { get; set; }
+}
+
+internal sealed class G9DtTokenFile
+{
+    public string FileId { get; set; } = string.Empty;
+    public string Identity { get; set; } = string.Empty;
+    public string Snapshot { get; set; } = string.Empty;
+    public DateTime SnapshotUtc { get; set; }
+    public G9DtSnapshotFileStorage Storage { get; set; } = new();
+    public List<G9DtTokenFileTable> Tables { get; set; } = [];
+}
+
+internal sealed class G9DtTokenFileTable
+{
+    public string Table { get; set; } = string.Empty;
+    public List<string> Columns { get; set; } = [];
+    public G9DtSnapshotFileTable Shape { get; set; } = new();
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]

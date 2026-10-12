@@ -11,6 +11,7 @@ import type {
   G9DtPullContinuation,
   G9DtPullPlan,
   G9DtPushResult,
+  G9DtSnapshotFileRequest,
   G9DtSubscriptionDefinition,
   G9DtSubscriptionRef,
   G9DtSyncChunk,
@@ -142,6 +143,13 @@ export const REASON_TABLE_NOT_EMPTY = 'table-not-empty';
 const MAX_FOREIGN_TRIGGER_NAMES = 10;
 
 /** How an apply ran, as opposed to what it changed (`G9CApplyDiagnostics`, ADR-0058). */
+/** A file table copied record for record into an empty table with identical columns (the transfer optimisation). */
+export const FILE_MODE_COPY = 'copy';
+/** A file table copied into an empty table by column name. */
+export const FILE_MODE_COLUMNS = 'columns';
+/** A file table merged into a table that held rows or protected rows: changed rows only. */
+export const FILE_MODE_MERGE = 'merge';
+
 export class G9ApplyDiagnostics {
   transactions = 0;
   transactionsWithTriggersSkipped = 0;
@@ -152,6 +160,14 @@ export class G9ApplyDiagnostics {
   readonly msByTable: { [table: string]: number } = {};
   indexRebuildMs = 0;
   elapsedMs = 0;
+  /** Snapshot files copied in (ADR-0072). */
+  snapshotFiles = 0;
+  /** Rows that arrived through snapshot files. */
+  fileRows = 0;
+  /** Milliseconds spent copying snapshot files, metadata included. */
+  fileCopyMs = 0;
+  /** How each table came out of a snapshot file: `copy`, `columns` or `merge` (see FILE_MODE_*). */
+  readonly fileTables: { [table: string]: string } = {};
 
   /** True when every transaction ran with trigger execution off, false when any ran with it on, null when nothing was applied. */
   get triggersSkipped(): boolean | null {
@@ -169,6 +185,10 @@ export class G9ApplyDiagnostics {
     this.transactionsWithTriggersSkipped += other.transactionsWithTriggersSkipped;
     this.indexRebuildMs += other.indexRebuildMs;
     this.elapsedMs += other.elapsedMs;
+    this.snapshotFiles += other.snapshotFiles;
+    this.fileRows += other.fileRows;
+    this.fileCopyMs += other.fileCopyMs;
+    for (const key of Object.keys(other.fileTables)) this.fileTables[key] = other.fileTables[key] as string;
     for (const name of other.foreignTriggers) {
       if (this.foreignTriggers.length >= MAX_FOREIGN_TRIGGER_NAMES) break;
       if (!this.foreignTriggers.some((n) => n.toLowerCase() === name.toLowerCase())) this.foreignTriggers.push(name);
@@ -196,6 +216,14 @@ export class G9ApplyDiagnostics {
     }
     const live = Object.keys(this.liveIndexReasons);
     if (live.length > 0) text += '; live indexes on ' + live.map((t) => t + ' (' + this.liveIndexReasons[t] + ')').join(', ');
+    if (this.snapshotFiles > 0) {
+      text +=
+        `; ${this.snapshotFiles} snapshot file(s), ${this.fileRows} rows copied in ${this.fileCopyMs} ms (` +
+        Object.keys(this.fileTables)
+          .map((t) => t + ':' + this.fileTables[t])
+          .join(', ') +
+        ')';
+    }
     const slowest = Object.keys(this.msByTable)
       .sort((a, b) => (this.msByTable[b] as number) - (this.msByTable[a] as number))
       .slice(0, 4);
@@ -593,6 +621,11 @@ export interface G9SyncClientStore {
   pruneStagedPulls(olderThanUtcMs: number, maxBytes: number, keepGeneration: string | null, signal?: AbortSignal): Promise<number>;
   discardAllStagedPulls(signal?: AbortSignal): Promise<number>;
   stageChunk(runId: string, chunk: G9DtSyncChunk, signal?: AbortSignal): Promise<void>;
+  /**
+   * The store's offer to receive large first downloads as SQLite snapshot files (ADR-0072), or null for rows only. A store that
+   * makes an offer stages file segments (`chunk.file`) in `stageChunk` and copies the files in `applyStagedPull`.
+   */
+  describeSnapshotFiles?(negotiated: readonly G9DtNegotiatedTable[]): G9DtSnapshotFileRequest | null;
   getResumePoint(runId: string, signal?: AbortSignal): Promise<G9ResumePoint>;
   applyStagedPull(
     runId: string,

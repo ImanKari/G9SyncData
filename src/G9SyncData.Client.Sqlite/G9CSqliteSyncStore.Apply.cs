@@ -35,6 +35,17 @@ public sealed partial class G9CSqliteSyncStore
                 while (reader.Read()) sequences.Add(reader.GetInt64(0));
             }
 
+            // Snapshot files (ADR-0072) apply where their part sits in the plan - at the sequence of their first segment - so a delta that
+            // follows a file in the plan lands on top of it. Each is checked and ATTACHed before the transaction (SQLite cannot attach
+            // inside one) and detached when the apply is over, whatever happened.
+            var files = ReadStagedFiles(connection, null, runId);
+            foreach (var file in files) VerifyStagedFile(file);
+            var units = sequences.Select(sequence => (Sequence: sequence, File: -1))
+                .Concat(files.Select((file, i) => (Sequence: file.FirstSequence, File: i)))
+                .OrderBy(unit => unit.Sequence).ThenBy(unit => unit.File)
+                .ToList();
+            using var attached = new AttachedFiles(connection, files);
+
             // Slicing only pays for itself when someone is listening for the slices (ADR-0053).
             var sliceRows = slices is null ? 0 : _options.ApplySliceRows;
             var snapshotRows = SnapshotRowsByTable(staged.Plan);
@@ -52,9 +63,9 @@ public sealed partial class G9CSqliteSyncStore
             // transaction as well: measured on 500,000 rows, 2,000-row commits cost 2.3x over a single transaction with the same
             // live indexes, and nothing is waiting to watch a first load row by row. Which of its tables then drop their indexes
             // is decided per table, in DeferIndexes.
-            var largeSnapshot = _options.RebuildIndexesAfterRows > 0
-                                && snapshotRows.Values.Any(rows => rows >= _options.RebuildIndexesAfterRows);
-            var progressive = sliceRows > 0 && sequences.Count > 1 && !largeSnapshot;
+            var largeSnapshot = (_options.RebuildIndexesAfterRows > 0 && snapshotRows.Values.Any(rows => rows >= _options.RebuildIndexesAfterRows))
+                                || files.Count > 0;
+            var progressive = sliceRows > 0 && units.Count > 1 && !largeSnapshot;
 
             // Read ONCE, before any slice commits. A row an earlier slice applied carries a local_seq past the stage sequence, so
             // recomputing this per slice would make the run protect its own work from itself and silently drop later frames for
@@ -75,16 +86,16 @@ public sealed partial class G9CSqliteSyncStore
             do
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var slice = new List<long>();
+                var slice = new List<(long Sequence, int File)>();
                 var final = true;
-                for (; index < sequences.Count; index++)
+                for (; index < units.Count; index++)
                 {
-                    slice.Add(sequences[index]);
+                    slice.Add(units[index]);
                     if (!progressive) continue;
 
                     // A chunk is the unit: rows are only counted once the slice is read, so this closes the slice at the first
                     // chunk boundary past the budget rather than splitting a frame.
-                    if (StagedRowCount(connection, runId, slice) >= sliceBudget && index + 1 < sequences.Count)
+                    if (StagedRowCount(connection, runId, slice.Select(unit => unit.Sequence).ToList()) >= sliceBudget && index + 1 < units.Count)
                     {
                         index++;
                         final = false;
@@ -106,9 +117,15 @@ public sealed partial class G9CSqliteSyncStore
                 {
                     payloadCommand.Parameters.AddWithValue("$r", runId);
                     var seqParameter = payloadCommand.Parameters.Add("$s", SqliteType.Integer);
-                    foreach (var sequence in slice)
+                    foreach (var (sequence, file) in slice)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        if (file >= 0)
+                        {
+                            ApplySnapshotFile(context, AttachedFiles.Schema(file), files[file]);
+                            continue;
+                        }
+
                         seqParameter.Value = sequence;
                         byte[] payload;
                         string? subscriptionKey;
@@ -135,20 +152,29 @@ public sealed partial class G9CSqliteSyncStore
                     // every site shares, typically - and moved its cursor PAST this plan's. Its rows are safe either way (they carry a
                     // local_seq beyond the stage sequence, so the frames above skipped them); setting the cursor back would only make
                     // the next pull fetch that range again. "IS", because a first pull plans from a NULL cursor.
+                    // A subscription that arrived as a snapshot file knows the server as of the file's snapshot, brought forward by the deltas
+                    // that followed it - the state a device that synced back then would have. Its next safety reconciliation (the one that
+                    // finds rows that left the scope without changing, which no delta can see) is due counting from the file, not from now.
+                    var reconciledAt = staged.Plan.Parts
+                        .Where(part => part is { Kind: G9EPullPartKind.SnapshotFile, File: not null })
+                        .GroupBy(part => part.SubscriptionKey, StringComparer.Ordinal)
+                        .ToDictionary(group => group.Key, group => ToUnixMs(group.Min(part => part.File!.SnapshotUtc)), StringComparer.Ordinal);
                     foreach (var cursor in staged.Plan.Cursors)
                     {
-                        const string update = "UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, " +
-                                              "last_success_utc = $now WHERE key = $k";
+                        var update = "UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, " +
+                                     "last_success_utc = $now" + (reconciledAt.ContainsKey(cursor.Key) ? ", last_reconcile_utc = $rec" : string.Empty) + " WHERE key = $k";
+                        var parameters = new List<(string Name, object? Value)>
+                        {
+                            ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key)
+                        };
+                        if (reconciledAt.TryGetValue(cursor.Key, out var at)) parameters.Add(("$rec", at));
                         if (staged.PlannedFromCursors.TryGetValue(cursor.Key, out var plannedFrom))
                         {
-                            Exec(connection, transaction, update + " AND cursor IS $from",
-                                ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key), ("$from", plannedFrom));
+                            update += " AND cursor IS $from";
+                            parameters.Add(("$from", plannedFrom));
                         }
-                        else
-                        {
-                            Exec(connection, transaction, update,
-                                ("$c", cursor.Cursor), ("$d", cursor.DefinitionHash), ("$a", cursor.AuthHash), ("$now", NowMs()), ("$k", cursor.Key));
-                        }
+
+                        Exec(connection, transaction, update, [.. parameters]);
                     }
 
                     foreach (var backfill in staged.Backfills)
@@ -164,12 +190,26 @@ public sealed partial class G9CSqliteSyncStore
                 EndApply(context);
 
                 // The staged chunks this slice consumed go with it, so a resumed run never applies them twice.
-                if (slice.Count > 0)
+                var consumed = slice.Where(unit => unit.File < 0).Select(unit => unit.Sequence).ToList();
+                if (consumed.Count > 0)
                 {
-                    Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r AND seq IN (" + string.Join(",", slice) + ")", ("$r", runId));
+                    Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r AND seq IN (" + string.Join(",", consumed) + ")", ("$r", runId));
                 }
-                if (final) Exec(connection, transaction, "DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
+
+                List<string> doneFiles = [];
+                if (final)
+                {
+                    // Everything left of the stage - markers, file checkpoints, file records - goes with the last slice.
+                    doneFiles = TakeStagedFiles(connection, transaction, "$r", ("$r", runId));
+                    Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
+                }
+
                 transaction.Commit();
+                if (doneFiles.Count > 0)
+                {
+                    attached.Dispose();
+                    DeleteFiles(doneFiles);
+                }
 
                 foreach (var (table, synced) in syncedUpdates) table.SyncedColumns = synced;
                 appliedTotal += context.Rows;
@@ -177,7 +217,7 @@ public sealed partial class G9CSqliteSyncStore
                 rowsApplied?.Report(appliedTotal);
                 slices?.Report(new G9CApplySlice(context.Report, context.Rows, appliedTotal, staged.Plan.TotalRows, final));
             }
-            while (index < sequences.Count);
+            while (index < units.Count);
 
             total.Diagnostics.ElapsedMs = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             if (total.Diagnostics.Transactions > 0 && appliedTotal > 0) LogApplyDiagnostics(_logger, appliedTotal, total.Diagnostics.ToString());
@@ -406,9 +446,54 @@ public sealed partial class G9CSqliteSyncStore
         }
     }
 
-    /// <summary>Rows each table receives from snapshot parts of a plan, by server table id.</summary>
+    /// <summary>
+    ///     Rows each table receives from row snapshot parts of a plan, by server table id. Snapshot FILES are not counted: a table filled from
+    ///     a file keeps the indexes the file can supply and the copy moves them as they are (ADR-0072).
+    /// </summary>
     private static Dictionary<int, long> SnapshotRowsByTable(G9DtPullPlan plan) =>
         plan.Parts.Where(p => p.Kind == G9EPullPartKind.Snapshot).GroupBy(p => p.TableId).ToDictionary(g => g.Key, g => g.Sum(p => p.Rows));
+
+    /// <summary>The snapshot files of a stage, ATTACHed as <c>g9snap0</c>, <c>g9snap1</c>, ... for one apply and detached on disposal.</summary>
+    private sealed class AttachedFiles : IDisposable
+    {
+        private readonly SqliteConnection _connection;
+        private int _count;
+
+        public AttachedFiles(SqliteConnection connection, IReadOnlyList<StagedFile> files)
+        {
+            _connection = connection;
+            try
+            {
+                foreach (var file in files)
+                {
+                    Exec(connection, null, "ATTACH DATABASE $p AS " + Schema(_count), ("$p", file.Path));
+                    _count++;
+                }
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        public static string Schema(int index) => "g9snap" + index.ToString(CultureInfo.InvariantCulture);
+
+        public void Dispose()
+        {
+            for (; _count > 0; _count--)
+            {
+                try
+                {
+                    Exec(_connection, null, "DETACH DATABASE " + Schema(_count - 1));
+                }
+                catch (G9CSqliteException)
+                {
+                    // Left attached: the pooled handle is closed with the store, and the file is deleted at the next start.
+                }
+            }
+        }
+    }
 
     /// <summary>
     ///     The triggers in the database that the library did not create. Any one of them keeps trigger execution on for the whole apply:
@@ -646,66 +731,9 @@ public sealed partial class G9CSqliteSyncStore
         }
     }
 
-    private const string DateTimeOffsetFormat = "yyyy-MM-dd'T'HH:mm:ss.fffffffzzz";
-
     /// <summary>Binds one frame value in its local storage form (the forms <see cref="ToDbValue" /> produces) without allocating.</summary>
-    private void BindValue(SqliteRowStatement statement, int index, G9CRowBatchReader reader, int column, G9ESyncColumnType type)
-    {
-        if (reader.IsNull(column))
-        {
-            statement.BindNull(index);
-            return;
-        }
-
-        Span<byte> buffer = stackalloc byte[64];
-        switch (type)
-        {
-            case G9ESyncColumnType.Boolean:
-                statement.BindInt64(index, reader.GetBoolean(column) ? 1 : 0);
-                break;
-            case G9ESyncColumnType.Int32:
-                statement.BindInt64(index, reader.GetInt32(column));
-                break;
-            case G9ESyncColumnType.Int64:
-                statement.BindInt64(index, reader.GetInt64(column));
-                break;
-            case G9ESyncColumnType.TimeSpan:
-                statement.BindInt64(index, reader.GetTimeSpan(column).Ticks);
-                break;
-            case G9ESyncColumnType.Double:
-                statement.BindDouble(index, reader.GetDouble(column));
-                break;
-            case G9ESyncColumnType.Decimal:
-                var number = reader.GetDecimal(column);
-                if (_options.DecimalStorage == G9ESqliteDecimalStorage.Real) statement.BindDouble(index, (double)number);
-                else if (number.TryFormat(buffer, out var decimalLength, default, CultureInfo.InvariantCulture)) statement.BindText(index, buffer[..decimalLength]);
-                else statement.BindText(index, number.ToString(CultureInfo.InvariantCulture));
-                break;
-            case G9ESyncColumnType.String:
-                statement.BindText(index, reader.GetUtf8(column));
-                break;
-            case G9ESyncColumnType.Guid:
-                reader.GetGuid(column).TryFormat(buffer, out var guidLength);
-                statement.BindText(index, buffer[..guidLength]);
-                break;
-            case G9ESyncColumnType.DateTime:
-                var moment = reader.GetDateTime(column);
-                if (_options.DateTimeStorage == G9ESqliteDateTimeStorage.Ticks) statement.BindInt64(index, moment.Ticks);
-                else if (moment.TryFormat(buffer, out var dateLength, _options.DateTimeFormat, CultureInfo.InvariantCulture)) statement.BindText(index, buffer[..dateLength]);
-                else statement.BindText(index, moment.ToString(_options.DateTimeFormat, CultureInfo.InvariantCulture));
-                break;
-            case G9ESyncColumnType.DateTimeOffset:
-                var offset = reader.GetDateTimeOffset(column);
-                if (offset.TryFormat(buffer, out var offsetLength, DateTimeOffsetFormat, CultureInfo.InvariantCulture)) statement.BindText(index, buffer[..offsetLength]);
-                else statement.BindText(index, offset.ToString(DateTimeOffsetFormat, CultureInfo.InvariantCulture));
-                break;
-            case G9ESyncColumnType.Bytes:
-                statement.BindBlob(index, reader.GetBytes(column));
-                break;
-            default:
-                throw new InvalidOperationException($"Unsupported column type {type}.");
-        }
-    }
+    private void BindValue(SqliteRowStatement statement, int index, G9CRowBatchReader reader, int column, G9ESyncColumnType type) =>
+        SqliteValueBinder.Bind(statement, index, reader, column, type, _options);
 
     private void ApplyBackfill(ApplyContext context, G9CRowBatchReader reader, LocalTable table)
     {
@@ -896,6 +924,16 @@ public sealed partial class G9CSqliteSyncStore
         public bool HasDirty(long tid) => _dirtyTables.Contains(tid);
 
         public bool WantsChangedKey(string table) => !Report.ChangedKeys.TryGetValue(table, out var keys) || keys.Count < maxChangedKeys;
+
+        public int MaxChangedKeys => maxChangedKeys;
+
+        /// <summary>Counts rows applied in bulk (a snapshot file's table) and reports progress once for them.</summary>
+        public void Advance(long rows)
+        {
+            if (rows <= 0) return;
+            Rows += rows;
+            progress?.Report(Rows);
+        }
 
         public SqliteRowStatement GetRowStatement(string key, Func<string> sql)
         {

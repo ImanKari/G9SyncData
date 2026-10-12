@@ -5,6 +5,7 @@ import type {
   G9DtFetchRowsRequest,
   G9DtHelloRequest,
   G9DtPullContinuation,
+  G9DtPullRequest,
   G9DtPushRequest,
   G9DtReconcileRequest,
   G9DtSubscriptionRef,
@@ -60,6 +61,33 @@ export function pushChunk(): G9DtSyncChunk {
     isFinal: true,
     continuation: null,
     reconcileSummary: null,
+  };
+}
+
+export function pullRequest(): G9DtPullRequest {
+  return {
+    clientId,
+    subscriptions: [subscription()],
+    tables: [{ tableId: 3, columns: ['Code'] }],
+    backfills: [{ tableId: 3, columns: ['Weight'] }],
+    frameVersion: 2,
+    snapshotFiles: {
+      formatVersion: 1,
+      storage: { dateTimeAsTicks: false, dateTimeFormat: "yyyy-MM-dd'T'HH:mm:ss.fffffff", decimalAsText: false },
+      tables: [
+        {
+          tableId: 3,
+          localName: 'Pot',
+          keyColumn: 'Id',
+          keyType: 7,
+          columns: [{ name: 'Code', type: 6, nullable: false }],
+          indexes: [{ name: 'IX_Pot_Code', columns: ['Code'], unique: true }],
+        },
+      ],
+      minRows: 20000,
+      maxBytes: 2147483648,
+      maxFiles: 8,
+    },
   };
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and runs the iOS Brotli core (ios/src/core/G9SyncDataBrotliCore.m) with its suite (ios/Tests/linux/main.m).
+# Builds and runs the iOS cores (ios/src/core: Brotli + snapshot files) with their suite (ios/Tests/linux/main.m).
 # Linux: clang + GNUstep base, and libbrotlidec (runtime library only) as the stand-in for Apple's Compression framework.
 # Needs: apt-get install -y clang make libgnustep-base-dev gobjc libbrotli1. On Windows `npm run test:ios-core` runs this
 # in WSL.
@@ -11,7 +11,8 @@ out=build/ios-core
 mkdir -p "$out"
 if [ "$(uname -s)" = Darwin ]; then
   clang -fobjc-arc -framework Foundation -lcompression -DG9_HAVE_APPLE_COMPRESSION -Werror=objc-method-access \
-    -Wno-unused-parameter -o "$out/ios-core-tests" ios/src/core/G9SyncDataBrotliCore.m ios/Tests/linux/main.m
+    -Wno-unused-parameter -o "$out/ios-core-tests" ios/src/core/G9SyncDataBrotliCore.m \
+    ios/src/core/G9SyncDataSnapshotFileCore.m ios/Tests/linux/main.m
   exec "$out/ios-core-tests"
 fi
 flags=$(gnustep-config --objc-flags | tr ' ' '\n' | grep -v '^-M' | tr '\n' ' ')
@@ -30,6 +31,6 @@ else
 fi
 # shellcheck disable=SC2086
 clang $flags -fobjc-runtime=gcc ${gcc_include:+-I$gcc_include} -Wno-unused-command-line-argument -Werror=objc-method-access \
-  -Wno-unused-parameter -o "$out/ios-core-tests" ios/src/core/G9SyncDataBrotliCore.m ios/Tests/linux/main.m \
-  "${brotli_flags[@]}" $libs -lm
+  -Wno-unused-parameter -o "$out/ios-core-tests" ios/src/core/G9SyncDataBrotliCore.m \
+  ios/src/core/G9SyncDataSnapshotFileCore.m ios/Tests/linux/main.m "${brotli_flags[@]}" $libs -lm
 "$out/ios-core-tests"

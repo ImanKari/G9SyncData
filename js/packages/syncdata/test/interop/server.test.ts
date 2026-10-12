@@ -1,10 +1,10 @@
 /// <reference types="node" />
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { nodeSqliteDriver, useNodeBrotli } from '../../src/node/index.js';
+import { nodeSnapshotFileSink, nodeSqliteDriver, useNodeBrotli } from '../../src/node/index.js';
 import { G9ESyncHubProtocol, G9SignalRSyncTransport } from '../../src/signalr/transport.js';
 import { postgresAvailable, runDotnetClient, startServer, withServerLog, type SampleServer } from './harness.js';
 import { createClient, initialSync, runScenario, type ScenarioDeps } from './scenario.js';
@@ -61,6 +61,30 @@ describe.skipIf(unavailable !== null)('the TypeScript client against the real .N
     afterAll(async () => {
       await server?.stop();
     });
+
+    it('a snapshot FILE copied by the TypeScript store leaves the database the .NET store leaves (ADR-0072)', async () => {
+      const folder = join(scratch, 'parity-files');
+      const dotnet = await runDotnetClient(server.hubUrl, join(folder, 'dotnet.db'));
+      const d = { ...deps(server, G9ESyncHubProtocol.MessagePack, folder), snapshotFiles: (name: string) => nodeSnapshotFileSink(join(folder, name + '.g9files')) };
+      const client = await createClient(d, 'typescript');
+      let files = 0;
+      let modes: string[] = [];
+      client.engine.onRowsApplied((event) => {
+        files += event.report.diagnostics.snapshotFiles;
+        modes = modes.concat(Object.keys(event.report.diagnostics.fileTables).map((t) => t + ':' + event.report.diagnostics.fileTables[t]));
+      });
+      try {
+        await initialSync(client, d);
+      } finally {
+        await client.dispose();
+      }
+      // Both sites came as files (2 x 25,000 pots, the sample server's threshold is 20,000), copied record for record.
+      expect(files).toBe(2);
+      // The first site lands in an empty table (copied record for record), the second merges into it.
+      expect(modes).toContain('Pot:copy+merge');
+      expect(readdirSync(join(folder, 'typescript.g9files'))).toEqual([]);
+      compareDatabases(dotnet, join(folder, 'typescript.db'));
+    }, 900000);
 
     it('a sync by the TypeScript store leaves the same database as one by the .NET store', async () => {
       const folder = join(scratch, 'parity');

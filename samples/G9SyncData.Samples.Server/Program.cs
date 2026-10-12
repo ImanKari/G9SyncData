@@ -12,9 +12,21 @@ var connectionString = builder.Configuration.GetConnectionString("G9Sync") is { 
 await SampleDatabase.EnsureAsync(connectionString);
 var dataSource = NpgsqlDataSource.Create(connectionString);
 
-builder.Services.AddG9SyncDataServer(SampleDatabase.ConfigureModel)
+var server = builder.Services.AddG9SyncDataServer(SampleDatabase.ConfigureModel)
     .UsePostgreSql(dataSource)
     .UseSignalR();
+
+// Large first downloads as SQLite snapshot files (ADR-0072) - on unless G9SYNC_SAMPLE_SNAPSHOT_FILES=off. A device that does not
+// offer to receive them still gets rows, so the sample serves both kinds of client.
+if (!string.Equals(Environment.GetEnvironmentVariable("G9SYNC_SAMPLE_SNAPSHOT_FILES"), "off", StringComparison.OrdinalIgnoreCase))
+{
+    var database = new NpgsqlConnectionStringBuilder(connectionString).Database ?? "g9sync_sample";
+    server.UseSnapshotFiles(options =>
+    {
+        options.Directory = Path.Combine(Path.GetTempPath(), "g9sync-sample-snapshot-files", database);
+        if (long.TryParse(Environment.GetEnvironmentVariable("G9SYNC_SAMPLE_FILE_MIN_ROWS"), out var minRows)) options.MinRows = minRows;
+    });
+}
 
 var app = builder.Build();
 app.UseWebSockets();

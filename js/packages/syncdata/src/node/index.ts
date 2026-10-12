@@ -6,6 +6,7 @@ import { setDefaultFrameDecompressor, type G9FrameDecompressor } from '../protoc
 import type { G9FrameCompressor } from '../protocol/rowBatch/writer.js';
 
 export { nodeSqliteDriver, G9NodeSqliteError } from './sqliteDriver.js';
+export { nodeSnapshotFileSink } from './snapshotFileSink.js';
 
 /** A frame decompressor over node:zlib. */
 export function nodeBrotliDecompressor(): G9FrameDecompressor {

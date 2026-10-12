@@ -104,6 +104,13 @@ public interface IG9SyncClientStore : IAsyncDisposable
 
     Task StageChunkAsync(string runId, G9DtSyncChunk chunk, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     The store's offer to receive large first downloads as SQLite snapshot files (ADR-0072): how it stores values and the shape of
+    ///     every table it receives. Null (the default) = rows only. A store that returns an offer must stage the file segments
+    ///     (<see cref="G9DtSyncChunk.File" />) in <see cref="StageChunkAsync" /> and copy the files in <see cref="ApplyStagedPullAsync" />.
+    /// </summary>
+    G9DtSnapshotFileRequest? DescribeSnapshotFiles(IReadOnlyList<G9DtNegotiatedTable> negotiated) => null;
+
     /// <summary>The last safe resume point of a staged run; chunks staged after it are discarded.</summary>
     Task<G9CResumePoint> GetResumePointAsync(string runId, CancellationToken cancellationToken);
 

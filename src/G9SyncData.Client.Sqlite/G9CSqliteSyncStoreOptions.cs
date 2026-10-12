@@ -144,6 +144,31 @@ public sealed class G9CSqliteSyncStoreOptions
     /// </summary>
     public long WalSizeLimitBytes { get; set; } = 64L * 1024 * 1024;
 
+    /// <summary>
+    ///     Accept a large first download as a SQLite snapshot file (ADR-0072): the server writes the subscription's rows into a file with
+    ///     this store's own DDL, and the apply copies the file's b-trees instead of inserting rows one by one. Default true; a server
+    ///     without snapshot files ignores the offer and sends rows.
+    /// </summary>
+    public bool AcceptSnapshotFiles { get; set; } = true;
+
+    /// <summary>A subscription is sent as a file only when its snapshot is at least this many rows; 0 leaves the threshold to the server.</summary>
+    public long SnapshotFileMinRows { get; set; }
+
+    /// <summary>The largest snapshot file accepted, uncompressed. Larger subscriptions come as rows. Default 2 GiB.</summary>
+    public long SnapshotFileMaxBytes { get; set; } = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>
+    ///     Where downloaded snapshot files are staged until the apply copies them; null = a <c>.g9files</c> directory beside the database.
+    ///     Use a non-backed-up location (a cache directory). Files are deleted when their pull is applied or discarded.
+    /// </summary>
+    public string? SnapshotFileDirectory { get; set; }
+
+    /// <summary>
+    ///     Bytes of a snapshot file written between two durable resume points (fsync of the file, then the stage row): a download
+    ///     interrupted mid-file resumes from the last one. Default 8 MiB.
+    /// </summary>
+    public int SnapshotFileCheckpointBytes { get; set; } = 8 * 1024 * 1024;
+
     internal string BuildConnectionString()
     {
         if (!string.IsNullOrWhiteSpace(ConnectionString)) return ConnectionString;

@@ -68,7 +68,24 @@ describe('hub messages from the .NET server (golden)', () => {
     expect(plan.token).toBe('tok.en');
     expect(plan.estimatedBytes).toBe(5000000000);
     expect(plan.parts[0]!.kind).toBe(1);
+    expect(plan.parts[0]!.file).toBeNull();
     expect(plan.skipped[0]!.action).toBe(6);
+    // A snapshot-file part (ADR-0072): no table of its own, its tables and its snapshot time in `file`.
+    expect(plan.parts[1]).toEqual({
+      subscriptionKey: 'Farm?farmId=7',
+      tableId: 0,
+      kind: 3,
+      rows: 450000,
+      estimatedBytes: 22000000,
+      file: {
+        fileId: '53c01b6fc8a629f20732c103c23758d0',
+        snapshotUtcMs: Date.UTC(2026, 9, 12, 8, 30, 0),
+        tables: [
+          { tableId: 3, rows: 300000 },
+          { tableId: 4, rows: 150000 },
+        ],
+      },
+    });
   });
 
   it('chunks, full and empty', () => {
@@ -76,8 +93,26 @@ describe('hub messages from the .NET server (golden)', () => {
     expect(bytesToHex(full.payload!)).toBe('010203faff');
     expect(full.continuation).toEqual({ partIndex: 1, afterKey: 'k', nextSequence: 4 });
     expect(full.reconcileSummary!.mismatched).toEqual([{ tableId: 3, buckets: [0, 255] }]);
+    expect(full.file).toEqual({
+      fileId: '53c01b6fc8a629f20732c103c23758d0',
+      index: 2,
+      offset: 2097152,
+      length: 1048576,
+      sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+      manifest: {
+        fileId: '53c01b6fc8a629f20732c103c23758d0',
+        formatVersion: 1,
+        bytes: 5000000000,
+        segmentBytes: 1048576,
+        segments: 4769,
+        sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        compression: 'br',
+        builtUtcMs: Date.UTC(2026, 9, 12, 8, 31, 5),
+        tables: [{ tableId: 3, name: 'Pot', versionTable: 'g9snap_ver_3', rows: 300000 }],
+      },
+    });
     const empty = decodeBoth('emptyChunk', readSyncChunk);
-    expect(empty).toEqual({ sequence: 0, payload: null, rowCount: 0, subscriptionKey: null, isFinal: false, continuation: null, reconcileSummary: null });
+    expect(empty).toEqual({ sequence: 0, payload: null, rowCount: 0, subscriptionKey: null, isFinal: false, continuation: null, reconcileSummary: null, file: null });
   });
 
   it('server poke, error completion, stream end', () => {
@@ -95,6 +130,7 @@ describe('hub messages from the .NET server (golden)', () => {
 describe('requests for the .NET server (js-vectors.json)', () => {
   const messages: { [name: string]: HubMessage } = {
     hello: { type: MessageType.Invocation, invocationId: '1', target: 'Hello', arguments: [samples.helloRequest()], streamIds: [] } as HubMessage,
+    planPull: { type: MessageType.Invocation, invocationId: '7', target: 'PlanPull', arguments: [samples.pullRequest()], streamIds: [] } as HubMessage,
     push: { type: MessageType.Invocation, invocationId: '2', target: 'Push', arguments: [samples.pushRequest()], streamIds: ['3'] } as HubMessage,
     pushItem: { type: MessageType.StreamItem, invocationId: '3', item: samples.pushChunk() } as HubMessage,
     pull: { type: MessageType.StreamInvocation, invocationId: '4', target: 'Pull', arguments: ['tok.en', samples.continuation()], streamIds: [] } as HubMessage,

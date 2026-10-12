@@ -57,6 +57,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\DeviceSchema.Client.cs" Link="Shared\DeviceSchema.Client.cs" />
+    <Compile Include="..\Shared\FarmReplaySchema.Client.cs" Link="Shared\FarmReplaySchema.Client.cs" />
     <Compile Include="..\Shared\DotmimDeviceSql.cs" Link="Shared\DotmimDeviceSql.cs" />
     <Compile Include="..\G9SyncData.Tests\Client\SqliteDotmimRetirementTests.cs" Link="Linked\Tests\SqliteDotmimRetirementTests.cs" />
     <Compile Include="..\..\benchmarks\G9SyncData.Benchmarks\SqliteApplyBenchmark.cs" Link="Linked\SqliteApplyBenchmark.cs" />

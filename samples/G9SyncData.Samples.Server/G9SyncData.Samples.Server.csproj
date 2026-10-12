@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\G9SyncData.Server.PostgreSql\G9SyncData.Server.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\G9SyncData.Server.SignalR\G9SyncData.Server.SignalR.csproj" />
+    <ProjectReference Include="..\..\src\G9SyncData.Server.SnapshotFiles\G9SyncData.Server.SnapshotFiles.csproj" />
   </ItemGroup>
 
 </Project>

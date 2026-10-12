@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS g9_ephemeral_rows (sub_key TEXT NOT NULL, tid INTEGER
 CREATE INDEX IF NOT EXISTS g9_ephemeral_rows_row ON g9_ephemeral_rows (tid, pk);
 CREATE TABLE IF NOT EXISTS g9_stage_runs (run_id TEXT NOT NULL PRIMARY KEY, plan_json TEXT NOT NULL, backfills_json TEXT NULL, created_utc INTEGER NOT NULL, complete INTEGER NOT NULL DEFAULT 0, generation TEXT NULL, stage_seq INTEGER NOT NULL DEFAULT 0, from_cursors_json TEXT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS g9_stage (run_id TEXT NOT NULL, seq INTEGER NOT NULL, subscription_key TEXT NULL, row_count INTEGER NOT NULL, continuation_json TEXT NULL, payload BLOB NULL, PRIMARY KEY (run_id, seq)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS g9_stage_files (
+    run_id TEXT NOT NULL, file_id TEXT NOT NULL, path TEXT NOT NULL, manifest_json TEXT NOT NULL, subscription_key TEXT NULL,
+    first_seq INTEGER NOT NULL, segments_done INTEGER NOT NULL DEFAULT 0, bytes_received INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (run_id, file_id)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS g9_rejections (
     tid INTEGER NOT NULL, pk TEXT NOT NULL, code TEXT NOT NULL, message TEXT NULL, sql_state TEXT NULL, constraint_name TEXT NULL,
     column_name TEXT NULL, details TEXT NULL, at_utc INTEGER NOT NULL, PRIMARY KEY (tid, pk)) WITHOUT ROWID;

@@ -1,10 +1,11 @@
 // Runs INSIDE the Lynx-shaped sandbox (scripts/lynx-sandbox.mjs): the interop scenario of @g9tm/syncdata with the Lynx
-// wiring of this package — the sync transport over the native WebSocket module, the Brotli native module — and a SQLite
-// driver over a native-style callback module (values cross a copying bridge, as on a device).
+// wiring of this package — the sync transport over the native WebSocket module, the Brotli native module, with `files`
+// the snapshot-file sink over the same module (ADR-0072) — and a SQLite driver over a native-style callback module
+// (values cross a copying bridge, as on a device).
 import { G9ESyncHubProtocol } from '@g9tm/syncdata/signalr';
-import type { G9DriverStatement, G9OpenOptions, G9RunOptions, G9SessionToken, G9SqliteDriver, G9TxToken } from '@g9tm/syncdata/sqlite';
+import type { G9DriverStatement, G9OpenOptions, G9RunOptions, G9SessionToken, G9SnapshotFileSink, G9SqliteDriver, G9TxToken } from '@g9tm/syncdata/sqlite';
 import { runScenario } from '../../../syncdata/test/interop/scenario.js';
-import { createLynxSyncTransport, useLynxBrotli } from '../../src/index.js';
+import { createLynxSnapshotFileSink, createLynxSyncTransport, getG9SyncDataNative, lynxSnapshotFileSink, useLynxBrotli } from '../../src/index.js';
 
 declare const NativeModules: { [name: string]: { [method: string]: (...args: unknown[]) => void } };
 declare const fetch: (url: string, init?: { method?: string }) => Promise<{ ok: boolean; status: number }>;
@@ -41,7 +42,20 @@ function callbackDriver(): G9SqliteDriver {
   };
 }
 
-export default async function (host: { hubUrl: string; serverUrl: string; dir: string; protocol: 'json' | 'messagepack' }): Promise<unknown> {
+/** The Lynx sink, counting what went through it (the segments never come back: only their count does). */
+function countingSink(directory: string, counts: { segments: number; bytes: number }): G9SnapshotFileSink {
+  const sink = createLynxSnapshotFileSink(directory);
+  return {
+    ...sink,
+    writeSegment: async (path, offset, compressed, length, sha256, sync) => {
+      await sink.writeSegment(path, offset, compressed, length, sha256, sync);
+      counts.segments++;
+      counts.bytes += compressed.byteLength;
+    },
+  };
+}
+
+export default async function (host: { hubUrl: string; serverUrl: string; dir: string; protocol: 'json' | 'messagepack'; files: boolean }): Promise<unknown> {
   const g = globalThis as Record<string, unknown>;
   const environment = {
     BigInt: typeof g.BigInt,
@@ -53,7 +67,19 @@ export default async function (host: { hubUrl: string; serverUrl: string; dir: s
   useLynxBrotli();
   const driver = callbackDriver();
   const choices: string[] = [];
+  const prefix = host.dir + '/' + host.protocol + (host.files ? '-files' : '');
+  const counts = { segments: 0, bytes: 0 };
+  const folders: string[] = [];
+  // The platform answers through the copying bridge: snapshot files on, and a sink for a database with no directory given.
+  const detected = host.files ? await lynxSnapshotFileSink(prefix + '-probe.db', { directory: prefix + '-probe.g9files' }) : null;
   const report = await runScenario({
+    snapshotFiles: host.files
+      ? (name) => {
+          const folder = prefix + '-' + name + '.g9files';
+          folders.push(folder);
+          return countingSink(folder, counts);
+        }
+      : undefined,
     driver,
     transport: () =>
       createLynxSyncTransport({
@@ -61,12 +87,16 @@ export default async function (host: { hubUrl: string; serverUrl: string; dir: s
         protocol: host.protocol === 'json' ? G9ESyncHubProtocol.Json : G9ESyncHubProtocol.MessagePack,
         lynx: { onTransportChosen: (choice) => choices.push(choice), logLevel: 'warning' },
       }),
-    databasePath: (name) => host.dir + '/' + host.protocol + '-' + name + '.db',
+    databasePath: (name) => prefix + '-' + name + '.db',
     addServerPots: async (count) => {
       const response = await fetch(host.serverUrl + '/sample/pots?count=' + count, { method: 'POST' });
       if (!response.ok) throw new Error('POST /sample/pots: ' + response.status);
     },
     log: (line) => console.log('[lynxsim] ' + line),
   });
-  return { environment, choices, pots: report.pots, lines: report.lines };
+  // Every staged file was deleted once its tables were copied.
+  const native = getG9SyncDataNative();
+  const left: string[] = [];
+  for (const folder of folders) left.push(...(native && native.snapshotFileList ? await native.snapshotFileList(folder) : ['no module']));
+  return { environment, choices, pots: report.pots, lines: report.lines, files: { detected: detected !== null, ...counts, left } };
 }

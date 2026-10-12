@@ -46,7 +46,8 @@ public sealed partial class G9CSqliteSyncStore
             // being resumed never counts and never goes - a first sync larger than the cap has to stay resumable (ADR-0060).
             long kept = 0;
             using (var command = Command(connection, transaction,
-                       "SELECT r.run_id, (SELECT coalesce(sum(length(payload)), 0) FROM g9_stage s WHERE s.run_id = r.run_id) FROM g9_stage_runs r " +
+                       "SELECT r.run_id, (SELECT coalesce(sum(length(payload)), 0) FROM g9_stage s WHERE s.run_id = r.run_id) " +
+                       "+ (SELECT coalesce(sum(bytes_received), 0) FROM g9_stage_files f WHERE f.run_id = r.run_id) FROM g9_stage_runs r " +
                        "WHERE r.created_utc >= $c AND (r.generation IS NULL OR r.generation <> $g) ORDER BY r.created_utc DESC"))
             {
                 command.Parameters.AddWithValue("$c", ToUnixMs(olderThanUtc));
@@ -59,12 +60,15 @@ public sealed partial class G9CSqliteSyncStore
                 }
             }
 
+            var files = new List<string>();
             foreach (var runId in doomed)
             {
+                files.AddRange(TakeStagedFiles(connection, transaction, "$r", ("$r", runId)));
                 Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
             }
 
             transaction.Commit();
+            DeleteFiles(files);
             return doomed.Count;
         }
         finally
@@ -81,8 +85,11 @@ public sealed partial class G9CSqliteSyncStore
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using var transaction = connection.BeginTransaction(deferred: false);
             var count = Convert.ToInt32(Scalar(connection, transaction, "SELECT count(*) FROM g9_stage_runs"), CultureInfo.InvariantCulture);
+            var files = TakeStagedFiles(connection, transaction, "SELECT run_id FROM g9_stage_files");
             Exec(connection, transaction, "DELETE FROM g9_stage; DELETE FROM g9_stage_runs;");
             transaction.Commit();
+            DeleteFiles(files);
+            _pendingSegments.Clear();
             return count;
         }
         finally
@@ -103,6 +110,7 @@ public sealed partial class G9CSqliteSyncStore
             // Only the stage this one replaces goes: the same generation, or - for a caller that stamps none - the unstamped ones. A
             // stage of another generation is another subscription set's interrupted download, and the app that syncs one scope per run
             // would otherwise throw a half-downloaded site away the moment any other scope synced (ADR-0060).
+            var replacedFiles = TakeStagedFiles(connection, transaction, "SELECT run_id FROM g9_stage_runs WHERE generation IS $g", ("$g", pull.Generation));
             Exec(connection, transaction,
                 "DELETE FROM g9_stage WHERE run_id IN (SELECT run_id FROM g9_stage_runs WHERE generation IS $g); DELETE FROM g9_stage_runs WHERE generation IS $g",
                 ("$g", pull.Generation));
@@ -119,6 +127,7 @@ public sealed partial class G9CSqliteSyncStore
                 ("$f", JsonSerializer.Serialize(pull.PlannedFromCursors.ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.Ordinal),
                     G9SyncClientJsonContext.Default.DictionaryStringString)));
             transaction.Commit();
+            DeleteFiles(replacedFiles);
         }
         finally
         {
@@ -134,6 +143,13 @@ public sealed partial class G9CSqliteSyncStore
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using var durability = DownloadDurability(connection);
+            if (chunk.File is not null)
+            {
+                // A snapshot-file segment goes to its place in the staged file, not into g9_stage (ADR-0072).
+                StageFileSegment(connection, runId, chunk);
+                return;
+            }
+
             using var transaction = connection.BeginTransaction(deferred: false);
             Exec(connection, transaction,
                 "INSERT OR REPLACE INTO g9_stage (run_id, seq, subscription_key, row_count, continuation_json, payload) VALUES ($r, $s, $k, $n, $c, $p)",
@@ -158,6 +174,9 @@ public sealed partial class G9CSqliteSyncStore
             using var transaction = connection.BeginTransaction(deferred: false);
             var complete = Scalar(connection, transaction, "SELECT complete FROM g9_stage_runs WHERE run_id = $r", ("$r", runId)) is long flag && flag != 0;
 
+            // A resumed stream starts at the last durable checkpoint of a snapshot file; segments written after it are written again.
+            ForgetPendingSegments(runId);
+
             G9DtPullContinuation? continuation = null;
             long lastSequence = -1;
             if (!complete)
@@ -179,7 +198,9 @@ public sealed partial class G9CSqliteSyncStore
 
             long rows = 0;
             long bytes = 0;
-            using (var command = Command(connection, transaction, "SELECT coalesce(sum(row_count), 0), coalesce(sum(length(payload)), 0) FROM g9_stage WHERE run_id = $r"))
+            using (var command = Command(connection, transaction,
+                       "SELECT coalesce(sum(row_count), 0), coalesce(sum(length(payload)), 0) + " +
+                       "(SELECT coalesce(sum(bytes_received), 0) FROM g9_stage_files WHERE run_id = $r) FROM g9_stage WHERE run_id = $r"))
             {
                 command.Parameters.AddWithValue("$r", runId);
                 using var reader = command.ExecuteReader();
@@ -205,7 +226,12 @@ public sealed partial class G9CSqliteSyncStore
         try
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
-            Exec(connection, null, "DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
+            using var transaction = connection.BeginTransaction(deferred: false);
+            var files = TakeStagedFiles(connection, transaction, "$r", ("$r", runId));
+            Exec(connection, transaction, "DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r", ("$r", runId));
+            transaction.Commit();
+            DeleteFiles(files);
+            ForgetPendingSegments(runId);
         }
         finally
         {

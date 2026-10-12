@@ -314,6 +314,7 @@ public sealed class G9CSyncSubscriptionBuilder
     private bool _heavy;
     private G9EMoveOutPolicy _moveOut = G9EMoveOutPolicy.Delete;
     private TimeSpan _reconcileInterval = TimeSpan.FromHours(24);
+    private G9ESnapshotFilePolicy _snapshotFiles = G9ESnapshotFilePolicy.Allowed;
 
     internal G9CSyncSubscriptionBuilder(string name) => _name = name;
 
@@ -387,6 +388,16 @@ public sealed class G9CSyncSubscriptionBuilder
         return this;
     }
 
+    /// <summary>
+    ///     Whether the first download of this subscription may go as a snapshot file (ADR-0072). Allowed by default; it does not change which
+    ///     rows belong, so it is not part of the definition hash.
+    /// </summary>
+    public G9CSyncSubscriptionBuilder SnapshotFiles(G9ESnapshotFilePolicy policy)
+    {
+        _snapshotFiles = policy;
+        return this;
+    }
+
     /// <summary>How often clients run a safety reconciliation (detects move-outs the delta cannot see).</summary>
     public G9CSyncSubscriptionBuilder ReconcileEvery(TimeSpan interval)
     {
@@ -429,7 +440,7 @@ public sealed class G9CSyncSubscriptionBuilder
         // Tables are kept in model (dependency) order regardless of Include order.
         var ordered = includes.OrderBy(i => i.Table.Order).ToArray();
         return new G9CSyncSubscriptionDefinition(_name, _parameters.ToArray(), ordered, _dependencies.ToArray(), _ephemeral, _ttl, _heavy,
-            _moveOut, _reconcileInterval, ComputeHash(ordered));
+            _moveOut, _reconcileInterval, ComputeHash(ordered), _snapshotFiles);
     }
 
     private string ComputeHash(IReadOnlyList<G9CSyncSubscriptionTable> tables)

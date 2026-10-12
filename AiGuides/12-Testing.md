@@ -9,7 +9,8 @@
 | `tests/G9SyncData.DeviceTests.Android` + `IntegrationTests/Android` | an Android device or emulator, opt-in (`G9SYNC_ANDROID`) | the client library and large-site syncs on a real Android runtime, with device measurements (below) |
 | `js/packages/syncdata` (`npm test`, `npm run test:interop`) | nothing; the interop suite needs the disposable PostgreSQL | the TypeScript twin: golden vectors written by `Protocol/JsGoldenVectorsTests.cs`, the engine and store against the real sample server over both hub protocols, the database it writes compared with the .NET client's, and the bulk release path compared with the row-by-row one (`revocation.test.ts`) ([21](21-TypeScript-And-Lynx.md)) |
 | `js/packages/lynx` (`npm test`, `npm run test:lynxsim`, native suites) | the lynxsim suite needs the disposable PostgreSQL | the Lynx package: the Brotli native module's cores, the Android parameter types (`android-bridge-types.mjs`, `LynxBridgeSignatureTest`), and the whole sync in a Lynx-shaped runtime |
-| `js/apps/lynx-android-host` (`node scripts/device-test.mjs --install --protocol both`) | an Android emulator, the disposable PostgreSQL, the sample server built Debug | the whole sync on a real Lynx runtime (PrimJS) with the real native modules; see its README |
+| `js/apps/lynx-ios-host` (`scripts/build-and-run.sh --device <udid> --server <url>` on a Mac) | Xcode 26, a device, a signing team, a server URL the phone reaches | the same scenario in a real iOS Lynx host |
+| `js/apps/lynx-android-host` (`node scripts/device-test.mjs --install --protocol both [--files both] [--serial <physical device>]`) | an Android emulator, the disposable PostgreSQL, the sample server built Debug | the whole sync on a real Lynx runtime (PrimJS) with the real native modules; see its README |
 
 ```powershell
 dotnet test tests/G9SyncData.Tests
@@ -35,8 +36,12 @@ dotnet test tests/G9SyncData.IntegrationTests --filter "FullyQualifiedName~Andro
 | `G9SYNC_ANDROID_CONFIGURATION` | `Release` | Release mirrors AgriPad's Android Release: profiled AOT, `TrimMode=partial` |
 | `G9SYNC_ANDROID_ROWS` | `200000,500000` | site sizes of the large-site sync theory |
 | `G9SYNC_ANDROID_PROTOCOLS` | `MessagePack` | hub protocols of that theory (`Json,MessagePack` to compare) |
+| `G9SYNC_ANDROID_FILE_ROWS` | `200000` | site sizes of the snapshot-file comparison (ADR-0072) |
 | `G9SYNC_ANDROID_FRAME_VERSION` | 2 | G9RowBatch layout the device asks for (1 to compare, ADR-0040) |
 | `G9SYNC_ANDROID_APPLY_ROWS` / `G9SYNC_ANDROID_COMPRESSION_ROWS` | 500000 | sizes of the apply and codec benchmarks |
+| `G9SYNC_FARM_DB` | unset (the farm replay skips) | a device database of a real farm (an AgriPad `agripad.db`); read-only, never copied into the repository |
+| `G9SYNC_FARM_ID` | required | the farm whose farm-site rows the replay loads |
+| `G9SYNC_ANDROID_FILE_REPEATS` | 3 | file runs of the farm replay (the .NET test alternates them with rows runs) |
 
 The large-site sync needs the disposable PostgreSQL as well (`G9SYNC_TEST_PG`); the other tests need only the device.
 
@@ -47,6 +52,9 @@ The large-site sync needs the disposable PostgreSQL as well (`G9SYNC_TEST_PG`); 
 | `Frame_codecs_are_measured_on_the_device` | Brotli / Zstandard / frame layouts / snapshot file: size and decompression cost | `android-compression-latest.md` |
 | `The_reconciliation_hash_is_computed_without_the_platform_md5_and_faster_than_it_on_the_device` | the managed MD5 (LES-0040) | `android-digest-latest.md` |
 | `A_large_site_syncs_on_the_device_over_SignalR_and_matches_the_server_after_every_step(pots, protocol)` | initial → no-op (+10 warm runs) → 1% delta → 5,000-row push → forced reconciliation; after every step the device's pots equal the server's | `android-sync-{pots}-{protocol}-latest.md` |
+| `A_large_first_download_as_a_snapshot_file_costs_the_device_less_than_rows_and_matches_the_server(pots)` | one server with `UseSnapshotFiles`: the site's first download as rows (files declined), as a file the server builds, as the same file reused by a second device; then the file database takes a 1% delta and a forced reconcile. Every step equals the server; no staged file is left; the file path must cost less device CPU than rows | `android-snapshot-file-{pots}-latest.md` |
+| `AndroidFarmReplayTests.A_real_farm_first_download_as_rows_and_as_a_snapshot_file_on_the_device` | a REAL farm: AgriPad's farm-site tables (Ridge, Pot, current Placement, Tree, Graft; `tests/Shared/FarmReplaySchema.*.cs`, the app's mirror columns) of `G9SYNC_FARM_ID`, loaded from `G9SYNC_FARM_DB` into the server, downloaded as rows and as a snapshot file, alternating; every table equals the server after every run; battery temperature before and after | `android-farm-replay-latest.md` |
+| `AndroidFarmReplayTests.A_real_farm_first_download_on_Lynx_as_rows_and_as_a_snapshot_file_on_the_device` | the same farm on Lynx: `js/apps/lynx-android-host` in mode `farm` (`src/farmTest.ts`, build its debug APK first), one cold start per run, the counts read back from the device database | `android-farm-replay-lynx-latest.md` |
 
 Each sync step reports: duration and phases, rows and **wire bytes** both ways (a Kestrel connection middleware on the harness server),
 device CPU, managed allocations, GC counts, PSS and peak RSS (`/proc/self/status`, sampled), UI-thread frame gaps (a Choreographer
@@ -71,7 +79,10 @@ Rules and traps:
 - An `am start failed: … daemon not running … cannot connect to daemon` failure is the adb server being restarted underneath the
   run (a Visual Studio session can do it); rerun the test.
 - The emulator is x86_64 on a desktop CPU: it validates correctness on the Android runtime and shows relative costs, but absolute
-  times are optimistic. **The DOOGEE S99 run remains the required final validation** before adoption ([16](16-AgriPad-Integration.md)).
+  times are optimistic. Real devices so far: a Samsung Galaxy Tab A9 and a DOOGEE S96Pro (the farm replay, 2026-10-12; results in
+  `benchmarks/results/devices/`). **The DOOGEE S99 run remains the required final validation** before adoption ([16](16-AgriPad-Integration.md)).
+- A physical device reaches the harness through `adb reverse` as well; the test apps need nothing debuggable. The farm replay's
+  database cannot be pulled from an installed Release AgriPad (`run-as` needs a debuggable app): use a copy the owner provides.
 
 ## PostgreSQL for integration tests
 

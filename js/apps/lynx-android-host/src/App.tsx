@@ -5,6 +5,9 @@ interface GlobalProps {
   g9Server?: string;
   g9Protocol?: string;
   g9RunId?: string;
+  g9Files?: string;
+  g9Mode?: string;
+  g9Hub?: string;
   g9LynxVersion?: string;
   g9PrimjsVersion?: string;
   g9Device?: string;
@@ -16,6 +19,9 @@ function readConfig(): DeviceTestConfig {
     server: props.g9Server ?? 'http://10.0.2.2:5210',
     protocol: props.g9Protocol === 'json' ? 'json' : 'messagepack',
     runId: props.g9RunId ?? String(Date.now()),
+    files: props.g9Files === 'on',
+    mode: props.g9Mode === 'farm' ? 'farm' : 'interop',
+    hub: props.g9Hub ?? '',
     lynxVersion: props.g9LynxVersion ?? '?',
     primjsVersion: props.g9PrimjsVersion ?? '?',
     device: props.g9Device ?? '?',

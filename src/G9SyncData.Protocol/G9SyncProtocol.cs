@@ -15,6 +15,15 @@ public static class G9SyncProtocol
     /// <summary>The frame layout to answer a request with: the newest both sides know, and 1 for a sender that did not say.</summary>
     public static int NegotiateFrameVersion(int requested) => Math.Clamp(requested, 1, MaxFrameVersion);
 
+    /// <summary>
+    ///     The snapshot-file format this build writes and reads (ADR-0072): a SQLite file holding each table of a subscription under the
+    ///     device's own name and DDL, plus a <c>(pk, ver)</c> version table per table, streamed in independently Brotli-compressed segments.
+    /// </summary>
+    public const int SnapshotFileFormatVersion = 1;
+
+    /// <summary>The prefix of a snapshot file's version tables: <c>g9snap_ver_{tableId}</c>.</summary>
+    public const string SnapshotFileVersionTablePrefix = "g9snap_ver_";
+
     /// <summary>Default SignalR hub route.</summary>
     public const string DefaultHubRoute = "/g9sync";
 

@@ -7,6 +7,7 @@ using G9SyncData.Server.Engine;
 using G9SyncData.Server.Hosting;
 using G9SyncData.Server.Model;
 using G9SyncData.Server.Pipeline;
+using G9SyncData.Server.SnapshotFiles;
 using G9SyncData.Server.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,7 @@ public sealed partial class G9CSyncServerEngine
     private readonly SemaphoreSlim? _pullSlots;
     private readonly SemaphoreSlim? _pushSlots;
     private readonly SemaphoreSlim _initLock = new(1, 1);
+    private readonly IG9SnapshotFileService? _files;
     private volatile bool _initialized;
 
     public G9CSyncServerEngine(
@@ -40,8 +42,10 @@ public sealed partial class G9CSyncServerEngine
         IOptions<G9CSyncServerOptions> options,
         IG9SyncAuthContextProvider authProvider,
         IEnumerable<IG9SyncConnectGate> gates,
-        ILogger<G9CSyncServerEngine> logger)
+        ILogger<G9CSyncServerEngine> logger,
+        IG9SnapshotFileService? snapshotFiles = null)
     {
+        _files = snapshotFiles;
         ArgumentNullException.ThrowIfNull(options);
         _model = model;
         _store = store;
@@ -212,6 +216,9 @@ public sealed partial class G9CSyncServerEngine
         };
         var resolvedList = new List<G9CResolvedSubscription>();
 
+        // A part the snapshot-file planner already estimated keeps its estimate here (null = estimate below), aligned with payload.Parts.
+        var estimated = new List<G9DtPlannedPart?>();
+
         foreach (var reference in request.Subscriptions)
         {
             if (!G9CSubscriptionResolver.TryResolve(_model, reference, auth, out var resolved, out var failure))
@@ -248,6 +255,19 @@ public sealed partial class G9CSyncServerEngine
             });
             resolvedList.Add(resolved);
 
+            if (previous is null
+                && await TryPlanSnapshotFileAsync(request, resolved, subscriptionIndex, shapes, payload, estimated, cancellationToken).ConfigureAwait(false))
+            {
+                plan.Cursors.Add(new G9DtSubscriptionCursor
+                {
+                    Key = resolved.Key,
+                    Cursor = G9CSyncCursor.Format(_store.Epoch, snapshot),
+                    DefinitionHash = resolved.Definition.DefinitionHash,
+                    AuthHash = resolved.AuthHash
+                });
+                continue;
+            }
+
             foreach (var include in resolved.Definition.Tables)
             {
                 // An upload-only table's rows belong to the devices that write them: the server never sends them back.
@@ -261,6 +281,7 @@ public sealed partial class G9CSyncServerEngine
                     PreviousSnapshot = previous,
                     Columns = shape.Columns.Select(c => c.Name).ToList()
                 });
+                estimated.Add(null);
             }
 
             plan.Cursors.Add(new G9DtSubscriptionCursor
@@ -285,23 +306,31 @@ public sealed partial class G9CSyncServerEngine
                 {
                     Subscription = i, Table = table.LogicalName, Kind = G9EPullPartKind.Backfill, Columns = columns.Select(c => c.Name).ToList()
                 });
+                estimated.Add(null);
             }
         }
 
-        foreach (var part in payload.Parts)
+        for (var index = 0; index < payload.Parts.Count; index++)
         {
-            var partRequest = BuildPartRequest(part, payload, resolvedList[part.Subscription], afterKey: null);
-            var estimate = await _store.EstimatePartAsync(partRequest, cancellationToken).ConfigureAwait(false);
-            plan.Parts.Add(new G9DtPlannedPart
+            var planned = estimated[index];
+            if (planned is null)
             {
-                SubscriptionKey = resolvedList[part.Subscription].Key,
-                TableId = _store.GetTableId(partRequest.Table),
-                Kind = part.Kind,
-                Rows = estimate.Rows,
-                EstimatedBytes = estimate.EstimatedBytes
-            });
-            plan.TotalRows += estimate.Rows;
-            plan.EstimatedBytes += estimate.EstimatedBytes;
+                var part = payload.Parts[index];
+                var partRequest = BuildPartRequest(part, payload, resolvedList[part.Subscription], afterKey: null);
+                var estimate = await _store.EstimatePartAsync(partRequest, cancellationToken).ConfigureAwait(false);
+                planned = new G9DtPlannedPart
+                {
+                    SubscriptionKey = resolvedList[part.Subscription].Key,
+                    TableId = _store.GetTableId(partRequest.Table),
+                    Kind = part.Kind,
+                    Rows = estimate.Rows,
+                    EstimatedBytes = estimate.EstimatedBytes
+                };
+            }
+
+            plan.Parts.Add(planned);
+            plan.TotalRows += planned.Rows;
+            plan.EstimatedBytes += planned.EstimatedBytes;
         }
 
         plan.Token = _tokens.Create(payload);
@@ -358,6 +387,19 @@ public sealed partial class G9CSyncServerEngine
         for (var index = Math.Max(0, continuation?.PartIndex ?? 0); index < payload.Parts.Count; index++)
         {
             var part = payload.Parts[index];
+            if (part.Kind == G9EPullPartKind.SnapshotFile)
+            {
+                var resume = after;
+                after = null;
+                await foreach (var chunk in StreamSnapshotFileAsync(part, index, resolved[part.Subscription], payload, resume, sequence, cancellationToken).ConfigureAwait(false))
+                {
+                    sequence = chunk.Sequence + 1;
+                    yield return chunk;
+                }
+
+                continue;
+            }
+
             var partRequest = BuildPartRequest(part, payload, resolved[part.Subscription], after);
             after = null;
             await foreach (var page in _store.ReadPartAsync(partRequest, cancellationToken).ConfigureAwait(false))
@@ -611,6 +653,275 @@ public sealed partial class G9CSyncServerEngine
         yield return new G9DtSyncChunk { Sequence = sequence, IsFinal = true, SubscriptionKey = resolved.Key };
     }
 
+    // ================================================================ snapshot files (ADR-0072)
+
+    /// <summary>
+    ///     Plans a subscription's first download as a snapshot file when the device offered one, the subscription allows it and the snapshot
+    ///     is large enough - reusing a file already built for the same identity when the rows changed since are few, and otherwise asking
+    ///     for one at this plan's snapshot. Adds the token parts (file + the deltas that bring a reused file up to date) with their estimates
+    ///     and returns true; or, when a file is not worth it after all, adds the ordinary snapshot parts it already estimated and returns
+    ///     true too. False = nothing was added; plan the subscription as rows.
+    /// </summary>
+    private async Task<bool> TryPlanSnapshotFileAsync(G9DtPullRequest request, G9CResolvedSubscription resolved, int subscriptionIndex,
+        Dictionary<int, G9CPushTableShape> shapes, G9DtPullTokenPayload payload, List<G9DtPlannedPart?> estimated, CancellationToken cancellationToken)
+    {
+        if (_files is null || request.SnapshotFiles is not { } offer || offer.FormatVersion < 1) return false;
+        if (resolved.Definition.Ephemeral || resolved.Definition.SnapshotFilePolicy == G9ESnapshotFilePolicy.Never) return false;
+        var maxFiles = offer.MaxFiles > 0 ? offer.MaxFiles : 8;
+        if (payload.Parts.Count(p => p.Kind == G9EPullPartKind.SnapshotFile) >= maxFiles) return false;
+
+        var tables = new List<(G9CSyncSubscriptionTable Include, int TableId, G9CPushTableShape Columns, G9DtSnapshotFileTable Shape)>();
+        foreach (var include in resolved.Definition.Tables)
+        {
+            if (include.Table.Direction == G9ESyncDirection.UploadOnly) continue;
+            var tableId = _store.GetTableId(include.Table);
+            if (!shapes.TryGetValue(tableId, out var columns)) continue;
+
+            // A table the device cannot describe cannot go in a file it will read: rows, for the whole subscription.
+            var shape = offer.Tables.FirstOrDefault(t => t.TableId == tableId);
+            if (shape is null) return false;
+            tables.Add((include, tableId, columns, shape));
+        }
+
+        if (tables.Count == 0) return false;
+        var policy = _files.Policy;
+        var minRows = Math.Max(policy.MinRows, offer.MinRows);
+        var identity = SnapshotFileIdentity(resolved, offer.Storage, tables.Select(t => (t.Include.Table.LogicalName, t.Columns, t.Shape)));
+
+        // A file already built (or being built) for exactly these rows, at a snapshot the deltas can still reach.
+        var candidate = _files.FindLatest(identity);
+        if (candidate is not null && candidate.Epoch == _store.Epoch && DateTime.UtcNow - candidate.SnapshotUtc <= policy.MaxAge
+            && (offer.MaxBytes <= 0 || candidate.RawBytes <= offer.MaxBytes)
+            && !await _store.IsSnapshotAheadAsync(candidate.Snapshot, cancellationToken).ConfigureAwait(false)
+            && !await _store.IsBeyondTombstoneHorizonAsync(candidate.Snapshot, tables.Select(t => t.Include.Table).ToArray(), cancellationToken).ConfigureAwait(false))
+        {
+            var deltas = new List<(G9DtTokenPart Part, G9DtPlannedPart Planned)>();
+            long deltaRows = 0;
+            foreach (var table in tables)
+            {
+                var part = new G9DtTokenPart
+                {
+                    Subscription = subscriptionIndex, Table = table.Include.Table.LogicalName, Kind = G9EPullPartKind.Delta,
+                    PreviousSnapshot = candidate.Snapshot, Columns = table.Columns.Columns.Select(c => c.Name).ToList()
+                };
+                var estimate = await _store.EstimatePartAsync(BuildPartRequest(part, payload, resolved, afterKey: null), cancellationToken).ConfigureAwait(false);
+                deltas.Add((part, new G9DtPlannedPart
+                {
+                    SubscriptionKey = resolved.Key, TableId = table.TableId, Kind = G9EPullPartKind.Delta, Rows = estimate.Rows, EstimatedBytes = estimate.EstimatedBytes
+                }));
+                deltaRows += estimate.Rows;
+            }
+
+            if (!candidate.Ready || deltaRows <= policy.MaxDeltaRatio * Math.Max(candidate.Rows, minRows))
+            {
+                AddFilePart(candidate.FileId, candidate.Snapshot, candidate.SnapshotUtc, candidate.Ready ? candidate.RowsByTable : null,
+                    candidate.Ready ? candidate.CompressedBytes : 0, null);
+                foreach (var (part, planned) in deltas)
+                {
+                    payload.Parts.Add(part);
+                    estimated.Add(planned);
+                }
+
+                G9CSyncServerTelemetry.SnapshotFilesPlanned.Add(1, new KeyValuePair<string, object?>("source", candidate.Ready ? "reused" : "building"));
+                LogSnapshotFileReused(_logger, resolved.Key, candidate.FileId, deltaRows);
+                return true;
+            }
+        }
+
+        // No usable file: what would the snapshot be as rows?
+        var snapshotParts = new List<(G9DtTokenPart Part, G9DtPlannedPart Planned)>();
+        long rows = 0;
+        foreach (var table in tables)
+        {
+            var part = new G9DtTokenPart
+            {
+                Subscription = subscriptionIndex, Table = table.Include.Table.LogicalName, Kind = G9EPullPartKind.Snapshot,
+                Columns = table.Columns.Columns.Select(c => c.Name).ToList()
+            };
+            var estimate = await _store.EstimatePartAsync(BuildPartRequest(part, payload, resolved, afterKey: null), cancellationToken).ConfigureAwait(false);
+            snapshotParts.Add((part, new G9DtPlannedPart
+            {
+                SubscriptionKey = resolved.Key, TableId = table.TableId, Kind = G9EPullPartKind.Snapshot, Rows = estimate.Rows, EstimatedBytes = estimate.EstimatedBytes
+            }));
+            rows += estimate.Rows;
+        }
+
+        var snapshotUtc = DateTime.UtcNow;
+        var fileId = SnapshotFileId(identity, payload.NewSnapshot);
+        if (rows >= minRows && _files.Prepare(BuildSnapshotFile(fileId, identity, payload.NewSnapshot, snapshotUtc, offer.Storage, resolved,
+                tables.Select(t => new G9DtTokenFileTable
+                {
+                    Table = t.Include.Table.LogicalName, Columns = t.Columns.Columns.Select(c => c.Name).ToList(), Shape = t.Shape
+                }).ToList(), payload.FrameVersion)))
+        {
+            AddFilePart(fileId, payload.NewSnapshot, snapshotUtc, snapshotParts.ToDictionary(p => p.Planned.TableId, p => p.Planned.Rows),
+                snapshotParts.Sum(p => p.Planned.EstimatedBytes), snapshotParts);
+            G9CSyncServerTelemetry.SnapshotFilesPlanned.Add(1, new KeyValuePair<string, object?>("source", "built"));
+            LogSnapshotFilePlanned(_logger, resolved.Key, fileId, rows);
+            return true;
+        }
+
+        // Rows after all - with the estimates just made, so nothing is estimated twice.
+        foreach (var (part, planned) in snapshotParts)
+        {
+            payload.Parts.Add(part);
+            estimated.Add(planned);
+        }
+
+        return true;
+
+        void AddFilePart(string id, string fileSnapshot, DateTime fileSnapshotUtc, IReadOnlyDictionary<int, long>? rowsByTable, long bytes,
+            List<(G9DtTokenPart Part, G9DtPlannedPart Planned)>? estimates)
+        {
+            var fileTables = tables.Select(t => new G9DtTokenFileTable
+            {
+                Table = t.Include.Table.LogicalName, Columns = t.Columns.Columns.Select(c => c.Name).ToList(), Shape = t.Shape
+            }).ToList();
+            payload.Parts.Add(new G9DtTokenPart
+            {
+                Subscription = subscriptionIndex,
+                Kind = G9EPullPartKind.SnapshotFile,
+                File = new G9DtTokenFile
+                {
+                    FileId = id, Identity = identity, Snapshot = fileSnapshot, SnapshotUtc = fileSnapshotUtc, Storage = offer.Storage, Tables = fileTables
+                }
+            });
+
+            // A file still being built has no exact counts yet: its upper bound is the snapshot estimate, made now if it was not.
+            var plannedTables = tables.Select(t => new G9DtPlannedFileTable
+            {
+                TableId = t.TableId,
+                Rows = rowsByTable?.GetValueOrDefault(t.TableId) ?? estimates?.FirstOrDefault(e => e.Planned.TableId == t.TableId).Planned?.Rows ?? 0
+            }).ToList();
+            estimated.Add(new G9DtPlannedPart
+            {
+                SubscriptionKey = resolved.Key,
+                TableId = 0,
+                Kind = G9EPullPartKind.SnapshotFile,
+                Rows = plannedTables.Sum(t => t.Rows),
+                EstimatedBytes = bytes,
+                File = new G9DtPlannedFile { FileId = id, SnapshotUtc = fileSnapshotUtc, Tables = plannedTables }
+            });
+        }
+    }
+
+    /// <summary>Streams a file part's segments as chunks; the continuation of each names the file's hash and the next segment.</summary>
+    private async IAsyncEnumerable<G9DtSyncChunk> StreamSnapshotFileAsync(G9DtTokenPart part, int partIndex, G9CResolvedSubscription subscription,
+        G9DtPullTokenPayload payload, string? resume, int sequence, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (_files is null)
+        {
+            throw new G9CSyncException(G9SyncErrorCodes.SnapshotFileUnavailable,
+                "This server instance has no snapshot files (UseSnapshotFiles) and cannot serve a pull planned with one.") { Retryable = false };
+        }
+
+        var file = part.File ?? throw new G9CSyncException(G9SyncErrorCodes.TokenInvalid, "A snapshot-file part without its file.");
+        var build = BuildSnapshotFile(file.FileId, file.Identity, file.Snapshot, file.SnapshotUtc, file.Storage, subscription, file.Tables, payload.FrameVersion);
+        ParseFileResume(resume, out var fromSegment, out var expectedSha);
+
+        var first = true;
+        await foreach (var segment in _files.ReadAsync(build, fromSegment, expectedSha, cancellationToken).ConfigureAwait(false))
+        {
+            var last = segment.Segment.Index == segment.Manifest.Segments - 1;
+            var info = new G9DtFileSegment
+            {
+                FileId = segment.Segment.FileId, Index = segment.Segment.Index, Offset = segment.Segment.Offset, Length = segment.Segment.Length,
+                Sha256 = segment.Segment.Sha256, Manifest = first ? segment.Manifest : null
+            };
+            first = false;
+            G9CSyncServerTelemetry.SnapshotFileBytes.Add(segment.Compressed.Length);
+            G9CSyncServerTelemetry.PulledRows.Add(segment.Rows);
+            yield return new G9DtSyncChunk
+            {
+                Sequence = sequence,
+                Payload = segment.Compressed,
+                RowCount = segment.Rows,
+                SubscriptionKey = subscription.Key,
+                File = info,
+                Continuation = new G9DtPullContinuation
+                {
+                    PartIndex = last ? partIndex + 1 : partIndex,
+                    AfterKey = last ? null : FileResumePrefix + segment.Manifest.Sha256 + ":" + (segment.Segment.Index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    NextSequence = sequence + 1
+                }
+            };
+            sequence++;
+        }
+    }
+
+    private const string FileResumePrefix = "seg:";
+
+    private static void ParseFileResume(string? resume, out int fromSegment, out string? sha)
+    {
+        fromSegment = 0;
+        sha = null;
+        if (resume is null || !resume.StartsWith(FileResumePrefix, StringComparison.Ordinal)) return;
+        var colon = resume.LastIndexOf(':');
+        if (colon <= FileResumePrefix.Length
+            || !int.TryParse(resume.AsSpan(colon + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var next))
+        {
+            return;
+        }
+
+        fromSegment = next;
+        sha = resume[FileResumePrefix.Length..colon];
+    }
+
+    /// <summary>The build of a file: the device's shapes and storage, and each table's snapshot rows read at the file's snapshot.</summary>
+    private G9CSnapshotFileBuild BuildSnapshotFile(string fileId, string identity, string snapshot, DateTime snapshotUtc, G9DtSnapshotFileStorage storage,
+        G9CResolvedSubscription subscription, IReadOnlyList<G9DtTokenFileTable> tables, int frameVersion)
+    {
+        var sources = new List<G9CSnapshotFileTableSource>(tables.Count);
+        foreach (var table in tables)
+        {
+            var model = _model.FindTable(table.Table) ?? throw new G9CSyncException(G9SyncErrorCodes.TokenInvalid, $"Unknown table '{table.Table}' in token.");
+            var columns = table.Columns
+                .Select(name => model.FindColumn(name) ?? throw new G9CSyncException(G9SyncErrorCodes.TokenInvalid, $"Unknown column '{name}' in token."))
+                .ToArray();
+            var part = new G9DtTokenPart { Table = table.Table, Kind = G9EPullPartKind.Snapshot, Columns = table.Columns };
+            var reader = new G9DtPullTokenPayload { NewSnapshot = snapshot, FrameVersion = frameVersion };
+            sources.Add(new G9CSnapshotFileTableSource
+            {
+                TableId = _store.GetTableId(model),
+                ServerName = model.LogicalName,
+                Shape = table.Shape,
+                FrameColumns = columns.Select(c => new G9DtColumnModel { Name = c.Name, Type = c.Type, Nullable = c.Nullable }).ToList(),
+                ReadAsync = ct => _store.ReadPartAsync(BuildPartRequest(part, reader, subscription, afterKey: null), ct)
+            });
+        }
+
+        return new G9CSnapshotFileBuild
+        {
+            FileId = fileId, Identity = identity, Snapshot = snapshot, Epoch = _store.Epoch, SnapshotUtc = snapshotUtc, SubscriptionKey = subscription.Key,
+            Storage = storage, Tables = sources
+        };
+    }
+
+    /// <summary>
+    ///     What a file holds, independent of when: the format, the server epoch, the subscription (key, definition, the caller's server
+    ///     parameters), the device's storage forms and, per table, the columns sent and the device's shape. Two plans with the same identity
+    ///     would build byte-identical files from the same rows, so they share one.
+    /// </summary>
+    private string SnapshotFileIdentity(G9CResolvedSubscription subscription, G9DtSnapshotFileStorage storage,
+        IEnumerable<(string Table, G9CPushTableShape Columns, G9DtSnapshotFileTable Shape)> tables)
+    {
+        var text = new System.Text.StringBuilder("g9snap|").Append(G9SyncProtocol.SnapshotFileFormatVersion).Append('|').Append(_store.Epoch.ToString("N"))
+            .Append('|').Append(subscription.Key).Append('|').Append(subscription.Definition.DefinitionHash).Append('|').Append(subscription.AuthHash)
+            .Append("|s:").Append(storage.DateTimeAsTicks).Append(':').Append(storage.DateTimeFormat).Append(':').Append(storage.DecimalAsText);
+        foreach (var (table, columns, shape) in tables)
+        {
+            text.Append("|t:").Append(table).Append(':');
+            foreach (var column in columns.Columns) text.Append(column.Name).Append(',').Append((int)column.Type).Append(';');
+            text.Append("|l:").Append(shape.LocalName).Append(':').Append(shape.KeyColumn).Append(':').Append((int)shape.KeyType).Append(':');
+            foreach (var column in shape.Columns) text.Append(column.Name).Append(',').Append((int)column.Type).Append(',').Append(column.Nullable).Append(';');
+            foreach (var index in shape.Indexes) text.Append("ix:").Append(index.Name).Append(',').Append(index.Unique).Append(',').AppendJoin(',', index.Columns).Append(';');
+        }
+
+        return G9CHash.Sha256Hex(text.ToString());
+    }
+
+    private static string SnapshotFileId(string identity, string snapshot) => G9CHash.Sha256Hex(identity + "|" + snapshot)[..32];
+
     // ================================================================ helpers
 
     private G9DtNegotiatedTable Negotiate(G9CSyncServerTable table, G9DtClientTableModel client)
@@ -826,6 +1137,12 @@ public sealed partial class G9CSyncServerEngine
 
     [LoggerMessage(EventId = 21009, Level = LogLevel.Warning, Message = "Refused a {Operation} request: the concurrency limit was reached and no slot came free in time")]
     private static partial void LogBusy(ILogger logger, string operation);
+
+    [LoggerMessage(EventId = 21027, Level = LogLevel.Information, Message = "Snapshot file {FileId} reused for {Subscription}; {DeltaRows} row(s) changed since it was built")]
+    private static partial void LogSnapshotFileReused(ILogger logger, string subscription, string fileId, long deltaRows);
+
+    [LoggerMessage(EventId = 21028, Level = LogLevel.Information, Message = "Snapshot file {FileId} planned for {Subscription}: about {Rows} row(s)")]
+    private static partial void LogSnapshotFilePlanned(ILogger logger, string subscription, string fileId, long rows);
 
     // Debug here, Warning on the device: every connecting client of a wrong build repeats it, and the device is where the model is fixed.
     [LoggerMessage(EventId = 21006, Level = LogLevel.Debug,

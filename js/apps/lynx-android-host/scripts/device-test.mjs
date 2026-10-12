@@ -1,11 +1,13 @@
-// Runs the device test end to end: `node scripts/device-test.mjs [--protocol messagepack|json|both] [--serial S]
-// [--install] [--timeout-s 900]`.
+// Runs the device test end to end: `node scripts/device-test.mjs [--protocol messagepack|json|both] [--files off|on|both]
+// [--serial S] [--install] [--timeout-s 900]`.
 //
-// For each protocol (MessagePack first, then JSON), EACH against a FRESH server database:
+// For each protocol (MessagePack first, then JSON) and each files mode (rows first, then snapshot files - ADR-0072),
+// EACH against a FRESH server database:
 //   1. starts the .NET sample server (samples/G9SyncData.Samples.Server, built Debug) on 0.0.0.0:<free port> with a new
 //      database g9t_js_<random> on the disposable PostgreSQL (G9SYNC_TEST_PG, default localhost:15433 — never a shared
 //      server); the sample creates and seeds it (2 sites × 25,000 pots);
-//   2. launches the app on the emulator/device with `--es server http://10.0.2.2:<port> --es protocol <p>`;
+//   2. launches the app on the emulator/device with `--es server <url> --es protocol <p>`: http://10.0.2.2:<port> on an
+//      emulator (the host's loopback), http://127.0.0.1:<port> through `adb reverse` on a physical device;
 //   3. follows logcat until the page logs `G9SYNC-DEVICE RESULT PASS|FAIL`, then takes a screenshot;
 //   4. stops the server and drops its database.
 // Logcat, the result lines and the screenshots land in build/device-test/. Exit code 0 only when every run passed.
@@ -31,6 +33,10 @@ const option = (name, fallback) => {
 const protocols = (() => {
   const p = option('--protocol', 'both');
   return p === 'both' ? ['messagepack', 'json'] : [p];
+})();
+const fileModes = (() => {
+  const f = option('--files', 'off');
+  return f === 'both' ? ['off', 'on'] : [f];
 })();
 const timeoutMs = Number(option('--timeout-s', '900')) * 1000;
 const adb =
@@ -149,15 +155,17 @@ async function startServer(log) {
   return { port, database, pid: child.pid, stop };
 }
 
-async function runOnDevice(protocol) {
+async function runOnDevice(protocol, files) {
   const runId = protocol.slice(0, 4) + Date.now().toString(36);
-  const serverLog = createWriteStream(join(out, `${protocol}-server.log`));
-  const logcatFile = createWriteStream(join(out, `${protocol}-logcat.txt`));
-  console.log(`\n=== ${protocol}: starting the sample server on a fresh database`);
+  const label = files === 'on' ? `${protocol}-files` : protocol;
+  const serverLog = createWriteStream(join(out, `${label}-server.log`));
+  const logcatFile = createWriteStream(join(out, `${label}-logcat.txt`));
+  console.log(`\n=== ${label}: starting the sample server on a fresh database`);
   const server = await startServer(serverLog);
   console.log(`    server pid ${server.pid} on 0.0.0.0:${server.port}, database ${server.database}`);
   const lines = [];
   let logcat;
+  let reversed = null;
   try {
     await adbRun(['shell', 'am', 'force-stop', pkg]);
     await adbRun(['logcat', '-c']);
@@ -180,16 +188,22 @@ async function runOnDevice(protocol) {
         }
       });
     });
-    const server10 = `http://10.0.2.2:${server.port}`;
-    await adbRun(['shell', 'am', 'start', '-S', '-W', '-n', `${pkg}/.MainActivity`, '--es', 'server', server10, '--es', 'protocol', protocol, '--es', 'runId', runId]);
+    // A physical device cannot see 10.0.2.2 (that is the emulator's alias for the host): reverse the port instead.
+    const serial = option('--serial', process.env.ANDROID_SERIAL) || '';
+    const physical = serial !== '' && !serial.startsWith('emulator-');
+    if (physical) await adbRun(['reverse', `tcp:${server.port}`, `tcp:${server.port}`]);
+    reversed = physical ? server.port : null;
+    const serverUrl = physical ? `http://127.0.0.1:${server.port}` : `http://10.0.2.2:${server.port}`;
+    await adbRun(['shell', 'am', 'start', '-S', '-W', '-n', `${pkg}/.MainActivity`, '--es', 'server', serverUrl, '--es', 'protocol', protocol, '--es', 'runId', runId, '--es', 'files', files]);
     const pass = await Promise.race([result, new Promise((r) => setTimeout(() => r(null), timeoutMs))]);
     await new Promise((r) => setTimeout(r, 1500)); // let the page paint the final state
     const png = await adbRun(['exec-out', 'screencap', '-p'], { encoding: 'buffer' });
-    writeFileSync(join(out, `${protocol}.png`), png);
+    writeFileSync(join(out, `${label}.png`), png);
     await adbRun(['shell', 'am', 'force-stop', pkg]);
-    return { protocol, pass: pass === true, timedOut: pass === null, lines, database: server.database, port: server.port };
+    return { protocol, files, label, pass: pass === true, timedOut: pass === null, lines, database: server.database, port: server.port };
   } finally {
     if (logcat) logcat.kill();
+    if (reversed !== null) await adbRun(['reverse', '--remove', `tcp:${reversed}`]).catch(() => undefined);
     await server.stop();
     serverLog.end();
     logcatFile.end();
@@ -208,10 +222,12 @@ if (args.includes('--install')) {
   console.log(await adbRun(['install', '-r', apk], { timeoutMs: 300000 }));
 }
 const results = [];
-for (const protocol of protocols) results.push(await runOnDevice(protocol));
+for (const protocol of protocols) {
+  for (const files of fileModes) results.push(await runOnDevice(protocol, files));
+}
 const left = (await psqlCommand("SELECT count(*) FROM pg_database WHERE datname LIKE 'g9t_%'")).trim();
 console.log('\n=== Summary');
-for (const r of results) console.log(`  ${r.protocol}: ${r.pass ? 'PASS' : r.timedOut ? 'TIMEOUT' : 'FAIL'} (${r.lines.length} lines, ${join(out, r.protocol + '.png')})`);
+for (const r of results) console.log(`  ${r.label}: ${r.pass ? 'PASS' : r.timedOut ? 'TIMEOUT' : 'FAIL'} (${r.lines.length} lines, ${join(out, r.label + '.png')})`);
 console.log(`  g9t_ databases left on the test server: ${left}`);
 writeFileSync(join(out, 'summary.json'), JSON.stringify({ results, g9tDatabasesLeft: Number(left) }, null, 2));
 process.exit(results.every((r) => r.pass) ? 0 : 1);

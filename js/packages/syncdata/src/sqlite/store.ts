@@ -32,7 +32,7 @@ import {
   type G9SyncRunReport,
   type G9SyncSubscriptionRecord,
 } from '../client/storeTypes.js';
-import type { G9DtBackfillRequest, G9DtHelloResult, G9DtNegotiatedTable, G9DtPushResult, G9DtSyncChunk, G9DtTableDigest } from '../protocol/dtos.js';
+import type { G9DtBackfillRequest, G9DtHelloResult, G9DtNegotiatedTable, G9DtPushResult, G9DtSnapshotFileRequest, G9DtSyncChunk, G9DtTableDigest } from '../protocol/dtos.js';
 import * as apply from './apply.js';
 import * as commands from './commands.js';
 import { asNumber, asOptionalString, asString, G9AsyncLock, G9SqliteConnection, G9StatementBatch, statementsOf } from './connection.js';
@@ -56,6 +56,7 @@ import { resolveStoreOptions, type G9ResolvedSqliteStoreOptions, type G9SqliteSy
 import * as push from './push.js';
 import * as query from './query.js';
 import * as revocation from './revocation.js';
+import { describeSnapshotFiles, sweepOrphanSnapshotFiles } from './snapshotFiles.js';
 import { allColumnsMask, bit, columnDefinition, createCommandTriggers, createTable, createTriggers, dropTriggers, EPHEMERAL_SLOT, keyExpression, METADATA, modelHash, quote } from './sql.js';
 
 /** What exportPendingChanges managed to save (`G9CPendingExport`). */
@@ -168,8 +169,15 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
       this._model = model;
       this.byLocal = new Map(tables.map((t) => [t.model.localName.toLowerCase(), t] as [string, LocalTable]));
       this.byServerId = new Map(tables.filter((t) => t.negotiated !== null).map((t) => [(t.negotiated as G9DtNegotiatedTable).tableId, t] as [number, LocalTable]));
+      await sweepOrphanSnapshotFiles(this, connection);
       this.log('information', 20101, `G9SyncData SQLite store initialised with ${tables.length} tables`);
     });
+  }
+
+  /** The store's offer to receive snapshot files (ADR-0072); null without a `snapshotFiles` sink. */
+  describeSnapshotFiles(negotiated: readonly G9DtNegotiatedTable[]): G9DtSnapshotFileRequest | null {
+    if (!this._model) return null;
+    return describeSnapshotFiles(this, negotiated);
   }
 
   /**

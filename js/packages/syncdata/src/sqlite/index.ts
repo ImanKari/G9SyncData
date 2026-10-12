@@ -4,11 +4,13 @@ export {
   fileIncarnationMarker,
   type G9IncarnationMarker,
   type G9MarkerFileSystem,
+  type G9SnapshotFileSink,
   type G9SqliteSyncStoreOptions,
   type G9ResolvedSqliteStoreOptions,
 } from './options.js';
 export { G9ESqliteDateTimeStorage, G9ESqliteDecimalStorage, splitSql } from './sql.js';
 export { G9SqliteStoreError } from './connection.js';
+export { SNAPSHOT_FILE_APPLICATION_ID, SNAPSHOT_FILE_FORMAT_VERSION } from './snapshotFiles.js';
 export { formatTicks, formatDateTimeOffset, parseDateTime, parseDateTimeOffset, ticksOf, ticksToUnixMs } from './values.js';
 export type {
   G9ConnectionPragmas,

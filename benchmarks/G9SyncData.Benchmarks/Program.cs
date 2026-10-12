@@ -27,6 +27,12 @@ if (args.Contains("--sqlite-apply", StringComparer.Ordinal))
     return;
 }
 
+if (args.Contains("--snapshot-file-codec", StringComparer.Ordinal))
+{
+    SnapshotFileCodecBenchmark.Run(ReadIntArgument(args, "--rows", 500_000));
+    return;
+}
+
 if (args.Contains("--compression", StringComparer.Ordinal))
 {
     CompressionBenchmark.Run(ReadIntArgument(args, "--rows", 500_000));

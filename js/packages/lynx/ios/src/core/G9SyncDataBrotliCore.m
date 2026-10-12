@@ -10,9 +10,14 @@ static const uint8_t G9SyncDataNoBytes[1] = {0};
 
 @implementation G9SyncDataBrotliCore
 
-+ (NSDictionary *)capabilitiesWithVersion:(NSString *)version platform:(NSString *)platform brotli:(BOOL)brotli {
++ (NSDictionary *)capabilitiesWithVersion:(NSString *)version
+                                 platform:(NSString *)platform
+                                   brotli:(BOOL)brotli
+                            snapshotFiles:(BOOL)snapshotFiles {
   NSDictionary *value = [NSDictionary dictionaryWithObjectsAndKeys:version, @"version", platform, @"platform",
-                                                                    [NSNumber numberWithBool:brotli], @"brotli", nil];
+                                                                    [NSNumber numberWithBool:brotli], @"brotli",
+                                                                    [NSNumber numberWithBool:snapshotFiles],
+                                                                    @"snapshotFiles", nil];
   return G9SyncDataOk(value);
 }
 

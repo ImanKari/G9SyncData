@@ -119,7 +119,9 @@ describe('the Lynxtron bridge (node:zlib, the reference implementation)', () => 
   const bridge = createG9SyncDataBridge();
 
   it('reports its capabilities', async () => {
-    expect(await bridge.capabilities()).toEqual({ ok: true, value: { version: '1.2.2', platform: 'lynxtron', brotli: true } });
+    const reply = (await bridge.capabilities()) as { ok: true; value: Record<string, unknown> };
+    expect(reply).toMatchObject({ ok: true, value: { version: '1.2.2', platform: 'lynxtron', brotli: true, snapshotFiles: true } });
+    expect(typeof reply.value.cacheDirectory).toBe('string');
   });
 
   it('decodes every test vector to exactly its original, as an exact ArrayBuffer', async () => {
@@ -177,7 +179,9 @@ describe.each([
   const native: G9SyncDataNative = make();
 
   it('reports the capabilities', async () => {
-    expect(await native.capabilities()).toEqual({ version: '1.2.2', platform: 'lynxtron', brotli: true });
+    const capabilities = await native.capabilities();
+    expect(capabilities).toMatchObject({ version: '1.2.2', platform: 'lynxtron', brotli: true, snapshotFiles: true });
+    expect(capabilities.cacheDirectory).toEqual(expect.any(String));
   });
 
   it('decodes every test vector to a Uint8Array of exactly the expected length', async () => {
@@ -237,13 +241,22 @@ describe('the promise face maps every reply', () => {
   });
 
   it.each(shapes)('reads the capabilities (an iOS NSNumber boolean included) (%s shape)', async (_shape, make) => {
-    expect(await make({ ok: true, value: { version: '1.2.2', platform: 'ios', brotli: 1 } }).capabilities()).toEqual({
-      version: '1.2.2',
-      platform: 'ios',
-      brotli: true,
-    });
+    expect(
+      await make({ ok: true, value: { version: '1.2.2', platform: 'ios', brotli: 1, snapshotFiles: 1, cacheDirectory: '/var/Caches' } }).capabilities(),
+    ).toEqual({ version: '1.2.2', platform: 'ios', brotli: true, snapshotFiles: true, cacheDirectory: '/var/Caches' });
     expect(await make({ ok: true, value: { version: '1.2.2', platform: 'ios', brotli: false } }).capabilities()).toMatchObject({ brotli: false });
-    expect(await make({ ok: true, value: null }).capabilities()).toEqual({ version: '', platform: '', brotli: false });
+    // A module built before snapshot files: no flag, no directory.
+    expect(await make({ ok: true, value: { version: '1.2.1', platform: 'android', brotli: true } }).capabilities()).toMatchObject({
+      snapshotFiles: false,
+      cacheDirectory: null,
+    });
+    expect(await make({ ok: true, value: null }).capabilities()).toEqual({
+      version: '',
+      platform: '',
+      brotli: false,
+      snapshotFiles: false,
+      cacheDirectory: null,
+    });
   });
 
   it('reports a missing method as G9SYNC-BROTLI-UNAVAILABLE', async () => {

@@ -5,6 +5,8 @@ using System.Text.Json;
 using G9SyncData.Client.SignalR;
 using G9SyncData.DeviceTests.Shared;
 using G9SyncData.IntegrationTests.Infrastructure;
+using G9SyncData.Server.SnapshotFiles;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace G9SyncData.IntegrationTests.Android;
 
@@ -233,6 +235,195 @@ public sealed class AndroidDeviceTests(ITestOutputHelper output)
         {
             foreach (var (_, run, _) in steps) run.Dispose();
             using var cleanup = await device.RunScenarioAsync("sync", new Dictionary<string, string>(extras) { ["step"] = "cleanup" }, TimeSpan.FromMinutes(2), output);
+        }
+    }
+
+    /// <summary><c>G9SYNC_ANDROID_FILE_ROWS</c> (default 200000) × MessagePack: the snapshot-file comparison (ADR-0072).</summary>
+    public static TheoryData<int> FileSiteSizes()
+    {
+        var data = new TheoryData<int>();
+        foreach (var size in EnvironmentList("G9SYNC_ANDROID_FILE_ROWS", "200000")) data.Add(int.Parse(size, CultureInfo.InvariantCulture));
+        return data;
+    }
+
+    /// <summary>
+    ///     The same large site's first download on the device, from one server: as rows (the device declines files) and as a snapshot
+    ///     file (ADR-0072) - once while the server builds it, then reused, alternating with rows <c>G9SYNC_ANDROID_FILE_REPEATS</c> times
+    ///     (default 3), because one emulator run can differ from the next by a factor of several. Every database must match the server;
+    ///     the median device CPU of the file path must be below the row path's - the heat of a first sync - and no staged file may be
+    ///     left. Then the file database takes a delta and a forced reconcile: a file-born database is an ordinary one.
+    /// </summary>
+    [AndroidTheory(needsPostgres: true)]
+    [MemberData(nameof(FileSiteSizes))]
+    public async Task A_large_first_download_as_a_snapshot_file_costs_the_device_less_than_rows_and_matches_the_server(int pots)
+    {
+        var device = AndroidDevice.Current;
+        await device.EnsureInstalledAsync(output);
+        var site = Guid.NewGuid();
+        var otherSite = Guid.NewGuid();
+        var serverFiles = Path.Combine(Path.GetTempPath(), "g9sync-android-files-" + Guid.NewGuid().ToString("N"));
+
+        await using var harness = await SyncHarness.CreateAsync(output, configure: o => o.PageRows = 2_000, transport: SyncTransportKind.SignalR,
+            model: DeviceSchema.ConfigureServer, server: s => s.UseSnapshotFiles(o => o.Directory = serverFiles),
+            seedBeforeCapture: async dataSource =>
+            {
+                await using (var schema = dataSource.CreateCommand(DeviceSchema.Sql)) await schema.ExecuteNonQueryAsync();
+                foreach (var (siteId, count) in new[] { (site, pots), (otherSite, 10_000) })
+                {
+                    foreach (var sql in DeviceSchema.SeedSql)
+                    {
+                        await using var seed = dataSource.CreateCommand(sql);
+                        seed.CommandTimeout = 0;
+                        seed.Parameters.Add(new Npgsql.NpgsqlParameter { Value = siteId });
+                        seed.Parameters.Add(new Npgsql.NpgsqlParameter { Value = count });
+                        await seed.ExecuteNonQueryAsync();
+                    }
+                }
+
+                await using var analyze = dataSource.CreateCommand("ANALYZE device.\"Ridge\"; ANALYZE device.\"Pot\"");
+                await analyze.ExecuteNonQueryAsync();
+            });
+
+        var hub = new Uri(harness.HubUrl!);
+        await using var reverse = await device.ReversePortAsync(hub.Port);
+        var common = new Dictionary<string, string>
+        {
+            ["hub"] = hub.ToString(), ["site"] = site.ToString("D"), ["protocol"] = nameof(G9ESyncHubProtocol.MessagePack),
+            ["frameVersion"] = G9SyncData.Protocol.G9SyncProtocol.MaxFrameVersion.ToString(CultureInfo.InvariantCulture)
+        };
+        var repeats = Math.Max(1, EnvironmentInt("G9SYNC_ANDROID_FILE_REPEATS", 3));
+        var rowsExtras = new Dictionary<string, string>(common) { ["db"] = $"rows-{pots}.db", ["files"] = "off" };
+        var fileExtras = new Dictionary<string, string>(common) { ["db"] = $"file-{pots}.db", ["files"] = "on" };
+        var used = new List<Dictionary<string, string>> { rowsExtras, fileExtras };
+        var runs = new List<(string Label, string Step, DeviceRun Run, ServerCost Server)>();
+        var rowRuns = new List<DeviceRun>();
+        var reuseRuns = new List<DeviceRun>();
+        try
+        {
+            async Task<DeviceRun> InitialAsync(string label, Dictionary<string, string> extras, bool files)
+            {
+                var steps = new List<(string, DeviceRun, ServerCost)>();
+                var run = await StepAsync(device, harness, "initial", extras, pots, steps);
+                runs.Add((label, "initial", run, steps[0].Item3));
+                await AssertMatchesServerAsync(harness, site, run, pots);
+                if (files)
+                {
+                    Assert.True(run.Long("snapshotFiles") >= 1, $"{label}: the first download did not arrive as a snapshot file: " + run.Log);
+                    Assert.True(run.Long("fileRows") >= pots, $"{label}: {run.Long("fileRows")} rows came from files; the site has {pots} pots.");
+                    Assert.Equal(0, run.Long("stagedFilesLeft"));
+                }
+                else
+                {
+                    Assert.Equal(0, run.Long("snapshotFiles"));
+                }
+
+                // Measured: its database goes at once - every 500,000-pot database is ~250 MB, and an emulator's data partition
+                // fills up long before the repeats are done. The file database the delta and reconcile steps reuse stays.
+                if (!ReferenceEquals(extras, fileExtras))
+                {
+                    using var cleanup = await device.RunScenarioAsync("sync", new Dictionary<string, string>(extras) { ["step"] = "cleanup" }, TimeSpan.FromMinutes(2), output);
+                }
+
+                return run;
+            }
+
+            Dictionary<string, string> Fresh(Dictionary<string, string> template, string db)
+            {
+                var extras = new Dictionary<string, string>(template) { ["db"] = db };
+                used.Add(extras);
+                return extras;
+            }
+
+            // Rows first: the file run then finds the server's snapshot file cache cold (it is built on the first request).
+            var rows = await InitialAsync("rows #1", rowsExtras, files: false);
+            rowRuns.Add(rows);
+            var file = await InitialAsync("file, server builds", fileExtras, files: true);
+
+            // The same file again for other devices (the server reuses what it built), alternating with rows: the medians of the two
+            // paths are compared, since one emulator run can differ from the next by a factor of several.
+            for (var i = 1; i <= repeats; i++)
+            {
+                reuseRuns.Add(await InitialAsync($"file, reused #{i}", Fresh(fileExtras, $"file-r{i}-{pots}.db"), files: true));
+                if (i < repeats) rowRuns.Add(await InitialAsync($"rows #{i + 1}", Fresh(rowsExtras, $"rows-{i + 1}-{pots}.db"), files: false));
+            }
+
+            // A file-born database is an ordinary one: a delta, then a forced reconcile that finds nothing to repair.
+            var changed = await harness.ExecServerAsync(
+                """UPDATE device."Pot" SET "Gender" = ("Gender" + 1) % 3, "UpdatedTime" = now() WHERE "Index" % 100 = 7 AND "RidgeId" IN (SELECT "Id" FROM device."Ridge" WHERE "SiteId" = $1)""",
+                site);
+            await harness.WaitForCaptureAsync();
+            var tail = new List<(string Step, DeviceRun Run, ServerCost Server)>();
+            var delta = await StepAsync(device, harness, "delta", fileExtras, pots, tail);
+            Assert.Equal(changed, delta.Step("delta").GetProperty("downloaded").GetInt64());
+            Assert.Equal(0, delta.Long("snapshotFiles"));
+            await AssertMatchesServerAsync(harness, site, delta, pots);
+            var reconcile = await StepAsync(device, harness, "reconcile", fileExtras, pots, tail);
+            runs.Add(("file db: delta", "delta", delta, tail[0].Server));
+            runs.Add(("file db: reconcile", "reconcile", reconcile, tail[1].Server));
+            Assert.Equal(0, reconcile.Step("reconcile").GetProperty("applied").GetInt64());
+            await AssertMatchesServerAsync(harness, site, reconcile, pots);
+
+            var report = Header(device, rows, $"First download on the device: snapshot file vs rows (ADR-0072) — {pots:N0} pots, MessagePack");
+            report.AppendLine("The same site from the same server: as rows (the device declines files) and as a snapshot file - once while the server " +
+                              $"builds it, then reused, alternating with rows ({repeats} of each; every run is a cold app start into a new database). " +
+                              "CPU is the device's process CPU time for the whole run - the proxy for the heat of a first sync. " +
+                              "Wire = bytes through the server's sockets, down.").AppendLine();
+            report.AppendLine("Applying = the file copy + the rest of the apply transaction (g9_rows, index rebuilds, cursors, the commit's WAL write) + " +
+                              "the housekeeping after it (PRAGMA optimize, the WAL checkpoint that folds the new pages into the database).").AppendLine();
+            report.AppendLine("| Run | Sync | Rows | Wire down | CPU (device) | Allocated | GC gen0/1/2 · pause | Peak RSS | UI max gap · >100 ms | Server CPU | Applying: copy · rest of tx · after | Tables | Phases |")
+                .AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+            foreach (var (label, step, run, server) in runs)
+            {
+                var s = run.Step(step);
+                report.AppendLine(CultureInfo.InvariantCulture,
+                    $"| {label} | {s.GetProperty("durationMs").GetDouble():N0} ms | {s.GetProperty("downloaded").GetInt64():N0} | {Megabytes(server.WireDown)} | " +
+                    $"{s.GetProperty("cpuMs").GetDouble():N0} ms | {s.GetProperty("allocatedMb").GetDouble():N0} MB | " +
+                    $"{s.GetProperty("gen0").GetInt64()}/{s.GetProperty("gen1").GetInt64()}/{s.GetProperty("gen2").GetInt64()} · {s.GetProperty("gcPauseMs").GetDouble():N0} ms | " +
+                    $"{s.GetProperty("peakRssMb").GetDouble():N0} MB | {s.GetProperty("uiMaxGapMs").GetDouble():N0} ms · {s.GetProperty("uiGapsOver100").GetInt64()} | " +
+                    $"{server.CpuMs:N0} ms | {run.Long("fileCopyMs"):N0} · {run.Long("applyElapsedMs") - run.Long("fileCopyMs"):N0} · {run.Long("applyingMs") - run.Long("applyElapsedMs"):N0} ms | " +
+                    $"{run.Root.GetProperty("fileTables").GetString()} | {s.GetProperty("phases").GetString()} |");
+            }
+
+            static double Median(IEnumerable<double> values)
+            {
+                var sorted = values.Order().ToArray();
+                return sorted.Length % 2 == 1 ? sorted[sorted.Length / 2] : (sorted[sorted.Length / 2 - 1] + sorted[sorted.Length / 2]) / 2;
+            }
+
+            double Cpu(DeviceRun run) => run.Step("initial").GetProperty("cpuMs").GetDouble();
+            double Ms(DeviceRun run) => run.Step("initial").GetProperty("durationMs").GetDouble();
+            var rowsCpu = Median(rowRuns.Select(Cpu));
+            var fileCpu = Median(reuseRuns.Select(Cpu));
+            var rowsMs = Median(rowRuns.Select(Ms));
+            var fileMs = Median(reuseRuns.Select(Ms));
+            report.AppendLine().AppendLine("| Median of the first downloads | Sync | Device CPU |").AppendLine("|---|---|---|")
+                .AppendLine(CultureInfo.InvariantCulture, $"| rows ({rowRuns.Count} runs) | {rowsMs:N0} ms | {rowsCpu:N0} ms |")
+                .AppendLine(CultureInfo.InvariantCulture, $"| file, reused ({reuseRuns.Count} runs) | {fileMs:N0} ms | {fileCpu:N0} ms |")
+                .AppendLine(CultureInfo.InvariantCulture, $"| file while the server builds it (1 run) | {Ms(file):N0} ms | {Cpu(file):N0} ms |")
+                .AppendLine().AppendLine(CultureInfo.InvariantCulture,
+                    $"File (reused) vs rows, medians: sync {fileMs / rowsMs:P0} of the time, device CPU {fileCpu / rowsCpu:P0}; " +
+                    $"databases {file.Root.GetProperty("databaseMb").GetDouble():N1} MB (file) vs {rows.Root.GetProperty("databaseMb").GetDouble():N1} MB (rows).");
+            await WriteResultAsync($"android-snapshot-file-{pots}-latest.md", report);
+            output.WriteLine(report.ToString());
+
+            Assert.True(fileCpu < rowsCpu, $"The file path must cost the device less CPU than rows (medians): {fileCpu:N0} ms vs {rowsCpu:N0} ms.");
+        }
+        finally
+        {
+            foreach (var (_, _, run, _) in runs) run.Dispose();
+            foreach (var extras in used)
+            {
+                using var cleanup = await device.RunScenarioAsync("sync", new Dictionary<string, string>(extras) { ["step"] = "cleanup" }, TimeSpan.FromMinutes(2), output);
+            }
+
+            try
+            {
+                Directory.Delete(serverFiles, recursive: true);
+            }
+            catch (IOException)
+            {
+                // a late handle; the temp folder is disposable
+            }
         }
     }
 

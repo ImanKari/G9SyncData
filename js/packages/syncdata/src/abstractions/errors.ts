@@ -46,6 +46,10 @@ export const G9SyncErrorCodes = {
   ConflictDeleted: 'G9S-CON-DELETED',
   ConflictResolverRejected: 'G9S-CON-RESOLVER',
 
+  /** The server could not build or serve a planned snapshot file (ADR-0072); the client replans the pull as rows. */
+  SnapshotFileUnavailable: 'G9S-FILE-UNAVAILABLE',
+  /** A downloaded snapshot file failed the device's checks; nothing of it was applied and the pull is replanned as rows. */
+  SnapshotFileCorrupt: 'G9S-FILE-CORRUPT',
   LocalStoreError: 'G9S-LOCAL-STORE',
   /** The device database is damaged or not a database (ADR-0068). Export what is readable and rebuild from the server. */
   LocalStoreCorrupt: 'G9S-LOCAL-CORRUPT',

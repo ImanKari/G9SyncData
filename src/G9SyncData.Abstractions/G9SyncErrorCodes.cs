@@ -70,6 +70,20 @@ public static class G9SyncErrorCodes
     public const string ConflictDeleted = "G9S-CON-DELETED";
     public const string ConflictResolverRejected = "G9S-CON-RESOLVER";
 
+    // Snapshot files (ADR-0072)
+
+    /// <summary>
+    ///     The server could not build or serve a snapshot file it had planned (its disk, its SQLite, a build that failed). The client
+    ///     discards the staged download and plans the same pull again as rows: a file is an optimisation, never the only way to the data.
+    /// </summary>
+    public const string SnapshotFileUnavailable = "G9S-FILE-UNAVAILABLE";
+
+    /// <summary>
+    ///     A downloaded snapshot file failed the device's checks (a segment's or the whole file's SHA-256, its length, its tables). Nothing
+    ///     of it was applied; the client plans the pull again as rows.
+    /// </summary>
+    public const string SnapshotFileCorrupt = "G9S-FILE-CORRUPT";
+
     // Client-local
     public const string LocalStoreError = "G9S-LOCAL-STORE";
 

@@ -55,6 +55,13 @@ public sealed class G9CSyncEngineOptions
     public int MaxFrameVersion { get; set; } = G9SyncData.Protocol.G9SyncProtocol.MaxFrameVersion;
 
     /// <summary>
+    ///     Offer the server to send large first downloads as SQLite snapshot files (ADR-0072), when the store can take them
+    ///     (<c>IG9SyncClientStore.DescribeSnapshotFiles</c>). Default true. A file the server cannot produce or the device rejects is
+    ///     replaced by the same pull as rows, in the same run.
+    /// </summary>
+    public bool AcceptSnapshotFiles { get; set; } = true;
+
+    /// <summary>
     ///     Fail a run when the server reports a client column whose declared type differs from the server's (ADR-0061). Default false:
     ///     a released build keeps syncing everything else and reports the columns in <c>G9CSyncRunResult.ModelProblems</c>. Turn it on in
     ///     debug and QA builds - the column syncs in neither direction, and the only place that is cheap to notice is before release.

@@ -1040,7 +1040,7 @@ device cost; not needed yet.
 
 ## ADR-0041 — No server-built SQLite snapshot download (plan D-06)
 
-**Status:** accepted (2026-09-17). Supersedes the "deferred" note on D-06 in ADR-0034.
+**Status:** superseded by ADR-0072 (2026-10-12). Was accepted (2026-09-17). Supersedes the "deferred" note on D-06 in ADR-0034.
 
 **Context.** ADR-0034 measured that attaching a server-built SQLite file and copying it (variant K) loads 25% faster than the store's row
 path on a desktop. Re-measured against the optimised path, on the Android emulator, with the file's download size:
@@ -1660,3 +1660,119 @@ duplicate keys or a foreign trigger) — LES-0054. And `initialize` provisions e
 batch in the per-table statement order, giving new tables their AUTOINCREMENT tid explicitly — LES-0053. Both are
 TypeScript-only: the .NET store runs in process, where a statement costs nothing to cross. The per-run bookkeeping
 (`saveHello`, the protected rows an apply reads) is batched the same way — LES-0055.
+
+## ADR-0072 — Large first downloads as SQLite snapshot files, copied by the device in SQL
+
+**Status:** accepted (2026-10-12). Supersedes ADR-0041. (T1 built;
+T2 and T3 not, see Consequences).
+
+**Context.** ADR-0041 rejected a server-built SQLite download because it saved ~1.9 s of device load and cost 44 % more
+bytes, with field tablets assumed on ~10 Mbit/s. Since then the transfer of a site takes seconds (G9SyncData replaced
+Dotmim), and what remains is the device's own work: one upsert, one metadata row and one trigger decision per row,
+which heats the phone on a farm's first sync and, on Lynx, crosses the bridge per statement batch. ADR-0041's premises
+moved: device CPU, not bytes, is the cost the users feel.
+
+**Decision.**
+
+1. **One file per subscription.** When the device offers files (`G9DtPullRequest.SnapshotFiles`: its DDL per table,
+   storage forms and own indexes, `MinRows`, `MaxBytes`, `MaxFiles`) and a non-ephemeral subscription's first download
+   (no cursor, or a resync) is at least `MinRows` (20,000) rows, the plan answers with ONE `SnapshotFile` part for all
+   of the subscription's tables. The server builds the file with the device's own DDL (`G9CSnapshotFileWriter`, shared
+   with the client package) from the same snapshot read the row path streams. A subscription can opt out
+   (`.SnapshotFiles(G9ESnapshotFilePolicy.Never)`; not part of the definition hash).
+2. **The file.** `application_id` "G9SF", `user_version` = format 1. Per table the device's table and its indexes, rows
+   in the server's key order, and `g9snap_ver_<tid> (rid INTEGER PRIMARY KEY, ver)` - the server version of each row by
+   its rowid. Keying versions by rowid instead of by key saved 16 % of the bytes (the key is the widest value of most
+   rows and was stored a third time) and numbers rows in arrival order, which is exactly the row path's numbering for
+   every key type.
+3. **Transport: segments on the ordinary Pull stream** (`G9DtSyncChunk.File`), not an HTTP endpoint. Each 1 MiB segment
+   is Brotli-compressed on its own (q5, window 22) and carries its offset and the SHA-256 of its raw bytes; the first
+   carries the manifest. Resume is a continuation (`seg:<manifest sha256>:<next index>`) under the same signed token, on
+   any instance: a different build of the file restarts it. No second authentication path, nothing for SignalR or the
+   in-memory transport to learn.
+4. **The device.** A segment is verified BEFORE it is written; the file becomes durable at checkpoints (8 MiB and the
+   last segment: flush, then the stage row). Before ATTACH: every segment, the size, the SQLite header and "G9SF";
+   once attached, each version table's shape. Per table, inside the apply transaction: `copy` (empty table, same columns: `INSERT … SELECT *`,
+   SQLite's transfer optimisation copies the table and every index b-tree; local indexes the file cannot supply are
+   dropped and rebuilt), `columns` (an explicit column list), or `merge` (a table with rows or protected rows: the
+   per-row rules, set-based). `g9_rows` in one statement per table. The TypeScript store runs the same SQL; its bytes go
+   through a `G9SnapshotFileSink` (Lynx: natively, never through JavaScript).
+5. **Cache identity is the visibility function, not the content.** Files are cached by SHA-256 of (format, epoch,
+   subscription key, definition hash, auth hash, storage forms, every table's frame columns and local shape). Comparing
+   the visible rows of two callers would need their key sets at a common snapshot - the full read the cache exists to
+   avoid. A cached file is reused while its delta to the plan's snapshot is ≤ 5 % of its rows, it is ≤ 24 h old and
+   above the tombstone horizon; the device then receives the file plus `Delta` parts from the file's snapshot.
+6. **Fallback, once per run.** `G9S-FILE-UNAVAILABLE` (the server cannot produce it) or `G9S-FILE-CORRUPT` (a device
+   check failed): the staged run is discarded and the same pull is planned as rows in the same run.
+
+**Measured** (benchmarks/results/android-snapshot-file-*-latest.md, snapshot-file-codec-latest.md). The device run is
+the Android emulator, Release, the same site from the same server; both databases match the server after every step,
+and a file-born database then takes a delta and a forced reconcile like any other.
+
+| Emulator, MessagePack, median of 3 alternating runs | Rows | File, reused | File while the server builds it (1 run) |
+|---|---|---|---|
+| 200,000 pots: sync / device CPU | 6.4 s / 3.2 s | 3.6 s / 2.3 s | 5.5 s / 2.2 s |
+| 500,000 pots: sync / device CPU | 16.9 s / 7.1 s | 11.4 s / 4.2 s | 15.2 s / 5.4 s |
+| 500,000 pots: bytes down | 20.6 MB | 30.1 MB | 30.1 MB |
+
+Single runs on this emulator differed by up to 6× (one row run took 39.5 s of CPU, the next 6.7 s), hence the
+alternating runs and medians. Of a reused file's ~8.5 s apply at 500,000 pots the copy is ~1 s; the rest is the
+commit writing ~250 MB into the WAL and folding it into the database. The .NET row path was already at its floor
+(ADR-0058), so on this x86 emulator the file saves ~40 % of the device CPU, not more. The TypeScript store on Lynx,
+where every statement batch crosses the bridge, is where the row path costs minutes - and where the file path pays
+off most (the real Lynx 4.1 runtime on the same emulator, `js/apps/lynx-android-host`, native module as packed):
+
+| Interop scenario step (MessagePack) | Rows: download · apply | Snapshot file: download · apply |
+|---|---|---|
+| client a, first download of 2 × 25,000 pots | 0.5 s · 13.6 s | 0.9 s · 0.6 s |
+| client b, first download of 25,000 pots | 0.5 s · 6.4 s | 0.3 s · 0.4 s |
+| the whole scenario (push, poke, reconcile, unsubscribe included) | 38.3 s | 20.3 s |
+
+**On real devices** (2026-10-12; every database equal to the server, every scenario check passed; numbers in
+`benchmarks/results/devices/`):
+
+| Real devices, 2026-10-12 | Rows | Snapshot file |
+|---|---|---|
+| Samsung Galaxy Tab A9 (MT8781), .NET client, 500,000 pots: sync / device CPU (medians of 3) | 21.8 s / 22.1 s | 8.9 s / 11.2 s |
+| the same, 200,000 pots | 9.4 s / 9.8 s | 4.7 s / 5.7 s |
+| the same tablet, Lynx (TypeScript client), apply of 50,000 pots | 28.4 s | 1.3 s |
+| iPhone 12 Pro Max, Lynx 4.0.3 (JavaScriptCore), apply of 50,000 pots | 6.9 s | 0.3 s |
+| **DOOGEE S96Pro** (Android 10), a production farm's farm-site download (449,758 rows of five tables), .NET: sync / device CPU (medians of 3) | 19.2 s / 17.5 s | 9.6 s / 7.9 s |
+| the same phone and farm, Lynx 4.1 (PrimJS): the page's whole run (apply) | 351 s (349 s) | 12.2 s (7.4 s) |
+
+The tablet confirms the emulator's direction with far less noise (three runs within 4 %): the file halves the .NET
+client's device CPU and takes the Lynx client's apply from half a minute to about a second. The field phone - a
+DOOGEE S96Pro - was measured with a REAL farm instead of synthetic pots: AgriPad's farm-site tables of a production farm
+(Ridge, Pot, current Placement, Tree, Graft; the subscription's three other tables hold no rows for this farm), loaded
+from a device database of the farm and checked against the live server the same day (449,511 rows there). The .NET
+file path halves the sync and takes 55 % off the CPU (apply 5.0-5.8 s, of which the copy is 2.2-2.3 s, against
+15.1-15.8 s); on Lynx the row path costs almost six minutes and the file twelve seconds. The file is ×1.6 the rows
+on the wire for this farm (29.0 MB vs 18.2 MB): for the .NET client that is break-even at roughly 9 Mbit/s, for
+Lynx at a fraction of 1 Mbit/s. The DOOGEE S99 itself is still not measured.
+
+Bytes (200,000 synthetic AgriPad pots, desktop): rows 6.18 MB; the file at q5 14.31 MB (17.08 MB with versions by
+key); q11 12.02 MB at ~60 × the server CPU; without index pages 8.42 MB, but the device then rebuilds the indexes
+(copy 3.2 s instead of 1.6 s). The format keeps the index pages and q5: device CPU is what the file is for, and the
+first requester waits for the build.
+
+**Consequences.**
+- New package `G9SyncData.Server.SnapshotFiles` (`UseSnapshotFiles()`); it needs `SQLitePCLRaw.bundle_e_sqlite3` on the
+  server (linux-x64 is in the bundle). Files live in `G9CSnapshotFileOptions.Directory` with an LRU (20 GiB), a free-space
+  floor and a cleanup timer; a multi-instance deployment needs a shared `TokenSigningKey` (as for any resume).
+- Old clients and old servers are unaffected: the offer is a new optional request field, the part kind is new, and a
+  device that offers nothing gets rows.
+- The wire grows for a first download (×1.5 on the emulator's schema, ×2.3 on the synthetic AgriPad shape) - the price
+  of the copy. Cheaper layouts are measured and possible later without a protocol change: a file without index pages
+  (×1.4, the device builds the indexes) or a background q11 recompression of a cached file (−16 %; segments are checked
+  against their raw SHA-256, so a device may mix old and new compressed segments).
+- **T2 (the partition file) is not built.** In `copy` mode T1 already writes an empty partition by page copy; what T2
+  would add is skipping the copy's writes - measured above as most of the apply: the pages go into the WAL and then
+  into the database - and `g9_rows`, against a second identity path and a database swap under the app's open
+  connections (AgriPad holds its own). On the DOOGEE S96Pro that double write is ~3 s of a 9.6 s .NET first download of
+  a 450,000-row farm (copy 2.3 s, rest of the transaction 2.6-3.5 s) - not dominant; T2 stays unbuilt.
+- **T3 (a server-built GeoPackage) is not built.** It belongs to the MAUI app's map pipeline and the Mobile server, not
+  to this library, and the app is moving to Lynx with a native C++ map core; the snapshot file is the input such a step
+  would read.
+- The device side of Lynx is proven in each native core, on a Lynx-shaped runtime, and on real devices: the Android
+  module in a Lynx host on a Samsung tablet and the iOS module in a Lynx host on an iPhone (`js/apps/lynx-ios-host`,
+  N-SD-07 in `js/packages/lynx/Native-Validation-Pending.md`).

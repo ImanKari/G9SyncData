@@ -15,7 +15,7 @@ omitted); row data travels as binary **G9RowBatch** frames inside `G9DtSyncChunk
 | **Push: `HeldTables`** | the columns the device holds for each table, in its order: sent for every PUSHED table (and every table when the push carries commands). Canonical rows come back in exactly these columns — including read-only and computed ones a push never carries (LES-0035) |
 | **Hello** | `G9DtHelloRequest { ClientId, AppVersion, ProtocolVersion, Tables (client model), Subscriptions (name, parameters, cursor, hashes) }` → `G9DtHelloResult { Epoch, ServerTimeUtc, Tables (negotiated), UnknownTables, Definitions, Subscriptions (decision per key), MaxPushRows, MaxPushBytes, Error }` — the device sizes push batches to the announced limits (0 = not announced; ADR-0037) | column negotiation: server model order, filtered to columns the client has with the same type |
 | **Push** | `G9DtPushRequest { ClientId, BatchId, Subscriptions, Tables (column order per table), Commands, HeldTables }` + stream of chunks with `Push` sections → `G9DtPushResult { BatchId, AlreadyApplied, Accepted, Rejections, Conflicts, CanonicalFrames, CommandResults, Error }` | idempotent by `BatchId` |
-| **PlanPull** | `G9DtPullRequest { ClientId, Subscriptions, Tables, Backfills }` → `G9DtPullPlan { Token, Parts (key, table, kind, rows, bytes), TotalRows, EstimatedBytes, Cursors, Skipped, Error }` | exact row counts before any data moves |
+| **PlanPull** | `G9DtPullRequest { ClientId, Subscriptions, Tables, Backfills, FrameVersion, SnapshotFiles? }` → `G9DtPullPlan { Token, Parts (key, table, kind, rows, bytes, file?), TotalRows, EstimatedBytes, Cursors, Skipped, Error }` | exact row counts before any data moves; `SnapshotFiles` is the device's offer of files (ADR-0072, below) |
 | **Pull** | `(token, continuation?)` → stream of `G9DtSyncChunk` | resumable anywhere with the same token |
 | **Reconcile** | `G9DtReconcileRequest { ClientId, Subscription, Tables (256 digests + counts each) }` → stream: `KeyVersions` chunks, then a final chunk with `G9DtReconcileSummary { Cursor, DefinitionHash, AuthHash, Mismatched }` | |
 | **FetchRows** | `G9DtFetchRowsRequest { ClientId, Subscription, TableId, Keys, Columns }` → stream of `Upsert` chunks, final chunk | rows filtered by the subscription's scope and When |
@@ -28,9 +28,29 @@ changed or tombstone horizon passed) · `Unknown` · `InvalidParameters` · `For
 
 ### Chunks
 
-`G9DtSyncChunk { Sequence, Payload, RowCount, SubscriptionKey, IsFinal, Continuation, ReconcileSummary }`. A chunk that
+`G9DtSyncChunk { Sequence, Payload, RowCount, SubscriptionKey, IsFinal, Continuation, ReconcileSummary, File }`. A chunk that
 carries `Continuation { PartIndex, AfterKey, NextSequence }` is a **safe resume point**: everything up to it is complete.
 Pages with no rows are never sent; the last chunk of a stream has `IsFinal = true`.
+
+### Snapshot files (ADR-0072)
+
+The device offers files with `G9DtPullRequest.SnapshotFiles = G9DtSnapshotFileRequest { FormatVersion (1), Storage
+{ DateTimeAsTicks, DateTimeFormat, DecimalAsText }, Tables [{ TableId, LocalName, KeyColumn, KeyType, Columns, Indexes }],
+MinRows, MaxBytes, MaxFiles }` - its own DDL, so the server can build a file the device copies as it is. A server that does
+not know the field ignores it; a device that does not send it never sees a file.
+
+- **Plan.** A `G9DtPlannedPart` of kind `SnapshotFile` (3) has `TableId = 0` and `File = G9DtPlannedFile { FileId,
+  SnapshotUtc, Tables [{ TableId, Rows }] }`: one part for ALL tables of one subscription. When the server reuses an older
+  file it adds ordinary `Delta` parts from the file's snapshot after it.
+- **Stream.** The part's chunks carry `File = G9DtFileSegment { FileId, Index, Offset, Length, Sha256, Manifest? }` and
+  the segment's Brotli bytes in `Payload` (each segment compressed on its own; `Length` and `Sha256` are of the RAW
+  bytes). The first segment of every stream - a resumed one too - carries `Manifest = G9DtSnapshotFileManifest { FileId, FormatVersion, Bytes, SegmentBytes,
+  Segments, Sha256 (whole file), Compression ("br"), BuiltUtc, Tables [{ TableId, Name, VersionTable, Rows }] }`.
+  `RowCount` is the rows a segment stands for (progress only).
+- **Resume.** Every segment is a resume point: `Continuation.AfterKey = "seg:<manifest sha256>:<next index>"`. A resume
+  that reaches an instance whose build has another SHA-256 restarts the file from segment 0 (with its manifest).
+- **Errors.** `G9S-FILE-UNAVAILABLE` (the server cannot produce the planned file) and `G9S-FILE-CORRUPT` (a device
+  check failed); the engine replans the pull as rows, once per run.
 
 ### Commands (ADR-0025)
 

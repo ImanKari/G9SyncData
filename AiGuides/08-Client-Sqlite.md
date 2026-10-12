@@ -219,6 +219,48 @@ to the app, and both sqlite-net and EF Core map `Guid` to TEXT: switching would 
 index of the app. The larger costs were elsewhere (key order 2×, idle triggers 2.6×, index maintenance 1.8×). BLOB keys remain an
 option for a table the app declares that way; the store has no BLOB-GUID mapping today ([17](17-Known-Limitations.md)).
 
+## Snapshot files (`G9CSqliteSyncStore.SnapshotFiles.cs`, ADR-0072)
+
+A large first download can arrive as a SQLite file the server built with THIS store's DDL (the store describes its tables
+in the pull request: columns, key, storage forms, its own indexes). The store stages it and copies it table by table in
+SQL, inside the ordinary apply transaction.
+
+**The file.** `PRAGMA application_id` = `0x47395346` ("G9SF"), `user_version` = the format (1). Per table: the device's
+table exactly (same columns, declared types, collations, NOT NULL, defaults; rows in the server's key order) with the
+device's own indexes, and `g9snap_ver_<server table id> (rid INTEGER PRIMARY KEY, ver INTEGER NOT NULL)`: the server
+version of each row by its rowid in the data table. No triggers, no foreign keys, no `g9_*` tables.
+
+**Staging** (`StageFileSegment`). A segment is decompressed, checked (length, SHA-256) and only then written at its offset
+(`RandomAccess`; on Lynx the sink does it natively). Durable at checkpoints only - every `SnapshotFileCheckpointBytes`
+(8 MiB) and at the last segment: the file is flushed first, then one transaction records the `g9_stage` resume row and
+`g9_stage_files.segments_done`. Files live in `SnapshotFileDirectory` (default `<database>.g9files`) as
+`<run id>-<file id>.sqlite`; the start-up sweep deletes only such names (and their `-journal`/`-wal`/`-shm`) that no
+stage refers to, so the directory may be shared with anything, the database included.
+
+**Verification before ATTACH.** Every segment arrived, the size is the manifest's, the header is SQLite's and the
+application id is "G9SF". Anything else is `G9S-FILE-CORRUPT` and the engine falls back to rows for that run.
+
+**The apply, per table** (event 20121 says which mode):
+
+| Mode | When | What |
+|---|---|---|
+| `copy` | the local table is empty, nothing protected, and its columns are the file's in the same order | `INSERT INTO main.T SELECT * FROM g9snapN.T` - SQLite's transfer optimisation copies the table and every index b-tree page by page. Local indexes the file cannot supply (another column list, collation, uniqueness, a partial index) are dropped first and rebuilt at the end of the apply, like deferred indexes |
+| `columns` | empty and unprotected, but the column lists differ (a column the server does not send) | the same copy with an explicit column list |
+| `merge` | the table holds rows (a second site into the first one's table) or has protected rows | set-based per-row rules: protected rows (dirty, command rows, changed after the stage began) are not written but gain membership; identical rows keep their feed position (ADR-0058); everything else is upserted and numbered |
+
+`g9_rows` follows in ONE statement per table from the version table, each written row numbered on the clock in rowid
+(= arrival) order - the numbering the row path gives the same rows. `last_reconcile_utc` of the subscription is the
+file's snapshot time. `G9CApplyDiagnostics.SnapshotFiles`, `FileRows`, `FileCopyMs` and `FileTables` ("Pot":
+"copy", or "copy+merge" across two files) say what happened.
+
+| Option (`G9CSqliteSyncStoreOptions`) | Default | Meaning |
+|---|---|---|
+| `AcceptSnapshotFiles` | true | offer files; a server without them ignores the offer |
+| `SnapshotFileMinRows` | 0 (the server's threshold, 20,000 by default) | the smallest subscription this device wants as a file |
+| `SnapshotFileMaxBytes` | 2 GiB | the largest file (uncompressed) this device accepts |
+| `SnapshotFileDirectory` | `<database>.g9files` | where segments are staged until the apply copies them |
+| `SnapshotFileCheckpointBytes` | 8 MiB | durability interval while a file downloads |
+
 ## Apply diagnostics and the 1.1.0 options
 
 `G9CApplyReport.Diagnostics` (`G9CApplyDiagnostics`, ADR-0058) says how an apply ran; the engine copies it to
@@ -256,4 +298,5 @@ bytes; `DiscardAllStagedPullsAsync` is the operator's reset.
 `IG9SyncLocalStoreFailure`: result codes 11/26 -> Corrupt, 13 -> DiskFull, 5/6 -> Busy.
 
 **Events.** 20105/20106 incarnation adopted/replaced, 20107 integrity problems, 20108 pending exported, 20112 apply diagnostics,
-20113 the checkpoint after an apply was blocked by a reader (skipped, not waited for), 20114 maintenance failed and was skipped.
+20113 the checkpoint after an apply was blocked by a reader (skipped, not waited for), 20114 maintenance failed and was skipped,
+20121 a snapshot-file table applied (mode), 20122 a staged snapshot file could not be deleted (retried at the next start).

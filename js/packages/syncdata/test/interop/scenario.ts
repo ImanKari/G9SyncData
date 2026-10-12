@@ -8,6 +8,7 @@ import { G9ESyncOutcome, G9ESyncPriority, type G9SyncRunResult } from '../../src
 import type { G9SyncTransport } from '../../src/client/transport.js';
 import { G9SqliteSyncStore } from '../../src/sqlite/store.js';
 import type { G9SessionToken, G9SqlValue, G9SqliteDriver } from '../../src/sqlite/driver.js';
+import type { G9SnapshotFileSink } from '../../src/sqlite/options.js';
 
 /**
  * The client model of the sample (twin of samples/G9SyncData.Samples.AotClient/SampleEntities.cs). The .NET source
@@ -41,6 +42,8 @@ export interface ScenarioDeps {
   /** Inserts `count` pots on every site on the server (POST /sample/pots). */
   addServerPots: (count: number) => Promise<void>;
   log: (line: string) => void;
+  /** Where client `name` writes snapshot files (ADR-0072); absent = the client offers none and receives rows. */
+  snapshotFiles?: (name: string) => G9SnapshotFileSink | null;
 }
 
 export interface Client {
@@ -53,7 +56,7 @@ export interface Client {
 /** A client: store, engine and an "app" session on the same file (the app's own data access, which capture records). */
 export async function createClient(deps: ScenarioDeps, name: string, pokes = false): Promise<Client> {
   const path = deps.databasePath(name);
-  const store = new G9SqliteSyncStore({ driver: deps.driver, databasePath: path });
+  const store = new G9SqliteSyncStore({ driver: deps.driver, databasePath: path, snapshotFiles: deps.snapshotFiles ? deps.snapshotFiles(name) : null });
   const transport = deps.transport();
   const engine = new G9SyncEngine(store, transport, sampleModel(), {
     appVersion: 'interop-' + name,

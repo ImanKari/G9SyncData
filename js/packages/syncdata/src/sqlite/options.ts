@@ -23,6 +23,33 @@ export interface G9MarkerFileSystem {
   remove(path: string): Promise<void>;
 }
 
+/**
+ * Where a device writes downloaded snapshot files (ADR-0072). The bytes of a file never pass through the store's own code:
+ * each segment goes straight from the transport to `writeSegment`, which a platform implements natively (Lynx: the
+ * `G9SyncDataLynxModule` of @g9tm/syncdata-lynx; Node: `nodeSnapshotFileSink` of @g9tm/syncdata/node). The store reads the
+ * finished file through SQLite's ATTACH, so the sink never needs to read a file back except its 100-byte header.
+ */
+export interface G9SnapshotFileSink {
+  /** The directory staged files go to (created when missing). Use a cache directory, outside the backup set. */
+  readonly directory: string;
+  /** Creates `path` (or truncates it) as `size` zero bytes. */
+  create(path: string, size: number): Promise<void>;
+  /**
+   * Decompresses one Brotli segment (each segment is compressed on its own), checks that it is `length` bytes whose SHA-256 is
+   * `sha256` (lower-case hex), and writes it at `offset` in `path`. With `sync`, the file is flushed to disk before the promise
+   * settles. Rejects - writing nothing - when the segment does not decompress to `length` bytes or fails its hash.
+   */
+  writeSegment(path: string, offset: number, compressed: Uint8Array, length: number, sha256: string, sync: boolean): Promise<void>;
+  /** The file's size, or null when it does not exist. */
+  size(path: string): Promise<number | null>;
+  /** The first `length` bytes of the file (the SQLite header check). */
+  head(path: string, length: number): Promise<Uint8Array>;
+  /** Deletes the file; a missing file is not an error. */
+  remove(path: string): Promise<void>;
+  /** The full paths of the files in `directory` (for the sweep of files no stage refers to). */
+  list(directory: string): Promise<string[]>;
+}
+
 export interface G9SqliteSyncStoreOptions {
   /** The SQLite driver (Lynx native, Lynxtron, or `nodeSqliteDriver()` from `@g9tm/syncdata/node`). */
   driver: G9SqliteDriver;
@@ -67,13 +94,25 @@ export interface G9SqliteSyncStoreOptions {
   /** Brotli encoder for push frames; uncompressed frames when omitted (every server accepts them). */
   frameCompressor?: G9FrameCompressor | null;
   logger?: G9SyncLogger | null;
+  /**
+   * Where snapshot files are written (ADR-0072). Null (default): the store does not offer to receive them and every pull is
+   * rows. With a sink, large first downloads can arrive as a SQLite file the apply copies instead of inserting row by row.
+   */
+  snapshotFiles?: G9SnapshotFileSink | null;
+  /** A subscription is sent as a file only when its snapshot is at least this many rows; 0 leaves it to the server. */
+  snapshotFileMinRows?: number;
+  /** The largest snapshot file accepted, uncompressed (default 2 GiB). */
+  snapshotFileMaxBytes?: number;
+  /** Bytes between two durable resume points of a file download (flush, then the stage row). Default 8 MiB. */
+  snapshotFileCheckpointBytes?: number;
 }
 
-export type G9ResolvedSqliteStoreOptions = Required<Omit<G9SqliteSyncStoreOptions, 'incarnationMarker' | 'frameDecompressor' | 'frameCompressor' | 'logger'>> & {
+export type G9ResolvedSqliteStoreOptions = Required<Omit<G9SqliteSyncStoreOptions, 'incarnationMarker' | 'frameDecompressor' | 'frameCompressor' | 'logger' | 'snapshotFiles'>> & {
   incarnationMarker: G9IncarnationMarker | null;
   frameDecompressor: G9FrameDecompressor | null;
   frameCompressor: G9FrameCompressor | null;
   logger: G9SyncLogger | null;
+  snapshotFiles: G9SnapshotFileSink | null;
 };
 
 export const DEFAULT_DATE_TIME_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.fffffff";
@@ -110,6 +149,10 @@ export function resolveStoreOptions(options: G9SqliteSyncStoreOptions): G9Resolv
     frameDecompressor: options.frameDecompressor ?? null,
     frameCompressor: options.frameCompressor ?? null,
     logger: options.logger ?? null,
+    snapshotFiles: options.snapshotFiles ?? null,
+    snapshotFileMinRows: options.snapshotFileMinRows ?? 0,
+    snapshotFileMaxBytes: options.snapshotFileMaxBytes ?? 2 * 1024 * 1024 * 1024,
+    snapshotFileCheckpointBytes: options.snapshotFileCheckpointBytes ?? 8 * 1024 * 1024,
   };
 }
 

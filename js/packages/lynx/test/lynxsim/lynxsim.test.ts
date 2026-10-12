@@ -81,8 +81,15 @@ describe.skipIf(unavailable !== null)('the TypeScript client in a Lynx-shaped ru
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  for (const protocol of ['messagepack', 'json'] as const) {
-    describe(protocol, () => {
+  const runs = [
+    { protocol: 'messagepack', files: false },
+    { protocol: 'json', files: false },
+    // The initial downloads as snapshot files (the sample server's threshold is 20,000 rows; each site has 25,000), every
+    // segment through this package's sink and the module's snapshot-file methods behind the copying bridge.
+    { protocol: 'messagepack', files: true },
+  ] as const;
+  for (const { protocol, files } of runs) {
+    describe(protocol + (files ? ' + snapshot files' : ''), () => {
       // A server (and database) per protocol: the scenario changes the server's data.
       let server: SampleServer;
       beforeAll(async () => {
@@ -98,18 +105,33 @@ describe.skipIf(unavailable !== null)('the TypeScript client in a Lynx-shaped ru
             code,
             fetch,
             timeoutMs: 600000,
-            host: { hubUrl: server.hubUrl, serverUrl: server.url, dir, protocol },
+            host: { hubUrl: server.hubUrl, serverUrl: server.url, dir, protocol, files },
             nativeModules: {
               G9SignalRLynxModule: callbackModuleOf(createG9SignalRBridge()),
               G9SyncDataLynxModule: callbackModuleOf(createG9SyncDataBridge()),
               G9SyncTestSqlite: sqliteModule(),
             },
           }),
-        )) as { environment: Record<string, string>; choices: string[]; pots: number; lines: string[] };
+        )) as {
+          environment: Record<string, string>;
+          choices: string[];
+          pots: number;
+          lines: string[];
+          files: { detected: boolean; segments: number; bytes: number; left: string[] };
+        };
         expect(result.environment).toEqual({ BigInt: 'undefined', TextEncoder: 'undefined', URL: 'undefined', WebSocket: 'undefined', globalSetTimeout: 'undefined' });
         expect(result.choices.length).toBeGreaterThan(0);
         expect(result.choices.every((c) => c === 'native-websocket')).toBe(true);
         expect(result.pots).toBe(25003);
+        if (files) {
+          expect(result.files.detected).toBe(true);
+          // a: north + south, b: north - three files of 25,000 pots, at least one segment each.
+          expect(result.files.segments).toBeGreaterThanOrEqual(3);
+          expect(result.files.left).toEqual([]);
+          console.log(`lynxsim snapshot files: ${result.files.segments} segments, ${result.files.bytes} compressed bytes through the sink`);
+        } else {
+          expect(result.files.segments).toBe(0);
+        }
       }, 900000);
     });
   }

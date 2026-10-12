@@ -268,6 +268,51 @@ scope that reads other tables inside a **function** must be listed in `G9CPostgr
 | `EnableChangeNotifications` | true | LISTEN for committed changes (drives pokes) |
 | `InitializeOnStartup` | true | install/verify capture at host start; a failure stops the host |
 
+## Snapshot files (`G9SyncData.Server.SnapshotFiles`, ADR-0072)
+
+```csharp
+builder.Services.AddG9SyncDataServer(ConfigureModel)
+    .UsePostgreSql(dataSource)
+    .UseSignalR()
+    .UseSnapshotFiles(o => o.Directory = "/var/lib/g9sync/files");   // a volume, not the container's temp
+```
+
+A device that offers files (the .NET client by default, the TypeScript client when it has a `G9SnapshotFileSink`) receives a non-ephemeral subscription's first download of at least
+`MinRows` rows as ONE SQLite file built with the device's own DDL, and copies it in SQL. Everything else is unchanged:
+deltas, pushes, reconcile, devices that offer nothing. A subscription whose rows differ for nearly every caller should
+opt out - its files would rarely be reused:
+
+```csharp
+.Subscription("tasks", s => s /* tables, scope … */ .SnapshotFiles(G9ESnapshotFilePolicy.Never))   // not part of the definition hash
+```
+
+**Cache.** A file is identified by the visibility function and the device's shape: format, epoch, subscription key,
+definition hash, auth hash, storage forms, and per table the frame columns and the local DDL. Two devices with the same
+identity share it; it is reused while the rows changed since its snapshot are ≤ `MaxDeltaRatio` of its rows, it is
+younger than `MaxAge` and above the tombstone horizon - the device then also receives the delta from the file's snapshot.
+Otherwise a new one is built at the plan's snapshot (the planning device waits for it while its stream starts). Built
+files, their segment containers and JSON records live in `Directory` and are found again after a restart (event 21200).
+
+| Option (`G9CSnapshotFileOptions`) | Default | Meaning |
+|---|---|---|
+| `Directory` | `<temp>/g9sync-snapshot-files` | where files are built and kept; give a deployment a persistent volume |
+| `MinRows` | 20,000 | the smallest subscription sent as a file (the device may ask for more) |
+| `MaxDeltaRatio` / `MaxAge` | 5 % / 24 h | when a built file is still served (with a delta) |
+| `BuildAfterRequests` | 1 | plans that must ask for an identity before its file is built; 2 = the first asker gets rows |
+| `SupersededGrace` | 30 min | a replaced file stays for downloads already streaming it |
+| `MaxCacheBytes` / `MinFreeBytes` | 20 GiB / 2 GiB | LRU limit; no build below the free-space floor (event 21202) |
+| `MaxConcurrentBuilds` | 2 | |
+| `SegmentBytes` / `CompressionQuality` / `CompressionWindow` | 1 MiB / 5 / 22 | segments are Brotli-compressed independently, in parallel (`CompressionParallelism`, half the cores) |
+| `VerifyBuiltFiles` | true | `quick_check` before a file is offered |
+| `CleanupInterval` | 10 min | expiry, superseded files, LRU |
+
+Behind several instances, every instance needs the same `TokenSigningKey` (a resume may land anywhere) and should share
+`Directory`; an instance that has not built the file a resume asks for builds it - or, when it has another build, the
+device restarts the file. A server without `UseSnapshotFiles()` never plans files and answers a pull planned with one
+with `G9S-FILE-UNAVAILABLE` (the device falls back to rows). Events: 21027 file reused, 21028 file planned, 21200-21208
+the service (built, skipped, removed, cleanup). Metrics: `g9sync.server.snapshot_files.planned` (tag `source`: reused,
+building, built), `g9sync.server.snapshot_files.bytes`.
+
 ## Added in 1.1.0
 
 | Option (`G9CSyncServerOptions`) | Default | Meaning |
@@ -284,4 +329,5 @@ scope that reads other tables inside a **function** must be listed in `G9CPostgr
   `g9sync.server.refused`.
 - `g9sync.install.library_version` records the real assembly version and is updated on every initialise (it said `0.1.0` for ever).
 - Events: 21006 type mismatch (Debug), 21007 ephemeral signing key, 21008 configured key, 21009 busy, 21013 effects requeued,
-  21025 effects have failed for good (Error, once per dispatch pass while any remain), 21026 the queue status could not be read.
+  21014 effect delivery is waiting for a store whose initialisation failed (Warning; delivery starts only once the store is
+  initialised, like change listening and cleanup), 21025 effects have failed for good (Error, once per dispatch pass while any remain), 21026 the queue status could not be read.

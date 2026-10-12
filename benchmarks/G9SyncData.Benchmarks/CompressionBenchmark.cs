@@ -19,7 +19,7 @@ internal static class CompressionBenchmark
 
     private sealed record Codec(string Name, Func<byte[], byte[]> Compress, Func<byte[], int, byte[]> Decompress);
 
-    private readonly record struct PotRow(Guid Id, long Version, int Index, string Point, int Gender, Guid Ridge, DateTime Created, DateTime Updated, bool NullCreator);
+    internal readonly record struct PotRow(Guid Id, long Version, int Index, string Point, int Gender, Guid Ridge, DateTime Created, DateTime Updated, bool NullCreator);
 
     private static readonly Guid Variety = Guid.Parse("6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b");
     private static readonly Guid User = Guid.Parse("0b1a2f3e-4d5c-4b6a-8978-1a2b3c4d5e6f");
@@ -133,7 +133,7 @@ internal static class CompressionBenchmark
     public static double Transfer(Result result, double megabits) =>
         result.Compress.TotalSeconds + (result.Bytes * 8 / (megabits * 1_000_000)) + result.Decompress.TotalSeconds;
 
-    private static PotRow[] Generate(int rows)
+    internal static PotRow[] Generate(int rows)
     {
         var pots = new PotRow[rows];
         var ridge = Guid.NewGuid();
@@ -152,6 +152,22 @@ internal static class CompressionBenchmark
         }
 
         return pots;
+    }
+
+    /// <summary>The pots as the server streams them: frames of 2,000 rows in the given layout and Brotli quality.</summary>
+    internal static List<byte[]> Frames(PotRow[] pots, int version, int quality)
+    {
+        const int PageRows = 2_000;
+        var frames = new List<byte[]>();
+        using var writer = new G9CRowBatchWriter();
+        for (var start = 0; start < pots.Length; start += PageRows)
+        {
+            writer.Reset();
+            WritePage(writer, pots.AsSpan(start, Math.Min(PageRows, pots.Length - start)));
+            frames.Add(writer.ToFrame(G9ECompression.Brotli, quality, version));
+        }
+
+        return frames;
     }
 
     private static List<byte[]> BuildBodies(PotRow[] pots)

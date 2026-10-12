@@ -18,4 +18,22 @@ public abstract class G9SyncDataLynxModuleSpec extends LynxContextModule {
 
   @LynxMethod
   public abstract void brotliDecompress(byte[] data, double expectedLength, Callback callback);
+
+  @LynxMethod
+  public abstract void snapshotFileCreate(String path, double size, Callback callback);
+
+  @LynxMethod
+  public abstract void snapshotFileWriteSegment(String path, double offset, byte[] data, double length, String sha256, boolean sync, Callback callback);
+
+  @LynxMethod
+  public abstract void snapshotFileSize(String path, Callback callback);
+
+  @LynxMethod
+  public abstract void snapshotFileHead(String path, double length, Callback callback);
+
+  @LynxMethod
+  public abstract void snapshotFileRemove(String path, Callback callback);
+
+  @LynxMethod
+  public abstract void snapshotFileList(String directory, Callback callback);
 }

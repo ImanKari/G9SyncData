@@ -5,6 +5,12 @@ const ADDON_NAME = "G9SyncDataLynxModule";
 export interface G9SyncDataLynxModuleSpec {
   capabilities(callback: (reply: Record<string, unknown>) => void): void;
   brotliDecompress(data: ArrayBuffer, expectedLength: number, callback: (reply: Record<string, unknown>) => void): void;
+  snapshotFileCreate(path: string, size: number, callback: (reply: Record<string, unknown>) => void): void;
+  snapshotFileWriteSegment(path: string, offset: number, data: ArrayBuffer, length: number, sha256: string, sync: boolean, callback: (reply: Record<string, unknown>) => void): void;
+  snapshotFileSize(path: string, callback: (reply: Record<string, unknown>) => void): void;
+  snapshotFileHead(path: string, length: number, callback: (reply: Record<string, unknown>) => void): void;
+  snapshotFileRemove(path: string, callback: (reply: Record<string, unknown>) => void): void;
+  snapshotFileList(directory: string, callback: (reply: Record<string, unknown>) => void): void;
 }
 
 type AddonExports = Record<string, unknown>;

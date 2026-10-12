@@ -23,3 +23,10 @@ apps/**/build/
 apps/**/.gradle/
 apps/**/.kotlin/
 apps/**/*.apk
+# iOS device-test host: generated project, pods, signing (from the environment)
+apps/**/Pods/
+apps/**/*.xcodeproj/
+apps/**/*.xcworkspace/
+apps/lynx-ios-host/Podfile.lock
+apps/lynx-ios-host/Signing.xcconfig
+apps/lynx-ios-host/Sources/Info.plist

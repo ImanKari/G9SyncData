@@ -143,6 +143,22 @@ include those tables, debounced by `ChangesDebounce`. A poke is only a hint; cur
 | `MaxFrameVersion` | 2 — the G9RowBatch layout asked for (ADR-0040); 1 = row-wise frames |
 | `StagedPullMaxAge` | 90 min (tokens live 2 h) |
 | `KeepDeletedFeedEntries` / `KeepRunReports` | 50 000 / 50 |
+| `AcceptSnapshotFiles` | true — offer the server snapshot files for large first downloads when the store can take them (ADR-0072); the store has its own switch |
+
+## Snapshot files (ADR-0072)
+
+When the store describes its tables (`IG9SyncClientStore.DescribeSnapshotFiles`, null = no files) and both switches are
+on, the pull request carries `SnapshotFiles`: the device's DDL per table, its storage forms, `MinRows`, `MaxBytes` and
+`MaxFiles` (8, SQLite's attach limit minus headroom). The plan may answer a subscription with ONE `SnapshotFile` part
+(all its tables) and, when the server reuses an older file, `Delta` parts from that file's snapshot. Segments arrive on
+the ordinary Pull stream (`G9DtSyncChunk.File`) and are staged by the store; the apply copies the file inside the
+normal apply transaction (event 20025 says how many files and rows a pull carries).
+
+**Fallback, once per run.** `G9S-FILE-UNAVAILABLE` (the server cannot produce the file) or `G9S-FILE-CORRUPT` (a check
+failed on the device) ends the attempt: the engine discards the staged run, replans WITHOUT files and pulls the same
+data as rows in the same run (event 20026). A second file failure in that run is a normal failure. A broken stream
+resumes inside the file (`AfterKey = seg:<manifest sha256>:<next segment>`); a resume that reaches an instance with
+another build of the file starts the file over.
 
 ## Host integration
 
@@ -167,4 +183,5 @@ keep-screen-on, held **only during a run** (plan D-11). `IsNetworkAvailable = fa
 - **Local store failures (ADR-0068)** are normalised from `IG9SyncLocalStoreFailure`: `G9S-LOCAL-CORRUPT` and
   `G9S-LOCAL-DISK-FULL` end the run; `G9S-LOCAL-BUSY` and `G9S-SRV-BUSY` are transient.
 - Event ids: 20019 push failure (was sharing 20013 with transient retry), 20021 stages pruned, 20022 model problems, 20023 push
-  split, 20024 reconcile handed over to snapshot. 20017 is retired.
+  split, 20024 reconcile handed over to snapshot, 20025 a pull carries snapshot files, 20026 a snapshot file failed and the pull
+  is replanned as rows (ADR-0072). 20017 is retired.

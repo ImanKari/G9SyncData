@@ -9,6 +9,7 @@ import { delay, linkSignals, onAbort } from '../internal/abort.js';
 import { sha256, toHex } from '../internal/sha256.js';
 import { utf8Encode } from '../internal/utf8.js';
 import {
+  G9EPullPartKind,
   G9ESubscriptionAction,
   type G9DtChangesAvailable,
   type G9DtHelloResult,
@@ -677,67 +678,99 @@ export class G9SyncEngine {
           const pruned = await this._store.pruneStagedPulls(Date.now() - this._options.stagedPullMaxAgeMs, this._options.stagedPullsMaxBytes, generation, ct);
           if (pruned > 0) this._log('information', 20021, `Removed ${pruned} staged pull(s) past their age or the byte cap`);
 
-          const staged = await this._store.getStagedPullForGeneration(generation, ct);
-          let plan: G9DtPullPlan;
-          let runId: string;
-          if (staged && staged.createdUtcMs > Date.now() - this._options.stagedPullMaxAgeMs) {
-            plan = staged.plan;
-            runId = staged.runId;
-            this._log('information', 20012, `Resuming staged pull ${runId} (${plan.totalRows} rows planned)`);
-          } else {
-            const backfills = await this._store.getPendingBackfills(ct);
-            plan = await this._withRetry(
-              (token) =>
-                this._transport.planPull(
-                  {
-                    clientId: this._clientId,
-                    subscriptions: plannable.map(toSubscriptionRef),
-                    tables: negotiated.map((t) => ({ tableId: t.tableId, columns: t.columns.map((c) => c.name) })),
-                    backfills: backfills.slice(),
-                    frameVersion: this._options.maxFrameVersion,
-                  },
-                  token,
-                ),
-              ct,
-            );
-            if (plan.error) throw syncErrorToException(plan.error);
-            runId = guidToN(newGuid());
-            const plannedFromCursors: { [key: string]: string | null } = {};
-            for (const s of plannable) plannedFromCursors[s.key] = s.cursor;
-            await this._store.beginStagedPull(
-              { runId, plan, createdUtcMs: Date.now(), backfills, generation, plannedFromCursors, stageSequence: 0 },
-              ct,
-            );
-          }
+          // Snapshot files are offered unless one already failed in this run (ADR-0072): a file is a faster way to the same rows,
+          // never the only one, so a file the server cannot build or the device rejects costs one replan as rows - not the run.
+          let allowFiles = this._options.acceptSnapshotFiles;
+          for (let attempt = 0; ; attempt++) {
+            const problemsBefore = problems.length;
+            const syncedBefore = synced.length;
+            let runId: string | null = null;
+            try {
+              const staged = await this._store.getStagedPullForGeneration(generation, ct);
+              let plan: G9DtPullPlan;
+              if (staged && staged.createdUtcMs > Date.now() - this._options.stagedPullMaxAgeMs) {
+                plan = staged.plan;
+                runId = staged.runId;
+                this._log('information', 20012, `Resuming staged pull ${runId} (${plan.totalRows} rows planned)`);
+              } else {
+                const backfills = await this._store.getPendingBackfills(ct);
+                const files = allowFiles && this._store.describeSnapshotFiles ? this._store.describeSnapshotFiles(negotiated) : null;
+                plan = await this._withRetry(
+                  (token) =>
+                    this._transport.planPull(
+                      {
+                        clientId: this._clientId,
+                        subscriptions: plannable.map(toSubscriptionRef),
+                        tables: negotiated.map((t) => ({ tableId: t.tableId, columns: t.columns.map((c) => c.name) })),
+                        backfills: backfills.slice(),
+                        frameVersion: this._options.maxFrameVersion,
+                        ...(files ? { snapshotFiles: files } : {}),
+                      },
+                      token,
+                    ),
+                  ct,
+                );
+                if (plan.error) throw syncErrorToException(plan.error);
+                runId = guidToN(newGuid());
+                const plannedFromCursors: { [key: string]: string | null } = {};
+                for (const s of plannable) plannedFromCursors[s.key] = s.cursor;
+                await this._store.beginStagedPull(
+                  { runId, plan, createdUtcMs: Date.now(), backfills, generation, plannedFromCursors, stageSequence: 0 },
+                  ct,
+                );
+              }
 
-          for (const skipped of plan.skipped) {
-            problems.push(skipped);
-            if (skipped.action === G9ESubscriptionAction.Reconcile || skipped.action === G9ESubscriptionAction.ResyncRequired) {
-              await this._store.updateSubscription(skipped.key, { state: G9ESubscriptionState.NeedsReconcile }, ct);
+              for (const skipped of plan.skipped) {
+                problems.push(skipped);
+                if (skipped.action === G9ESubscriptionAction.Reconcile || skipped.action === G9ESubscriptionAction.ResyncRequired) {
+                  await this._store.updateSubscription(skipped.key, { state: G9ESubscriptionState.NeedsReconcile }, ct);
+                }
+              }
+
+              for (const c of plan.cursors) synced.push(c.key);
+              const fileParts = plan.parts.filter((p) => p.kind === G9EPullPartKind.SnapshotFile);
+              if (fileParts.length > 0) {
+                this._log('information', 20025, `The pull carries ${fileParts.length} snapshot file(s) for ${fileParts.reduce((sum, p) => sum + p.rows, 0)} row(s)`);
+              }
+              tracker.expect(G9ESyncPhase.Downloading, Math.max(200, (plan.totalRows / 1000) * historyOf(history, STAT_DOWNLOAD_PER_K_ROW, 350)));
+              tracker.expect(G9ESyncPhase.Applying, Math.max(100, (plan.totalRows / 1000) * historyOf(history, STAT_APPLY_PER_K_ROW, 250)));
+
+              // ------------------------------------------------------------ 6. download (resumable)
+              tracker.enter(G9ESyncPhase.Downloading, plan.totalRows, plan.estimatedBytes);
+              const totals = await this._download(runId, plan, tracker, ct);
+              downloaded = totals.rows;
+              downloadedBytes = totals.bytes;
+
+              // ------------------------------------------------------------ 7. apply (atomic, or in committed slices)
+              tracker.enter(G9ESyncPhase.Applying, downloaded);
+              const applied = await this._store.applyStagedPull(
+                runId,
+                (rows) => tracker.report(rows),
+                (slice) => {
+                  if (slice.report.total > 0) this._raiseRowsApplied(slice.report, G9ESyncPhase.Applying, slice);
+                },
+                ct,
+              );
+              changes.merge(applied);
+              break;
+            } catch (exception) {
+              if (
+                attempt === 0 &&
+                !ct.aborted &&
+                isSyncException(exception) &&
+                (exception.code === G9SyncErrorCodes.SnapshotFileUnavailable || exception.code === G9SyncErrorCodes.SnapshotFileCorrupt)
+              ) {
+                this._log('warning', 20026, `A snapshot file failed (${exception.code}); the staged download was discarded and the pull is planned again as rows`, exception);
+                if (runId !== null) await this._store.discardStagedPull(runId);
+                problems.length = problemsBefore;
+                synced.length = syncedBefore;
+                allowFiles = false;
+                tracker.enter(G9ESyncPhase.Planning);
+                continue;
+              }
+              throw exception;
             }
           }
-
-          for (const c of plan.cursors) synced.push(c.key);
-          tracker.expect(G9ESyncPhase.Downloading, Math.max(200, (plan.totalRows / 1000) * historyOf(history, STAT_DOWNLOAD_PER_K_ROW, 350)));
-          tracker.expect(G9ESyncPhase.Applying, Math.max(100, (plan.totalRows / 1000) * historyOf(history, STAT_APPLY_PER_K_ROW, 250)));
-
-          // ------------------------------------------------------------ 6. download (resumable)
-          tracker.enter(G9ESyncPhase.Downloading, plan.totalRows, plan.estimatedBytes);
-          const totals = await this._download(runId, plan, tracker, ct);
-          downloaded = totals.rows;
-          downloadedBytes = totals.bytes;
-
-          // ------------------------------------------------------------ 7. apply (atomic, or in committed slices)
-          tracker.enter(G9ESyncPhase.Applying, downloaded);
-          const applied = await this._store.applyStagedPull(
-            runId,
-            (rows) => tracker.report(rows),
-            (slice) => {
-              if (slice.report.total > 0) this._raiseRowsApplied(slice.report, G9ESyncPhase.Applying, slice);
-            },
-            ct,
-          );
-          changes.merge(applied);
         }
 
         // ---------------------------------------------------------------- 8. post steps

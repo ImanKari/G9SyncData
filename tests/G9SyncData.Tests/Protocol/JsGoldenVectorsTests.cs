@@ -67,7 +67,11 @@ public sealed class JsGoldenVectorsTests
         foreach (var (name, protocol, bytes) in protocols)
         {
             var messages = root["hub"]![name]!.AsObject();
-            Assert.Equal(6, messages.Count);
+            Assert.Equal(7, messages.Count);
+
+            var planPull = Parse<InvocationMessage>(protocol, binder, bytes(messages["planPull"]!));
+            Assert.Equal(G9SyncProtocol.Methods.PlanPull, planPull.Target);
+            AssertSame(JsGoldenSamples.PullRequest(), planPull.Arguments[0]);
 
             var hello = Parse<InvocationMessage>(protocol, binder, bytes(messages["hello"]!));
             Assert.Equal(G9SyncProtocol.Methods.Hello, hello.Target);

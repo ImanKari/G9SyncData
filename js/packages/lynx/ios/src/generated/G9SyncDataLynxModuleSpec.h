@@ -8,6 +8,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)capabilities:(id)callback;
 - (void)brotliDecompress:(id)data expectedLength:(double)expectedLength callback:(id)callback;
+- (void)snapshotFileCreate:(NSString *)path size:(double)size callback:(id)callback;
+- (void)snapshotFileWriteSegment:(NSString *)path offset:(double)offset data:(id)data length:(double)length sha256:(NSString *)sha256 sync:(BOOL)sync callback:(id)callback;
+- (void)snapshotFileSize:(NSString *)path callback:(id)callback;
+- (void)snapshotFileHead:(NSString *)path length:(double)length callback:(id)callback;
+- (void)snapshotFileRemove:(NSString *)path callback:(id)callback;
+- (void)snapshotFileList:(NSString *)directory callback:(id)callback;
 
 @end
 

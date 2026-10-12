@@ -308,6 +308,11 @@ export interface G9SyncEngineOptions {
   maxFrameVersion?: number;
   /** Fail a run when the server reports a client column whose type differs (ADR-0061). */
   failOnTypeMismatch?: boolean;
+  /**
+   * Offer the server to send large first downloads as SQLite snapshot files (ADR-0072), when the store can take them (a store
+   * with a `snapshotFiles` sink). Default true. A file that fails is replaced by the same pull as rows, in the same run.
+   */
+  acceptSnapshotFiles?: boolean;
   /** A staged pull older than this is discarded instead of resumed. */
   stagedPullMaxAgeMs?: number;
   /** Most payload bytes kept in stages other than the one a run resumes (ADR-0060). */
@@ -341,6 +346,7 @@ export function resolveEngineOptions(options: G9SyncEngineOptions | null | undef
     maxDecodedFrameBytes: options?.maxDecodedFrameBytes ?? 64 * 1024 * 1024,
     maxFrameVersion: options?.maxFrameVersion ?? G9SyncProtocol.MaxFrameVersion,
     failOnTypeMismatch: options?.failOnTypeMismatch ?? false,
+    acceptSnapshotFiles: options?.acceptSnapshotFiles ?? true,
     stagedPullMaxAgeMs: options?.stagedPullMaxAgeMs ?? 90 * 60 * 1000,
     stagedPullsMaxBytes: options?.stagedPullsMaxBytes ?? 64 * 1024 * 1024,
     keepDeletedFeedEntries: options?.keepDeletedFeedEntries ?? 50000,

@@ -1,0 +1,40 @@
+# XcodeGen spec (`xcodegen generate`) for the iOS device-test host: one LynxView running the same page bundle as
+# ../lynx-android-host (the @g9tm/syncdata interop scenario), with the real native modules. CocoaPods then adds Lynx
+# and the three G9 pods (Podfile). Signing comes from Signing.xcconfig, which scripts/build-and-run.sh writes from the
+# environment (team + profile), so nothing personal is in this file.
+name: G9SyncHost
+options:
+  bundleIdPrefix: com.g9tm
+  deploymentTarget:
+    iOS: '15.0'
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
+targets:
+  G9SyncHost:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      # The page bundle as a plain file in the app's resources (`type: file`: a *.bundle path would otherwise be taken
+      # for a bundle directory). XcodeGen has no `resources` key: a resource is a source in the resources phase.
+      - path: ../lynx-android-host/dist/main.lynx.bundle
+        type: file
+        buildPhase: resources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: G9Sync Host
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortraitUpsideDown]
+        # The test server is a development server: plain http on a LAN, or https through a published port.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: The device test talks to the G9SyncData sample server on the local network.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.g9tm.syncdatahost
+        CLANG_ENABLE_OBJC_ARC: YES
+        TARGETED_DEVICE_FAMILY: '1,2'
+        ENABLE_USER_SCRIPT_SANDBOXING: NO

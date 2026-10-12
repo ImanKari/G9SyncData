@@ -36,6 +36,18 @@ npm run apk                                  # Gradle → android/app/build/outp
 node scripts/device-test.mjs --install --protocol both --serial emulator-5554
 ```
 
+`--files on|both` (default `off`) runs the scenario with snapshot files (ADR-0072): every first download of 25,000 pots
+arrives as a SQLite file through `lynxSnapshotFileSink` - the module's `snapshotFile*` methods decompress, check and
+write each segment natively - and the run fails unless at least three files' segments arrived and no staged file is left.
+`both` runs rows first, then files, each on a fresh server database, so the two `all pots` lines compare directly.
+
+**Mode `farm`** (`src/farmTest.ts`) replays a REAL farm's first download instead of the interop scenario: the extras
+`--es mode farm --es hub <hub URL> --es files on|off` make the page subscribe to `farm-replay` (AgriPad's farm-site tables,
+the twin of `tests/Shared/FarmReplaySchema.Client.cs`), sync once into a new database and log
+`G9SYNC-DEVICE RESULT … counts={…}`. The server side is the .NET test
+`AndroidFarmReplayTests.A_real_farm_first_download_on_Lynx…` (it loads the farm from `G9SYNC_FARM_DB`, installs
+`android/app/build/outputs/apk/debug/app-debug.apk` and launches the runs) - build the bundle and the APK first.
+
 `device-test.mjs` runs MessagePack, then JSON, each against a FRESH server database (`g9t_js_<random>`, created and
 seeded by the sample server, dropped afterwards). Logcat, the server log, a screenshot and `summary.json` land in
 `build/device-test/`. Exit code 0 only when every run passed.
@@ -64,5 +76,25 @@ Emulator-5554: AVD Pixel 9 Pro XL, Android 16 (API 36), x86_64; Lynx 4.1.0, Prim
 Background-thread globals seen there: `BigInt`, `URL`, `AbortController` present; `TextEncoder`/`TextDecoder`,
 `WebSocket`, `queueMicrotask`, `performance` absent; `setTimeout` and `fetch` only as bare identifiers.
 
-Not covered here: iOS, a minified (R8) release build, the Brotli broken streams, the SignalR file operations — see
+**Snapshot files (ADR-0072), 2026-10-12** — `--protocol messagepack --files both`, emulator-5554, Lynx 4.1.0, PrimJS
+4.1.1: both PASS; with files, 3 files in 18 segments (3.09 MB), none left behind. Repeated with `--protocol both --files
+both` on a second AVD (emulator-5556): 4/4 PASS; client a's apply 11.6 s as rows, 0.4 s as files, on both protocols.
+
+| Interop scenario step (MessagePack) | Rows: download · apply | Snapshot file: download · apply |
+|---|---|---|
+| client a, first download of 2 × 25,000 pots | 0.5 s · 13.6 s | 0.9 s · 0.6 s |
+| client b, first download of 25,000 pots | 0.5 s · 6.4 s | 0.3 s · 0.4 s |
+| the whole scenario (push, poke, reconcile, unsubscribe included) | 38.3 s | 20.3 s |
+
+**Physical device, 2026-10-12** — Samsung Galaxy Tab A9 (SM-X115, MT8781), `--protocol both --files both --serial
+R83X1056NSM`: 4/4 PASS. A physical device cannot see 10.0.2.2, so `device-test.mjs` reverses the server's port
+(`adb reverse`) and hands the page `http://127.0.0.1:<port>`; emulators keep 10.0.2.2. Client a's 50,000 pots applied in
+28.4 s as rows and 1.3 s as a file (`benchmarks/results/devices/lynx-real-devices-2026-10-12.md`). The same bundle runs
+on iOS in [`../lynx-ios-host`](../lynx-ios-host).
+
+**A real farm, 2026-10-12** — DOOGEE S96Pro (Android 10), mode `farm`, a production farm's 449,758 farm-site rows: as rows the
+page's run took 351 s (apply 349 s), as a cached snapshot file 11.9–12.5 s (apply 7.1–7.7 s, 149 segments, 29.0 MB);
+every table equal to the server (`benchmarks/results/devices/doogee-s96pro/`).
+
+Not covered here: iOS (see `../lynx-ios-host`), a minified (R8) release build, the Brotli broken streams, the SignalR file operations — see
 `js/packages/lynx/Native-Validation-Pending.md` in this repository and in G9SignalRSuperNetCore.

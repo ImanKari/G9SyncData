@@ -50,6 +50,12 @@ public static class G9CSyncServerTelemetry
 
     internal static Counter<long> Reconciles { get; } = Meter.CreateCounter<long>("g9sync.server.reconciles", "{call}", "Reconcile calls.");
 
+    internal static Counter<long> SnapshotFilesPlanned { get; } =
+        Meter.CreateCounter<long>("g9sync.server.snapshot_files.planned", "{file}", "Snapshot-file parts planned, tagged source (reused, building, built).");
+
+    internal static Counter<long> SnapshotFileBytes { get; } =
+        Meter.CreateCounter<long>("g9sync.server.snapshot_files.bytes", "By", "Compressed snapshot-file bytes streamed to devices.");
+
     internal static Counter<long> MismatchedBuckets { get; } =
         Meter.CreateCounter<long>("g9sync.server.reconcile.mismatched_buckets", "{bucket}", "Digest buckets that differed during reconciliation.");
 }

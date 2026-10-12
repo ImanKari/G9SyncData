@@ -13,7 +13,8 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
 | Requests written by TypeScript, parsed by the .NET server's own hub protocols (JSON and Nerdbank MessagePack) and compared with the .NET samples | `test/hub.test.ts` → `test/golden/js-vectors.json` → `JsGoldenVectorsTests.Requests_the_TypeScript_client_writes_deserialize_on_the_server` |
 | The TypeScript engine + store + transport against the real .NET sample server (50,000 rows, push, pokes, reconcile, unsubscribe), over both hub protocols | `test/interop/server.test.ts` (`npm run test:interop`) |
 | The database the TypeScript store writes equals the one the .NET store writes for the same sync: app rows and storage classes, every `g9_*` row, the schema, the stored JSON | `test/interop/server.test.ts` → database parity |
-| The same scenario in a Lynx-shaped runtime (no BigInt/TextEncoder/URL/WebSocket, native modules behind a copying bridge) | `@g9tm/syncdata-lynx` `npm run test:lynxsim` |
+| A site's first download as a snapshot FILE (ADR-0072) copied by the TypeScript store leaves the database the .NET store leaves (both sites as files, the second merged into the first's table) | `test/interop/server.test.ts` → "a snapshot FILE copied by the TypeScript store" |
+| The same scenario in a Lynx-shaped runtime (no BigInt/TextEncoder/URL/WebSocket, native modules behind a copying bridge), with and without snapshot files through `lynxSnapshotFileSink`'s module methods | `@g9tm/syncdata-lynx` `npm run test:lynxsim` |
 
 `G9_UPDATE_GOLDEN=1` rewrites the golden files after an intended change; commit them with the change that needs them.
 
@@ -37,6 +38,7 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
 | `G9CSyncProgressTracker`, `G9DtSyncProgress` | `G9SyncProgressTracker`, `G9DtSyncProgress` (`etaMs`) | same planning, creep and monotonicity |
 | `IG9SyncClientStore` | `G9SyncClientStore` | |
 | `G9CSqliteSyncStore`, options | `G9SqliteSyncStore` (`@g9tm/syncdata/sqlite`) over a `G9SqliteDriver` | same tables, triggers, SQL, JSON blobs and storage forms |
+| Snapshot files (`G9CSqliteSyncStore.SnapshotFiles.cs`): `AcceptSnapshotFiles`, `SnapshotFileDirectory`, checkpoints, staging, verification, the copy/columns/merge apply, the sweep | `snapshotFiles: G9SnapshotFileSink` (`nodeSnapshotFileSink(dir)` in `@g9tm/syncdata/node`, `lynxSnapshotFileSink(db)` in `@g9tm/syncdata-lynx`), `src/sqlite/snapshotFiles.ts` | the same SQL statement for statement; the bytes go through the sink (decompress + SHA-256 + positional write) instead of `RandomAccess` in process; `G9CSnapshotFileWriter` (the server's) has no twin |
 | `EnqueueCommand(sqlite3 appConnection, …)` | `enqueueCommandOnSession({ driver, session, tx }, …)` | SAVEPOINT inside the app's transaction |
 | `IncarnationMarkerPath` | `incarnationMarker` (`fileIncarnationMarker(fileSystem, path)`) | any `G9FileSystem` (Lynx: the SignalR native module's) |
 | `ExportPendingChangesAsync(path)` | `exportPendingChanges(writeLine)` | the caller writes the lines where it wants |
@@ -78,6 +80,11 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
 - **Staging a chunk.** One atomic driver call (`runAtomic`) instead of begin + insert + commit, and the connection's
   journal mode and `synchronous` read once per connection rather than per chunk: 3 calls per chunk instead of ~7
   (`test/staging.test.ts`). Same rows, same durability window.
+- **Snapshot-file bytes.** The .NET store decompresses and writes segments in process; the TypeScript store hands each
+  compressed segment to its `G9SnapshotFileSink` and never sees the decoded bytes (on Lynx they never cross the bridge).
+  The sink also answers the store's size/header checks. Without a sink (`snapshotFiles: null`, the default) the store
+  offers no files and the server sends rows. Everything the store does in SQL - the checkpoints, the copy, `g9_rows`,
+  the merge rules, the sweep - is the .NET store's.
 - **Two sessions.** A writer session under the store's lock and a reader session, instead of a pool.
 - **Reading values to push.** Decimal and String columns are selected as `CAST(… AS TEXT)`: exactly the text .NET's
   `GetString` / `GetDecimal` parse.

@@ -1,10 +1,15 @@
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using G9SyncData.IntegrationTests.Infrastructure;
 using G9SyncData.Server;
 using G9SyncData.Server.Hosting;
 using G9SyncData.Server.Model;
 using G9SyncData.Server.Pipeline;
+using G9SyncData.Server.PostgreSql;
 using G9SyncData.Server.Storage;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using static G9SyncData.IntegrationTests.Infrastructure.TestSchema;
 
@@ -132,6 +137,48 @@ public sealed class EffectOutboxTests(ITestOutputHelper output)
         Assert.Equal(0, await PendingEffectsAsync(harness));
     }
 
+    [PostgresFact]
+    public async Task Delivery_waits_for_the_store_when_it_is_not_initialised_on_startup()
+    {
+        // The store's initialisation is held open by a gate: before the fix the dispatch loop claimed at once, hit an uninitialised
+        // store and logged a dispatch failure (seen on every slow start, e.g. the farm replay's 450,000 rows).
+        await using var harness = await SyncHarness.CreateAsync(output, walCapture: false);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var services = new ServiceCollection();
+        services.AddLogging(logging => logging.AddProvider(new XunitLoggerProvider(output)).SetMinimumLevel(LogLevel.Information));
+        services.AddG9SyncDataServer(ConfigureServer, o =>
+            {
+                o.InitializeOnStartup = false;
+                o.EnableChangeNotifications = false;
+                o.EffectPollInterval = TimeSpan.FromMilliseconds(50);
+            })
+            .UsePostgreSql(harness.DataSource);
+        GatedStore? gated = null;
+        services.AddSingleton(sp => (IG9SyncServerStore)(gated = GatedStore.Wrap(sp.GetRequiredService<G9CPostgresSyncStore>(), gate.Task)));
+        await using var provider = services.BuildServiceProvider();
+        var host = provider.GetServices<IHostedService>().OfType<G9CSyncServerHostedService>().Single();
+
+        await host.StartAsync(CancellationToken.None);
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            Assert.Equal(0, gated!.Claims);
+
+            gate.SetResult();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (gated.Claims == 0 && DateTime.UtcNow < deadline) await Task.Delay(TimeSpan.FromMilliseconds(25));
+            Assert.True(gated.Claims > 0, "Delivery never started after the store was initialised.");
+            Assert.Equal(0, gated.ClaimsBeforeInitialisation);
+        }
+        finally
+        {
+            // A failed assertion must not leave the initialisation (and so the host's stop) waiting for ever.
+            gate.TrySetResult();
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await host.StopAsync(stop.Token);
+        }
+    }
+
     // ================================================================ fixture
 
     private Task<SyncHarness> CreateHarnessAsync(EffectRecorder recorder, Action<G9CSyncServerOptions>? options = null,
@@ -175,6 +222,56 @@ public sealed class EffectOutboxTests(ITestOutputHelper output)
 
     private static Task<long> PendingEffectsAsync(SyncHarness harness) =>
         harness.ScalarServerAsync<long>("SELECT count(*) FROM g9sync.effects");
+}
+
+/// <summary>A server store whose initialisation waits for a gate, counting the effect claims made before and after it finished.</summary>
+public class GatedStore : DispatchProxy
+{
+    private IG9SyncServerStore _inner = null!;
+    private Task _gate = Task.CompletedTask;
+    private volatile bool _initialized;
+    private int _claims;
+    private int _claimsBeforeInitialisation;
+
+    public int Claims => Volatile.Read(ref _claims);
+    public int ClaimsBeforeInitialisation => Volatile.Read(ref _claimsBeforeInitialisation);
+
+    public static GatedStore Wrap(IG9SyncServerStore inner, Task gate)
+    {
+        var proxy = Create<IG9SyncServerStore, GatedStore>();
+        var gated = (GatedStore)(object)proxy;
+        gated._inner = inner;
+        gated._gate = gate;
+        return gated;
+    }
+
+    protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+    {
+        ArgumentNullException.ThrowIfNull(targetMethod);
+        if (targetMethod.Name == nameof(IG9SyncServerStore.InitializeAsync)) return InitializeAsync(targetMethod, args);
+        if (targetMethod.Name == nameof(IG9SyncServerStore.ClaimEffectsAsync))
+        {
+            if (!_initialized) Interlocked.Increment(ref _claimsBeforeInitialisation);
+            Interlocked.Increment(ref _claims);
+        }
+
+        try
+        {
+            return targetMethod.Invoke(_inner, args);
+        }
+        catch (TargetInvocationException exception) when (exception.InnerException is not null)
+        {
+            ExceptionDispatchInfo.Throw(exception.InnerException);
+            throw;
+        }
+    }
+
+    private async Task InitializeAsync(MethodInfo targetMethod, object?[]? args)
+    {
+        await _gate;
+        await (Task)targetMethod.Invoke(_inner, args)!;
+        _initialized = true;
+    }
 }
 
 /// <summary>What the effect handler saw, shared with the test.</summary>

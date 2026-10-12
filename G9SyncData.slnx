@@ -13,6 +13,7 @@
     <Project Path="src/G9SyncData.Server.EfCore/G9SyncData.Server.EfCore.csproj" />
     <Project Path="src/G9SyncData.Server.PostgreSql/G9SyncData.Server.PostgreSql.csproj" />
     <Project Path="src/G9SyncData.Server.SignalR/G9SyncData.Server.SignalR.csproj" />
+    <Project Path="src/G9SyncData.Server.SnapshotFiles/G9SyncData.Server.SnapshotFiles.csproj" />
     <Project Path="src/G9SyncData.Client/G9SyncData.Client.csproj" />
     <Project Path="src/G9SyncData.Client.Sqlite/G9SyncData.Client.Sqlite.csproj" />
     <Project Path="src/G9SyncData.Client.SignalR/G9SyncData.Client.SignalR.csproj" />

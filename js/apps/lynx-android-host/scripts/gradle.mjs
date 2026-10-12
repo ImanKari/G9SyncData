@@ -52,6 +52,8 @@ const sdk = firstExisting(process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT
 if (sdk) env.ANDROID_HOME = sdk;
 const init = firstExisting(
   process.env.G9_GRADLE_INIT_SCRIPT,
+  // AgriPadMapBench lives in G9Libraries since 2026-10-10; its old place under G9BrowserAgent stays as a fallback.
+  resolve(here, '..', '..', '..', '..', '..', 'AgriPadMapBench', 'tools', 'google-maven-mirror.gradle'),
   resolve(here, '..', '..', '..', '..', '..', 'G9BrowserAgent', 'AgriPadMapBench', 'tools', 'google-maven-mirror.gradle'),
 );
 

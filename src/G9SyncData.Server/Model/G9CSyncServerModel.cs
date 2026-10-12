@@ -179,8 +179,10 @@ public sealed class G9CSyncSubscriptionDefinition
 {
     internal G9CSyncSubscriptionDefinition(string name, IReadOnlyList<G9CSyncParameterDefinition> parameters,
         IReadOnlyList<G9CSyncSubscriptionTable> tables, IReadOnlyList<G9CSyncSubscriptionDependency> dependsOn,
-        bool ephemeral, TimeSpan ttl, bool heavy, G9EMoveOutPolicy moveOutPolicy, TimeSpan reconcileInterval, string definitionHash)
+        bool ephemeral, TimeSpan ttl, bool heavy, G9EMoveOutPolicy moveOutPolicy, TimeSpan reconcileInterval, string definitionHash,
+        G9ESnapshotFilePolicy snapshotFilePolicy = G9ESnapshotFilePolicy.Allowed)
     {
+        SnapshotFilePolicy = snapshotFilePolicy;
         Name = name;
         Parameters = parameters;
         ClientParameters = parameters.Where(p => !p.IsServer).ToArray();
@@ -208,6 +210,9 @@ public sealed class G9CSyncSubscriptionDefinition
     public bool Heavy { get; }
     public G9EMoveOutPolicy MoveOutPolicy { get; }
     public TimeSpan ReconcileInterval { get; }
+
+    /// <summary>Whether the first download may go as a snapshot file (ADR-0072). Ephemeral subscriptions never do.</summary>
+    public G9ESnapshotFilePolicy SnapshotFilePolicy { get; }
 
     /// <summary>Hash of everything that decides WHICH rows belong (parameters, scopes, filters). A change makes clients reconcile.</summary>
     public string DefinitionHash { get; }

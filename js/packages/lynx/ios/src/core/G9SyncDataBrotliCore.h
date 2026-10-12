@@ -27,8 +27,11 @@ typedef NSInteger (*G9SyncDataBrotliDecoder)(uint8_t *destination, size_t capaci
  */
 @interface G9SyncDataBrotliCore : NSObject
 
-/** `{ ok: true, value: { version, platform, brotli } }`. */
-+ (NSDictionary *)capabilitiesWithVersion:(NSString *)version platform:(NSString *)platform brotli:(BOOL)brotli;
+/** `{ ok: true, value: { version, platform, brotli, snapshotFiles } }`. */
++ (NSDictionary *)capabilitiesWithVersion:(NSString *)version
+                                 platform:(NSString *)platform
+                                   brotli:(BOOL)brotli
+                            snapshotFiles:(BOOL)snapshotFiles;
 
 /** `nil` when the arguments are usable, else the `G9SYNC-BROTLI-ARG` envelope. */
 + (nullable NSDictionary *)validate:(nullable id)data expectedLength:(double)expectedLength;

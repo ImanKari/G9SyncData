@@ -212,66 +212,92 @@ public sealed partial class G9CSyncEngine
                     .ConfigureAwait(false);
                 if (pruned > 0) LogStagesPruned(_logger, pruned);
 
-                var staged = await _store.GetStagedPullAsync(generation, ct).ConfigureAwait(false);
-                G9DtPullPlan plan;
-                string runId;
-                if (staged is not null && staged.CreatedUtc > DateTime.UtcNow - _options.StagedPullMaxAge)
+                // Snapshot files are offered unless a file already failed in this run (ADR-0072): a file is a faster way to the same
+                // rows, never the only one, so a file the server cannot build or the device rejects costs one replan as rows - not the run.
+                var allowFiles = _options.AcceptSnapshotFiles;
+                for (var attempt = 0; ; attempt++)
                 {
-                    plan = staged.Plan;
-                    runId = staged.RunId;
-                    LogResumingPull(_logger, runId, plan.TotalRows);
-                }
-                else
-                {
-                    var backfills = await _store.GetPendingBackfillsAsync(ct).ConfigureAwait(false);
-                    plan = await WithRetryAsync(token => _transport.PlanPullAsync(new G9DtPullRequest
+                    var problemsBefore = problems.Count;
+                    var syncedBefore = synced.Count;
+                    string? runId = null;
+                    try
                     {
-                        ClientId = _clientId,
-                        Subscriptions = plannable.Select(s => s.ToReference()).ToList(),
-                        Tables = negotiated.Select(t => new G9DtTableColumns { TableId = t.TableId, Columns = t.Columns.Select(c => c.Name).ToList() }).ToList(),
-                        Backfills = backfills.ToList(),
-                        FrameVersion = _options.MaxFrameVersion
-                    }, token), ct).ConfigureAwait(false);
-                    if (plan.Error is not null) throw plan.Error.ToException();
-                    runId = Guid.NewGuid().ToString("N");
-                    await _store.BeginStagedPullAsync(
-                            new G9CStagedPull
+                        var staged = await _store.GetStagedPullAsync(generation, ct).ConfigureAwait(false);
+                        G9DtPullPlan plan;
+                        if (staged is not null && staged.CreatedUtc > DateTime.UtcNow - _options.StagedPullMaxAge)
+                        {
+                            plan = staged.Plan;
+                            runId = staged.RunId;
+                            LogResumingPull(_logger, runId, plan.TotalRows);
+                        }
+                        else
+                        {
+                            var backfills = await _store.GetPendingBackfillsAsync(ct).ConfigureAwait(false);
+                            var files = allowFiles ? _store.DescribeSnapshotFiles(negotiated) : null;
+                            plan = await WithRetryAsync(token => _transport.PlanPullAsync(new G9DtPullRequest
                             {
-                                RunId = runId, Plan = plan, CreatedUtc = DateTime.UtcNow, Backfills = backfills, Generation = generation,
-                                PlannedFromCursors = plannable.ToDictionary(s => s.Key, s => s.Cursor, StringComparer.Ordinal)
-                            }, ct)
-                        .ConfigureAwait(false);
-                }
+                                ClientId = _clientId,
+                                Subscriptions = plannable.Select(s => s.ToReference()).ToList(),
+                                Tables = negotiated.Select(t => new G9DtTableColumns { TableId = t.TableId, Columns = t.Columns.Select(c => c.Name).ToList() }).ToList(),
+                                Backfills = backfills.ToList(),
+                                FrameVersion = _options.MaxFrameVersion,
+                                SnapshotFiles = files
+                            }, token), ct).ConfigureAwait(false);
+                            if (plan.Error is not null) throw plan.Error.ToException();
+                            runId = Guid.NewGuid().ToString("N");
+                            await _store.BeginStagedPullAsync(
+                                    new G9CStagedPull
+                                    {
+                                        RunId = runId, Plan = plan, CreatedUtc = DateTime.UtcNow, Backfills = backfills, Generation = generation,
+                                        PlannedFromCursors = plannable.ToDictionary(s => s.Key, s => s.Cursor, StringComparer.Ordinal)
+                                    }, ct)
+                                .ConfigureAwait(false);
+                        }
 
-                foreach (var skipped in plan.Skipped)
-                {
-                    problems.Add(skipped);
-                    if (skipped.Action is G9ESubscriptionAction.Reconcile or G9ESubscriptionAction.ResyncRequired)
+                        foreach (var skipped in plan.Skipped)
+                        {
+                            problems.Add(skipped);
+                            if (skipped.Action is G9ESubscriptionAction.Reconcile or G9ESubscriptionAction.ResyncRequired)
+                            {
+                                await _store.UpdateSubscriptionAsync(skipped.Key, new G9CSubscriptionUpdate { State = G9ESubscriptionState.NeedsReconcile }, ct)
+                                    .ConfigureAwait(false);
+                            }
+                        }
+
+                        synced.AddRange(plan.Cursors.Select(c => c.Key));
+                        var fileParts = plan.Parts.Count(p => p.Kind == G9EPullPartKind.SnapshotFile);
+                        if (fileParts > 0) LogSnapshotFilesPlanned(_logger, fileParts, plan.Parts.Where(p => p.Kind == G9EPullPartKind.SnapshotFile).Sum(p => p.Rows));
+                        tracker.Expect(G9ESyncPhase.Downloading, Math.Max(200, plan.TotalRows / 1000d * History(history, StatDownloadPerKRow, 350)));
+                        tracker.Expect(G9ESyncPhase.Applying, Math.Max(100, plan.TotalRows / 1000d * History(history, StatApplyPerKRow, 250)));
+
+                        // ------------------------------------------------------------ 6. download (resumable)
+                        tracker.Enter(G9ESyncPhase.Downloading, plan.TotalRows, plan.EstimatedBytes);
+                        (downloaded, downloadedBytes) = await DownloadAsync(runId, plan, tracker, ct).ConfigureAwait(false);
+
+                        // ------------------------------------------------------------ 7. apply (atomic, or in committed slices)
+                        tracker.Enter(G9ESyncPhase.Applying, downloaded);
+
+                        // Each slice is committed and readable when it is announced, so the application can draw those rows immediately
+                        // instead of waiting for the whole pull (ADR-0053). Without slicing configured, exactly one slice arrives at the end.
+                        var applied = await _store.ApplyStagedPullAsync(runId, new G9CInlineProgress<long>(rows => tracker.Report(rows)),
+                            new G9CInlineProgress<G9CApplySlice>(slice =>
+                            {
+                                if (slice.Report.Total > 0) RaiseRowsApplied(slice.Report, G9ESyncPhase.Applying, slice);
+                            }), ct).ConfigureAwait(false);
+                        changes.Merge(applied);
+                        break;
+                    }
+                    catch (G9CSyncException exception) when (attempt == 0 && !ct.IsCancellationRequested
+                                                              && exception.Code is G9SyncErrorCodes.SnapshotFileUnavailable or G9SyncErrorCodes.SnapshotFileCorrupt)
                     {
-                        await _store.UpdateSubscriptionAsync(skipped.Key, new G9CSubscriptionUpdate { State = G9ESubscriptionState.NeedsReconcile }, ct)
-                            .ConfigureAwait(false);
+                        LogSnapshotFileFallback(_logger, exception, exception.Code);
+                        if (runId is not null) await _store.DiscardStagedPullAsync(runId, CancellationToken.None).ConfigureAwait(false);
+                        problems.RemoveRange(problemsBefore, problems.Count - problemsBefore);
+                        synced.RemoveRange(syncedBefore, synced.Count - syncedBefore);
+                        allowFiles = false;
+                        tracker.Enter(G9ESyncPhase.Planning);
                     }
                 }
-
-                synced.AddRange(plan.Cursors.Select(c => c.Key));
-                tracker.Expect(G9ESyncPhase.Downloading, Math.Max(200, plan.TotalRows / 1000d * History(history, StatDownloadPerKRow, 350)));
-                tracker.Expect(G9ESyncPhase.Applying, Math.Max(100, plan.TotalRows / 1000d * History(history, StatApplyPerKRow, 250)));
-
-                // ------------------------------------------------------------ 6. download (resumable)
-                tracker.Enter(G9ESyncPhase.Downloading, plan.TotalRows, plan.EstimatedBytes);
-                (downloaded, downloadedBytes) = await DownloadAsync(runId, plan, tracker, ct).ConfigureAwait(false);
-
-                // ------------------------------------------------------------ 7. apply (atomic, or in committed slices)
-                tracker.Enter(G9ESyncPhase.Applying, downloaded);
-
-                // Each slice is committed and readable when it is announced, so the application can draw those rows immediately
-                // instead of waiting for the whole pull (ADR-0053). Without slicing configured, exactly one slice arrives at the end.
-                var applied = await _store.ApplyStagedPullAsync(runId, new G9CInlineProgress<long>(rows => tracker.Report(rows)),
-                    new G9CInlineProgress<G9CApplySlice>(slice =>
-                    {
-                        if (slice.Report.Total > 0) RaiseRowsApplied(slice.Report, G9ESyncPhase.Applying, slice);
-                    }), ct).ConfigureAwait(false);
-                changes.Merge(applied);
             }
 
             // ---------------------------------------------------------------- 8. post steps
@@ -757,4 +783,11 @@ public sealed partial class G9CSyncEngine
 
     [LoggerMessage(EventId = 20021, Level = LogLevel.Information, Message = "Removed {Count} staged pull(s) past their age or the byte cap")]
     private static partial void LogStagesPruned(ILogger logger, int count);
+
+    [LoggerMessage(EventId = 20025, Level = LogLevel.Information, Message = "The pull carries {Files} snapshot file(s) for {Rows} row(s)")]
+    private static partial void LogSnapshotFilesPlanned(ILogger logger, int files, long rows);
+
+    [LoggerMessage(EventId = 20026, Level = LogLevel.Warning,
+        Message = "A snapshot file failed ({Code}); the staged download was discarded and the pull is planned again as rows")]
+    private static partial void LogSnapshotFileFallback(ILogger logger, Exception exception, string code);
 }

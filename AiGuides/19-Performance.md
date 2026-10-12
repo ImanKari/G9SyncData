@@ -231,9 +231,86 @@ allocated (ADR-0045).
 | server-built SQLite file, Brotli q4 window 24 | 22.31 MB | 172 ms | 1,079 ms |
 
 **SQLite apply on the device** (the `--sqlite-apply` variants, 500,000 rows): the store's path (N) loads in 3.0 s against 10.4 s for the
-naive apply (A); a server-built file attached and copied (K) in 1.3 s (not adopted, ADR-0041); BLOB GUID keys (I) in 2.4 s.
+naive apply (A); a server-built file attached and copied (K) in 1.3 s (rejected in ADR-0041, built since as ADR-0072); BLOB GUID keys (I) in 2.4 s.
 
 **Reconciliation hash** (1,000,000 rows, `md5(key)` + `md5(key:version)` each): platform MD5 3,013 ms, managed `G9CMd5` 902 ms (LES-0040).
+
+## Snapshot files on the emulator — 2026-10-12 (ADR-0072)
+
+The same rig as above (`A_large_first_download_as_a_snapshot_file…`, [12](12-Testing.md)); one server with
+`UseSnapshotFiles()`, the site's first download as rows (the device declines files) and as a file, alternating three
+times, medians. Every run is a cold app start into a new database; every database equals the server.
+Files: `benchmarks/results/android-snapshot-file-{200000,500000}-latest.md`.
+
+| First download | Rows | File, reused | File while the server builds it |
+|---|---|---|---|
+| 200,000 pots: sync / device CPU | 6.4 s / 3.2 s | 3.6 s / 2.3 s | 5.5 s / 2.2 s |
+| 500,000 pots: sync / device CPU | 16.9 s / 7.1 s | 11.4 s / 4.2 s | 15.2 s / 5.4 s |
+| 500,000 pots: bytes down | 20.6 MB | 30.1 MB | 30.1 MB |
+| 500,000 pots: apply (copy · rest of the transaction) | 0 · 6.5-13.0 s | 0.9-1.3 · 7.4-8.0 s | 0.9 · 3.7 s |
+
+- **Noise.** Single emulator runs differed by up to 6× (one row run: 39.5 s of CPU; the next: 6.7 s) - compare medians.
+- **Where a file's apply goes.** The page copy of 500,000 pots takes ~1 s; most of the rest is the commit writing
+  ~250 MB into the WAL and folding it into the database. A partition file (T2) would avoid that write; it is not built.
+- **Bytes.** The file holds the device's storage form (GUIDs as text) and its index pages: ×1.5 of the frames here,
+  ×2.3 on the synthetic AgriPad shape (`snapshot-file-codec-latest.md`, which also measures the layouts and codecs).
+- **On Lynx** (the real Lynx 4.1 / PrimJS runtime on the same emulator, the TypeScript store over G9LynxControls'
+  SQLite module, the snapshot-file methods of `G9SyncDataLynxModule` as packed; `js/apps/lynx-android-host`):
+
+  | Interop scenario step (MessagePack) | Rows: download · apply | Snapshot file: download · apply |
+  |---|---|---|
+  | client a, first download of 2 × 25,000 pots | 0.5 s · 13.6 s | 0.9 s · 0.6 s |
+  | client b, first download of 25,000 pots | 0.5 s · 6.4 s | 0.3 s · 0.4 s |
+  | the whole scenario (push, poke, reconcile, unsubscribe included) | 38.3 s | 20.3 s |
+
+  The row path's apply runs at ~3,700 rows/s there - ~2 minutes for a 450,000-row farm on this emulator, more on a
+  phone; the file path's at ~80,000 rows/s.
+- **The server** builds a 500,000-pot file in ~6.5 s on the development machine (11 s of CPU across cores; the first
+  device waits for it in `Downloading`: 8.6 s against ~2.1 s for a reused file); a reuse costs the server ~0.4 s of CPU.
+
+## Snapshot files on real devices — 2026-10-12 (ADR-0072)
+
+The first measurements on phones and tablets rather than the emulator. Results:
+`benchmarks/results/devices/samsung-sm-x115/` (the whole .NET device suite, 8/8 PASS, 84 on-device unit tests) and
+`benchmarks/results/devices/lynx-real-devices-2026-10-12.md` (the Lynx hosts) and `benchmarks/results/devices/doogee-s96pro/`
+(a real farm on the field phone).
+
+| Real devices, 2026-10-12 | Rows | Snapshot file |
+|---|---|---|
+| Samsung Galaxy Tab A9 (MT8781), .NET client, 500,000 pots: sync / device CPU (medians of 3) | 21.8 s / 22.1 s | 8.9 s / 11.2 s |
+| the same, 200,000 pots | 9.4 s / 9.8 s | 4.7 s / 5.7 s |
+| the same tablet, Lynx (TypeScript client), apply of 50,000 pots | 28.4 s | 1.3 s |
+| iPhone 12 Pro Max, Lynx 4.0.3 (JavaScriptCore), apply of 50,000 pots | 6.9 s | 0.3 s |
+| DOOGEE S96Pro, .NET client, a production farm's farm-site download (449,758 rows): sync / device CPU (medians of 3) | 19.2 s / 17.5 s | 9.6 s / 7.9 s |
+| the same phone and farm, Lynx 4.1 (PrimJS): whole run / apply | 351 s / 349 s | 12.2 s / 7.4 s |
+
+- **Samsung Galaxy Tab A9** (SM-X115: MediaTek MT8781, 8 cores, 3.6 GB, Android 16). The .NET file path at 500,000
+  pots: apply 5.1 s (copy 3.5 s) against 16.0 s for rows; the three runs of each path within 4 %. The UI thread
+  never stalled longer than 50 ms on either path.
+- **On Lynx** the tablet pays 28.4 s for 50,000 pots as rows - a 450,000-row farm would be ~4 minutes of apply - and
+  1.3 s as a file.
+- **iPhone 12 Pro Max**, iOS 26.6.1, Lynx 4.0.3 on JavaScriptCore: 6.9 s as rows, 0.3 s as a file; the server was
+  reached over the internet, so its download times include that round trip.
+- **DOOGEE S96Pro** (Android 10 / API 29, arm64, 8 cores, 7.7 GB) with a **real farm**, not synthetic pots:
+  `AndroidFarmReplayTests` loads a production farm's farm-site rows from a device database of the farm (`G9SYNC_FARM_DB`; the
+  data never enters the repository) - Ridge 4,465, Pot 142,214, current Placement 141,626, Tree 141,626, Graft 19,827,
+  with AgriPad's mirror-entity columns. The live server held 449,511 rows for the same farm that day, and the
+  subscription's other three tables (CorruptTag and the attribute values) hold none for it: this IS the farm's scale.
+
+  | DOOGEE S96Pro, a production farm (449,758 rows) | Rows | Snapshot file, reused | File while the server builds it |
+  |---|---|---|---|
+  | .NET: sync (median of 3) | 19.2 s | 9.6 s | 16.8 s |
+  | .NET: device CPU | 17.5 s | 7.9 s | 9.8 s |
+  | .NET: apply (file: copy · rest of the transaction) | 15.1-15.8 s | 5.0-5.8 s (2.2-2.3 · 2.6-3.5) | 6.0 s |
+  | .NET: peak RSS · UI thread's longest gap | 234-237 MB · 17 ms | 225-248 MB · 33 ms | 252 MB · 33 ms |
+  | Lynx 4.1 (PrimJS): download · apply · the page's whole run | 2.0 · 348.7 · 351.3 s | 4.3 · 7.1-7.7 · 11.9-12.5 s | 10.4 · 7.6 · 18.6 s |
+  | Bytes down · database on the device | 18.2 MB · 214 MB | 29.0 MB (149 segments) · 192 MB | the same |
+
+  The battery stayed within 33.3-34.7 °C over both suites. Every database equalled the server, table by table.
+  On Lynx the row path is the known per-statement bridge cost at farm scale - almost six minutes on this phone -
+  and the file removes it. The file is ×1.6 the rows on the wire: on a link slower than ~9 Mbit/s the .NET client's
+  row path would finish first (the file still costs half the CPU); for Lynx the file wins on any link.
+- Still owed: the DOOGEE S99.
 
 ## SQLite apply experiments — 2026-09-20
 

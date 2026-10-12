@@ -1,0 +1,34 @@
+# CocoaPods for the iOS device-test host. Lynx stays at 4.0.3 on iOS (CocoaPods trunk; Android runs 4.1.0 from Maven):
+# the page bundle targets both. The three G9 pods come AS PACKED, from the Android host's npm install
+# (../lynx-android-host/node_modules), so both hosts test the same tarballs.
+platform :ios, '15.0'
+install! 'cocoapods', :deterministic_uuids => false, :warn_for_unused_master_specs_repo => false
+
+LYNX = '4.0.3'
+G9 = File.expand_path('../lynx-android-host/node_modules/@g9tm', __dir__)
+
+target 'G9SyncHost' do
+  pod 'Lynx', LYNX, :subspecs => ['Framework']
+  pod 'PrimJS', '4.0.0', :subspecs => ['quickjs', 'napi']  # exactly what Lynx 4.0.3's Framework pins
+  pod 'LynxService', LYNX, :subspecs => ['Log']           # console → os_log
+  pod 'g9lynx-native', :path => "#{G9}/lynxcontrols-native/ios"        # G9SqliteModule, G9HostModule
+  pod 'g9tm-signalr-lynx', :path => "#{G9}/signalr-supernetcore-lynx/ios" # G9SignalRLynxModule (the WebSocket)
+  pod 'g9tm-syncdata-lynx', :path => "#{G9}/syncdata-lynx/ios"            # G9SyncDataLynxModule (Brotli + snapshot files)
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |t|
+    t.build_configurations.each do |c|
+      c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      c.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+    end
+    # Lynx's podspecs compile every file with a bare -Werror; at iOS 15 and Xcode 26 UIKit deprecations (keyWindow)
+    # become warnings → errors in LynxUI.m. Drop the bare -Werror, keep the -Werror=<group> ones.
+    next unless t.respond_to?(:source_build_phase)
+    t.source_build_phase.files.each do |f|
+      flags = f.settings && f.settings['COMPILER_FLAGS']
+      next unless flags && flags =~ /(^|\s)-Werror(\s|$)/
+      f.settings['COMPILER_FLAGS'] = flags.split(' ').reject { |x| x == '-Werror' }.join(' ')
+    end
+  end
+end

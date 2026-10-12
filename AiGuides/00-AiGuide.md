@@ -43,6 +43,7 @@ the agriculture repository root.
 | Adopting in AgriPad / migrating from Dotmim | [16-AgriPad-Integration.md](16-AgriPad-Integration.md) |
 | Before promising a feature | [17-Known-Limitations.md](17-Known-Limitations.md) |
 | Performance numbers, benchmarks | [19-Performance.md](19-Performance.md) |
+| Large first downloads as SQLite snapshot files | ADR-0072 in [10-Decisions.md](10-Decisions.md), then [04](04-Protocol.md) → Snapshot files, [05](05-Server-Model.md), [08](08-Client-Sqlite.md), [21](21-TypeScript-And-Lynx.md) |
 | The TypeScript/Lynx client, or any change the .NET client and it must share | [21-TypeScript-And-Lynx.md](21-TypeScript-And-Lynx.md), then `js/packages/syncdata/PARITY.md` |
 
 ## Chapters

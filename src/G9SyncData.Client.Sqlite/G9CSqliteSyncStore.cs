@@ -97,6 +97,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             _model = model;
             _byLocal = tables.ToDictionary(t => t.Model.LocalName, StringComparer.OrdinalIgnoreCase);
             _byServerId = tables.Where(t => t.Negotiated is not null).ToDictionary(t => t.Negotiated!.TableId);
+            SweepOrphanSnapshotFiles(connection);
             LogInitialized(_logger, tables.Count);
         }
         finally
@@ -165,11 +166,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             }
         }
 
-        foreach (var index in table.Indexes)
-        {
-            Exec(connection, transaction,
-                $"CREATE {(index.Unique ? "UNIQUE " : string.Empty)}INDEX IF NOT EXISTS {SqliteSql.Quote(index.Name)} ON {SqliteSql.Quote(table.LocalName)} ({string.Join(", ", index.Columns.Select(SqliteSql.Quote))})");
-        }
+        foreach (var index in table.Indexes) Exec(connection, transaction, SqliteSql.CreateIndex(table, index));
 
         var negotiated = negotiatedJson is null ? null : JsonSerializer.Deserialize(negotiatedJson, G9SyncJsonContext.Default.G9DtNegotiatedTable);
         var captureWanted = negotiated?.Direction != G9ESyncDirection.DownloadOnly;

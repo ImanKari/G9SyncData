@@ -35,8 +35,8 @@ Read before promising a feature. Remove an entry only in the change that lifts i
   code is outside the default profiled-AOT profile. A custom AOT profile in the app would remove it.
 - Layout 2 frames (default, ADR-0040) are regrouped into rows on the device: ~0.7 ms per 2,000-row page on the emulator, ~2 ms per page
   on the server. Reading layout 2 directly would remove the device part.
-- Device numbers exist for the Android **emulator** (x86_64 on the desktop CPU, [19](19-Performance.md)); the DOOGEE S99 run is still open
-  and required before adoption.
+- Device numbers exist for the Android **emulator** (x86_64 on the desktop CPU), a Samsung Galaxy Tab A9, an iPhone 12 Pro Max and a
+  DOOGEE S96Pro (a real 450,000-row farm, [19](19-Performance.md)); the DOOGEE S99 itself has not been run.
 - Capture makes bulk statements on synced tables about 2.5× slower (+0.07 ms per single-row statement), and tracking
   storage is ~70% of a 12-column table ([19](19-Performance.md)).
 - About 130 ms of every small sync is planning (exact counts per part) — the first optimisation candidate. A snapshot part
@@ -77,7 +77,7 @@ Read before promising a feature. Remove an entry only in the change that lifts i
   SQLitePCLRaw 3.0.5, ADR-0044; desktop runs cover 2.1.13 and 3.0.5, ADR-0032).
 - The G9 reconnect policy's own retry schedule over a real network (connection loss mid-run is covered with a real SignalR
   connection on loopback, `SignalRConnectionLossTests`).
-- Device-level performance on the DOOGEE S99 (the emulator numbers are in [19](19-Performance.md)).
+- Device-level performance on the DOOGEE S99 (the S96Pro, a tablet, an iPhone and the emulator are in [19](19-Performance.md)).
 - The apply diagnostics, the guarded upsert and the growth rule on a DEVICE (covered on desktop SQLite 3.53; the 5.3x fast-path
   figure is a desktop measurement and the device ratio has not been taken).
 - Stateful reconnect across a real proxy (covered on loopback, `SignalRTransportTests`).
@@ -95,10 +95,21 @@ Read before promising a feature. Remove an entry only in the change that lifts i
 
 ## Features not built
 
-- Snapshot file download for very large first syncs (plan D-06): rejected with measurements — 44% more bytes than layout 2 frames to
-  save ~1.9 s of device load (ADR-0041).
+- Snapshot files T2 (a whole-partition file for a fresh install) and T3 (a server-built GeoPackage): not built (ADR-0072).
+  T1 - a file per subscription, copied in SQL - is built.
 - Echo suppression (ADR-0011): not built — the correct design saves under half of ~78 bytes and 0.035 ms per pushed row (ADR-0042).
 - AgriPad adoption beyond the shadow pilot ([16](16-AgriPad-Integration.md)): device runs, then per-table cut-over from Dotmim — each needs the owner's go-ahead.
+
+## Snapshot files (ADR-0072)
+
+| Limit | Why | Workaround |
+|---|---|---|
+| A first download as a file is larger on the wire than as rows: ×1.5 on the device-test schema, ×2.3 on the synthetic AgriPad shape, ×1.6 for a real farm (29.0 vs 18.2 MB) - below ~9 Mbit/s the .NET row path finishes first | the file holds the device's storage form (GUIDs as text) and its index pages, so the device copies pages instead of building b-trees | measured cheaper layouts (no index pages ×1.4, q11 −16 %) need no protocol change ([snapshot-file-codec-latest.md](../benchmarks/results/snapshot-file-codec-latest.md)) |
+| The first device of a scope waits for the build | the file is built from the plan's snapshot, inline | the next devices reuse it (with a delta) for 24 h; `BuildAfterRequests` delays building to the second asker |
+| A cached file is per (subscription key, auth hash, device shape) | comparing the visible rows of two callers would cost the read the cache saves | a per-caller subscription can opt out: `.SnapshotFiles(G9ESnapshotFilePolicy.Never)` |
+| At most 8 files per plan | each is ATTACHed in the apply; SQLite attaches at most 10 databases | further subscriptions come as rows |
+| A table the device cannot describe (no shape in the offer) sends its whole subscription as rows | a file is read with the device's own DDL | — |
+| Not yet run on the DOOGEE S99 | a Samsung Galaxy Tab A9 (.NET suite + Lynx host), an iPhone 12 Pro Max (Lynx host) and a DOOGEE S96Pro (a real farm on .NET and Lynx) are proven, besides the emulators | `AndroidFarmReplayTests` (both tests) with `G9SYNC_ANDROID=<the S99>` |
 
 ## TypeScript / Lynx client (ADR-0070, ADR-0071)
 

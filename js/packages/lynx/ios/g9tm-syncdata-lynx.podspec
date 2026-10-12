@@ -5,7 +5,7 @@
 Pod::Spec.new do |s|
   s.name = 'g9tm-syncdata-lynx'
   s.version = '1.2.2'
-  s.summary = 'G9SyncDataLynxModule: Brotli decompression (Compression framework) for the G9SyncData Lynx client.'
+  s.summary = 'G9SyncDataLynxModule: Brotli decompression (Compression framework) and the snapshot-file sink (CommonCrypto SHA-256, POSIX I/O) for the G9SyncData Lynx client.'
   s.homepage = 'https://github.com/ImanKari/G9SyncData'
   s.license = { :type => 'MIT' }
   s.author = 'Iman Kari (G9TM)'

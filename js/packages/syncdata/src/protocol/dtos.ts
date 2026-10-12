@@ -22,6 +22,8 @@ export const G9EPullPartKind = {
   Snapshot: 0,
   Delta: 1,
   Backfill: 2,
+  /** A subscription's snapshot as a SQLite file (ADR-0072), streamed as file segments (`G9DtSyncChunk.file`). */
+  SnapshotFile: 3,
 } as const;
 export type G9EPullPartKind = (typeof G9EPullPartKind)[keyof typeof G9EPullPartKind];
 
@@ -84,6 +86,8 @@ export interface G9DtSyncChunk {
   isFinal: boolean;
   continuation?: G9DtPullContinuation | null;
   reconcileSummary?: G9DtReconcileSummary | null;
+  /** Set when the chunk carries a snapshot-file segment (ADR-0072): `payload` is then the segment, Brotli-compressed on its own. */
+  file?: G9DtFileSegment | null;
 }
 
 /** Server → client hint that tables changed. */
@@ -265,14 +269,97 @@ export interface G9DtPullRequest {
   tables: G9DtTableColumns[];
   backfills: G9DtBackfillRequest[];
   frameVersion: number;
+  /** Set when the client accepts large first downloads as SQLite snapshot files (ADR-0072); absent = rows only. */
+  snapshotFiles?: G9DtSnapshotFileRequest | null;
 }
 
 export interface G9DtPlannedPart {
   subscriptionKey: string;
+  /** 0 for a snapshot-file part, whose tables are in `file`. */
   tableId: number;
   kind: G9EPullPartKind;
   rows: number;
   estimatedBytes: number;
+  /** The file a snapshot-file part delivers; null for every other kind. */
+  file?: G9DtPlannedFile | null;
+}
+
+// ---------------------------------------------------------------- snapshot files (ADR-0072)
+
+/** The client's offer to receive snapshot files: its storage forms and the shape of every table it receives. */
+export interface G9DtSnapshotFileRequest {
+  formatVersion: number;
+  storage: G9DtSnapshotFileStorage;
+  tables: G9DtSnapshotFileTable[];
+  minRows: number;
+  maxBytes: number;
+  maxFiles: number;
+}
+
+export interface G9DtSnapshotFileStorage {
+  dateTimeAsTicks: boolean;
+  dateTimeFormat: string;
+  decimalAsText: boolean;
+}
+
+/** One device table: local name, key and synced columns in LOCAL order, declared indexes. */
+export interface G9DtSnapshotFileTable {
+  tableId: number;
+  localName: string;
+  keyColumn: string;
+  keyType: G9ESyncColumnType;
+  columns: G9DtColumnModel[];
+  indexes: G9DtSnapshotFileIndex[];
+}
+
+export interface G9DtSnapshotFileIndex {
+  name: string;
+  columns: string[];
+  unique: boolean;
+}
+
+export interface G9DtPlannedFile {
+  fileId: string;
+  /** When the server's state the file holds was taken (epoch ms UTC; .NET `DateTime SnapshotUtc`). */
+  snapshotUtcMs: number;
+  tables: G9DtPlannedFileTable[];
+}
+
+export interface G9DtPlannedFileTable {
+  tableId: number;
+  rows: number;
+}
+
+/** One segment of a snapshot file: `length` raw bytes at `offset`, compressed on its own. */
+export interface G9DtFileSegment {
+  fileId: string;
+  index: number;
+  offset: number;
+  length: number;
+  /** SHA-256 of the raw segment, lower-case hex. */
+  sha256: string;
+  /** Set on the first segment a stream sends for the file (also after a resume). */
+  manifest?: G9DtSnapshotFileManifest | null;
+}
+
+export interface G9DtSnapshotFileManifest {
+  fileId: string;
+  formatVersion: number;
+  bytes: number;
+  segmentBytes: number;
+  segments: number;
+  sha256: string;
+  compression: string;
+  /** Epoch ms UTC (.NET `DateTime BuiltUtc`). */
+  builtUtcMs: number;
+  tables: G9DtSnapshotFileTableInfo[];
+}
+
+export interface G9DtSnapshotFileTableInfo {
+  tableId: number;
+  name: string;
+  versionTable: string;
+  rows: number;
 }
 
 export interface G9DtSubscriptionCursor {

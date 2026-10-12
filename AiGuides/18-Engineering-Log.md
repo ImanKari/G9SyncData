@@ -571,3 +571,38 @@ a temp B-tree, ignoring the partial `g9_rows_dirty` index that holds only the pe
 Lesson: a partial index is only a candidate — check `EXPLAIN QUERY PLAN` on a full-size database, because an `IN` on a
 leading primary-key column outbids it, and the cost grows with rows the query never returns.
 
+
+## LES-0058 — 2026-10-12 · A snapshot file stored every key three times
+
+The first snapshot-file format kept each row's server version in `g9snap_ver_<tid> (pk TEXT PRIMARY KEY, ver)`: the
+key again, beside the table and its key index. A key is the widest value of most rows - a GUID is 36 characters of
+near-random text that Brotli cannot shrink - so 200,000 AgriPad-shaped pots went from 14.31 MB to 17.08 MB on the wire
+for that third copy alone (benchmarks/results/snapshot-file-codec-latest.md). The version table is now keyed by the
+data table's rowid (`rid INTEGER PRIMARY KEY, ver`), the device joins on rowid and derives the key from the row, and
+numbers rows in rowid order - the order they arrived in, which is the row path's numbering for every key type (the old
+`ORDER BY pk` matched it only where text order is the server's order, e.g. not for integer keys). Lesson: in a file
+meant for the wire, count the copies of the widest value before tuning the codec - q5 → q11 bought the same 16 % for
+60 times the CPU.
+
+## LES-0059 — 2026-10-12 · A sweep that matched `*.sqlite*` could delete the app's database
+
+The start-up sweep of staged snapshot files deleted every `*.sqlite*` file in the staging directory that no stage
+referred to. Pointing `SnapshotFileDirectory` at the database's own folder - an easy choice on a phone - would have
+deleted a host's `app.sqlite` and its WAL; two stores sharing a folder (AgriPad keeps a database per user) would delete
+each other's staged files. Both twins now delete only names they write (`<32 hex run id>-<file id>.sqlite` and its
+`-journal`/`-wal`/`-shm`), proven by tests that run the sweep next to the database and foreign files, and Lynx's default
+staging directory is per database (`<cache>/g9sync-files/<name>-<fnv1a of the path>`). Lesson: a cleanup that owns a
+directory by convention owns nothing - match exactly what you created, and test it among things you did not create.
+
+## LES-0060 — 2026-10-12 · Effect delivery started before the store it reads
+
+The server's hosted service starts three loops. Change listening and tombstone cleanup each call
+`EnsureInitializedAsync` first; effect delivery did not. With `InitializeOnStartup` on (the default, and Server.Mobile's
+setting) the store is ready before any loop starts, so nothing showed. With it off — the test harness, and any host that
+initialises lazily — the first claim raced the initialisation and logged `Effect dispatch failed` (event 21024, Error)
+with a "not initialised" stack, then retried 10 s later. It surfaced in the DOOGEE farm replay's log, where loading
+450,000 rows made the initialisation slow enough to lose the race every time. The dispatch loop now waits for the store
+like the other two (a failed initialisation is retried with back-off, event 21014). `EffectOutboxTests.Delivery_waits_for_the_store…`
+holds the initialisation behind a gate and counts claims: 9 premature claims before the fix, 0 after. Lesson: when
+several loops share one lazily initialised resource, give every loop the same wait — the one that skips it works
+only as long as the others happen to win.

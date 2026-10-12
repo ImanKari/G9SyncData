@@ -57,11 +57,13 @@ classify failures by code, never by message (plan P-19).
 | `G9S-LOCAL-BUSY` | `SQLITE_BUSY` / `SQLITE_LOCKED` past the busy timeout (ADR-0068) | engine retries |
 | `G9S-SRV-BUSY` | the server is at `MaxConcurrentPulls` / `MaxConcurrentPushes` and the wait ran out (ADR-0062) | engine retries with backoff |
 | `G9S-MODEL-TYPE-MISMATCH` | a client column's type differs from the server's and `FailOnTypeMismatch` is on (ADR-0061) | developer error: fix the mirror entity |
+| `G9S-FILE-UNAVAILABLE` | the server planned a snapshot file (ADR-0072) it can no longer produce: the build failed, the cache entry was evicted, or the instance serving a resume has another build | the engine discards the staged file and replans the same pull as rows, once per run; nothing for the app to do |
+| `G9S-FILE-CORRUPT` | a staged snapshot file failed a check on the device: a segment's SHA-256 or length, the manifest, the SQLite header or "G9SF" application id, a missing table, or the sink refused a write | the same fallback: discard, replan as rows, once per run. Repeated → look at the device's storage (event 20026) |
 | `G9S-UNKNOWN` | not classified | a bug: classify it |
 
 ## Lynx native module codes
 
-`@g9tm/syncdata-lynx`'s Brotli module answers with its own codes; they never reach a run result as such — a frame that
+`@g9tm/syncdata-lynx`'s native module answers with its own codes; they never reach a run result as such — a frame that
 cannot be decoded fails the apply as a malformed frame, and the module's code is in the message.
 
 | Code | Meaning |
@@ -69,3 +71,13 @@ cannot be decoded fails the apply as a malformed frame, and the module's code is
 | `G9SYNC-BROTLI-ARG` | no data, or an expected length outside 0 … 576 MiB |
 | `G9SYNC-BROTLI-INVALID` | corrupt stream, or one that decodes to a different length than the frame header says |
 | `G9SYNC-BROTLI-UNAVAILABLE` | no native decoder (module not linked); use `jsBrotliDecompressor()` of `@g9tm/syncdata/brotli-js` |
+
+The snapshot-file methods of the same module (ADR-0072) answer with `G9SYNC-FILE-*`. The store turns any of them into
+`G9S-FILE-CORRUPT`, so the run falls back to rows; the module's code and reason stay in the message.
+
+| Code | Meaning |
+|---|---|
+| `G9SYNC-FILE-ARG` | an empty path, a negative or fractional size/offset/length, a segment above 64 MiB, a SHA-256 that is not 64 lower-case hex characters |
+| `G9SYNC-FILE-INVALID` | the segment does not decompress to its length or fails its SHA-256; nothing was written |
+| `G9SYNC-FILE-IO` | the file system refused (no space, permissions, the staged file is gone); the system's reason (e.g. `ENOSPC`) leads the message |
+| `G9SYNC-FILE-UNAVAILABLE` | JS side only: no module with the snapshot-file methods (none linked, or one built before 1.2.2) - `lynxSnapshotFileSink()` answers null instead, so the device never asks for files |

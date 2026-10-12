@@ -112,15 +112,27 @@ public sealed class G9DtPullRequest
     ///     layout 1. The server answers with at most this.
     /// </summary>
     public int FrameVersion { get; set; }
+
+    /// <summary>
+    ///     Set when the client accepts large first downloads as SQLite snapshot files (ADR-0072). Null - and from every client older than
+    ///     the field - means rows only.
+    /// </summary>
+    public G9DtSnapshotFileRequest? SnapshotFiles { get; set; }
 }
 
 public sealed class G9DtPlannedPart
 {
     public string SubscriptionKey { get; set; } = string.Empty;
+
+    /// <summary>The table the part reads; 0 for a <see cref="G9EPullPartKind.SnapshotFile" /> part, whose tables are in <see cref="File" />.</summary>
     public int TableId { get; set; }
+
     public G9EPullPartKind Kind { get; set; }
     public long Rows { get; set; }
     public long EstimatedBytes { get; set; }
+
+    /// <summary>The file a <see cref="G9EPullPartKind.SnapshotFile" /> part delivers; null for every other kind.</summary>
+    public G9DtPlannedFile? File { get; set; }
 }
 
 public sealed class G9DtSubscriptionCursor

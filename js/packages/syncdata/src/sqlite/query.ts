@@ -20,6 +20,7 @@ import { asLong, asNumber, asOptionalString, asString, statementsOf, type G9Sqli
 import type { G9SqlValue } from './driver.js';
 import { findByServerName, getLocal, persistedJson, readSubscriptions, type LocalTable, type StoreInternals } from './internals.js';
 import { allColumnsMask, bit, keyExpression, literal, NOW_MS, quote } from './sql.js';
+import { deleteFiles, forgetPendingSegments, persistedPlan, stageFileSegment, takeStagedFiles } from './snapshotFiles.js';
 import { formatTicks, ticksOf, ticksToUnixMs } from './values.js';
 
 // ================================================================ staging
@@ -53,42 +54,55 @@ export async function getStagedPull(store: StoreInternals, generation: string | 
 }
 
 export async function pruneStagedPulls(store: StoreInternals, olderThanUtcMs: number, maxBytes: number, keepGeneration: string | null): Promise<number> {
-  return store.writeLock.run(() =>
+  let files: string[] = [];
+  const pruned = await store.writeLock.run(() =>
     store.writer().transaction('immediate', async () => {
       const connection = store.writer();
       const doomed = (await connection.query('SELECT run_id FROM g9_stage_runs WHERE created_utc < $c', { $c: olderThanUtcMs })).map((r) => asString(r[0]));
       // The byte cap is for the stages nobody is about to resume: newest first, past the cap they go (ADR-0060).
       let kept = 0;
       for (const r of await connection.query(
-        'SELECT r.run_id, (SELECT coalesce(sum(length(payload)), 0) FROM g9_stage s WHERE s.run_id = r.run_id) FROM g9_stage_runs r ' +
+        'SELECT r.run_id, (SELECT coalesce(sum(length(payload)), 0) FROM g9_stage s WHERE s.run_id = r.run_id) ' +
+          '+ (SELECT coalesce(sum(bytes_received), 0) FROM g9_stage_files f WHERE f.run_id = r.run_id) FROM g9_stage_runs r ' +
           'WHERE r.created_utc >= $c AND (r.generation IS NULL OR r.generation <> $g) ORDER BY r.created_utc DESC',
         { $c: olderThanUtcMs, $g: keepGeneration ?? '' },
       )) {
         kept += asNumber(r[1]);
         if (kept > Math.max(0, maxBytes)) doomed.push(asString(r[0]));
       }
-      for (const runId of doomed) await connection.exec('DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r', { $r: runId });
+      for (const runId of doomed) {
+        files = files.concat(await takeStagedFiles(connection, '$r', { $r: runId }));
+        await connection.exec('DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r', { $r: runId });
+      }
       return doomed.length;
     }),
   );
+  await deleteFiles(store, files);
+  return pruned;
 }
 
 export async function discardAllStagedPulls(store: StoreInternals): Promise<number> {
-  return store.writeLock.run(() =>
+  let files: string[] = [];
+  const count = await store.writeLock.run(() =>
     store.writer().transaction('immediate', async () => {
       const connection = store.writer();
       const count = asNumber(await connection.scalar('SELECT count(*) FROM g9_stage_runs'));
+      files = await takeStagedFiles(connection, 'SELECT run_id FROM g9_stage_files');
       await connection.exec('DELETE FROM g9_stage; DELETE FROM g9_stage_runs;');
       return count;
     }),
   );
+  await deleteFiles(store, files);
+  return count;
 }
 
 export async function beginStagedPull(store: StoreInternals, pull: G9StagedPull): Promise<void> {
+  let replaced: string[] = [];
   await store.writeLock.run(() =>
     store.writer().transaction('immediate', async () => {
       const connection = store.writer();
       // Only the stage this one replaces goes: the same generation (ADR-0060).
+      replaced = await takeStagedFiles(connection, 'SELECT run_id FROM g9_stage_runs WHERE generation IS $g', { $g: pull.generation });
       await connection.exec(
         'DELETE FROM g9_stage WHERE run_id IN (SELECT run_id FROM g9_stage_runs WHERE generation IS $g); DELETE FROM g9_stage_runs WHERE generation IS $g',
         { $g: pull.generation },
@@ -101,7 +115,7 @@ export async function beginStagedPull(store: StoreInternals, pull: G9StagedPull)
         'INSERT INTO g9_stage_runs (run_id, plan_json, backfills_json, created_utc, complete, generation, stage_seq, from_cursors_json) VALUES ($r, $p, $b, $c, 0, $g, $s, $f)',
         {
           $r: pull.runId,
-          $p: persistedJson(pull.plan),
+          $p: persistedPlan(pull.plan),
           $b: persistedJson(pull.backfills),
           $c: pull.createdUtcMs,
           $g: pull.generation,
@@ -112,11 +126,17 @@ export async function beginStagedPull(store: StoreInternals, pull: G9StagedPull)
       );
     }),
   );
+  await deleteFiles(store, replaced);
 }
 
 export async function stageChunk(store: StoreInternals, runId: string, chunk: G9DtSyncChunk, durability: (connection: G9SqliteConnection) => Promise<(() => Promise<void>) | null>): Promise<void> {
   await store.writeLock.run(async () => {
     const connection = store.writer();
+    if (chunk.file) {
+      // A snapshot-file segment goes to its place in the staged file, not into g9_stage (ADR-0072).
+      await stageFileSegment(store, runId, chunk);
+      return;
+    }
     const restore = await durability(connection);
     try {
       // One transaction, one bridge call (a chunk used to cost ~7: PRAGMA reads, begin, insert, commit — LES-0056).
@@ -143,6 +163,8 @@ export async function getResumePoint(store: StoreInternals, runId: string): Prom
       const connection = store.writer();
       const flag = await connection.scalar('SELECT complete FROM g9_stage_runs WHERE run_id = $r', { $r: runId });
       const complete = typeof flag === 'number' && flag !== 0;
+      // A resumed stream starts at the last durable checkpoint of a snapshot file.
+      forgetPendingSegments(store, runId);
       let continuation = null;
       let lastSequence = -1;
       if (!complete) {
@@ -154,14 +176,29 @@ export async function getResumePoint(store: StoreInternals, runId: string): Prom
         }
         await connection.exec('DELETE FROM g9_stage WHERE run_id = $r AND seq > $s', { $r: runId, $s: lastSequence });
       }
-      const totals = (await connection.query('SELECT coalesce(sum(row_count), 0), coalesce(sum(length(payload)), 0) FROM g9_stage WHERE run_id = $r', { $r: runId }))[0];
+      const totals = (
+        await connection.query(
+          'SELECT coalesce(sum(row_count), 0), coalesce(sum(length(payload)), 0) + (SELECT coalesce(sum(bytes_received), 0) FROM g9_stage_files WHERE run_id = $r) ' +
+            'FROM g9_stage WHERE run_id = $r',
+          { $r: runId },
+        )
+      )[0];
       return { continuation, stagedRows: totals ? asNumber(totals[0]) : 0, stagedBytes: totals ? asNumber(totals[1]) : 0, complete };
     }),
   );
 }
 
 export async function discardStagedPull(store: StoreInternals, runId: string): Promise<void> {
-  await store.writeLock.run(() => store.writer().exec('DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r', { $r: runId }));
+  let files: string[] = [];
+  await store.writeLock.run(() =>
+    store.writer().transaction('immediate', async () => {
+      const connection = store.writer();
+      files = await takeStagedFiles(connection, '$r', { $r: runId });
+      await connection.exec('DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r', { $r: runId });
+    }),
+  );
+  forgetPendingSegments(store, runId);
+  await deleteFiles(store, files);
 }
 
 // ================================================================ reconciliation reads

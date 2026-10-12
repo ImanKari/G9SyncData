@@ -15,7 +15,11 @@ namespace G9SyncData.DeviceTests;
 ///     <c>initial</c> (subscribe + first download), <c>noop</c>, <c>delta</c> (after the host changed rows), <c>push</c> (edits
 ///     <c>pushRows</c> pots locally first, like the app would), <c>reconcile</c> (forced). The report carries the run result,
 ///     phases, CPU / allocations / GC / memory / file sizes, UI-thread lag, and local facts the host compares with the server.
-///     <c>protocol</c> (Json | MessagePack) picks the hub protocol, <c>frameVersion</c> (1 | 2) the G9RowBatch layout asked for.
+///     <c>protocol</c> (Json | MessagePack) picks the hub protocol, <c>frameVersion</c> (1 | 2) the G9RowBatch layout asked for,
+///     <c>files</c> (on | off, default off) whether the device takes a large first download as a SQLite snapshot file (ADR-0072); the
+///     report then carries what the file path did (files, rows copied, copy time, mode per table, staged files left behind).
+///     <c>schema</c> = farm replays a real farm instead (<see cref="FarmReplaySchema" />: AgriPad's farm-site tables, one unfiltered
+///     subscription, no <c>site</c>); the report then carries every table's row count.
 /// </summary>
 public static class SyncScenario
 {
@@ -26,13 +30,18 @@ public static class SyncScenario
         var arguments = context.Arguments;
         var step = arguments.Require("step");
         var hub = arguments.Require("hub");
-        var site = Guid.Parse(arguments.Require("site"));
+        var farm = string.Equals(arguments.Get("schema"), "farm", StringComparison.OrdinalIgnoreCase);
+        var site = farm ? Guid.Empty : Guid.Parse(arguments.Require("site"));
+        report.Set("schema", farm ? "farm" : "device");
         var databasePath = Path.Combine(context.PrivateDirectory, arguments.Get("db") ?? "device-sync.db");
         var protocol = Enum.Parse<G9ESyncHubProtocol>(arguments.Get("protocol") ?? nameof(G9ESyncHubProtocol.MessagePack), ignoreCase: true);
         report.Set("step", step);
         report.Set("protocol", protocol.ToString());
         var frameVersion = arguments.Int("frameVersion", G9SyncData.Protocol.G9SyncProtocol.MaxFrameVersion);
         report.Set("frameVersion", frameVersion);
+        var files = string.Equals(arguments.Get("files"), "on", StringComparison.OrdinalIgnoreCase);
+        var stagingDirectory = databasePath + ".g9files";
+        report.Set("files", files);
 
         if (step is "initial" or "cleanup")
         {
@@ -41,17 +50,23 @@ public static class SyncScenario
                 if (File.Exists(file)) File.Delete(file);
             }
 
+            if (Directory.Exists(stagingDirectory)) Directory.Delete(stagingDirectory, recursive: true);
             if (step == "cleanup") return;
         }
 
         var services = new ServiceCollection();
         services.AddLogging(logging => logging.AddProvider(new CallbackLoggerProvider(log)).SetMinimumLevel(LogLevel.Warning));
-        services.AddG9SyncDataClient(DeviceSchema.Client, options =>
+        services.AddG9SyncDataClient(farm ? FarmReplaySchema.Client : DeviceSchema.Client, options =>
             {
                 options.AppVersion = "g9sync-device-tests";
                 options.MaxFrameVersion = frameVersion;
             })
-            .UseSqlite(options => options.DatabasePath = databasePath)
+            .UseSqlite(options =>
+            {
+                options.DatabasePath = databasePath;
+                options.AcceptSnapshotFiles = files;
+                options.SnapshotFileDirectory = stagingDirectory;
+            })
             .UseSignalR(options =>
             {
                 options.Url = hub;
@@ -60,11 +75,20 @@ public static class SyncScenario
 
         await using var provider = services.BuildServiceProvider();
         var engine = provider.GetRequiredService<G9CSyncEngine>();
+        var applied = new G9SyncData.Client.Storage.G9CApplyDiagnostics();
+        engine.RowsApplied += (_, e) =>
+        {
+            lock (applied) applied.Merge(e.Report.Diagnostics);
+        };
         var initialize = Stopwatch.StartNew();
         await engine.InitializeAsync();
         report.Set("initializeMs", initialize.Elapsed.TotalMilliseconds);
 
-        if (step == "initial")
+        if (step == "initial" && farm)
+        {
+            await engine.SubscribeAsync(FarmReplaySchema.Subscription);
+        }
+        else if (step == "initial")
         {
             await engine.SubscribeAsync(DeviceSchema.SiteRidgesSubscription, DeviceSchema.Site(site));
             await engine.SubscribeAsync(DeviceSchema.SitePotsSubscription, DeviceSchema.Site(site));
@@ -134,6 +158,22 @@ public static class SyncScenario
             log($"{step}: {warmRuns} warm runs, median {durations[warmRuns / 2]:N0} ms, CPU {cpu[warmRuns / 2]:N0} ms");
         }
 
+        lock (applied)
+        {
+            report.Set("snapshotFiles", applied.SnapshotFiles);
+            report.Set("fileRows", applied.FileRows);
+            report.Set("fileCopyMs", applied.FileCopyMs);
+            report.Set("fileTables", string.Join(", ", applied.FileTables.OrderBy(t => t.Key, StringComparer.Ordinal).Select(t => t.Key + ":" + t.Value)));
+        }
+
+        // Where an apply's time goes: the apply transaction (commit included) as the store measured it, and the phase around it -
+        // the difference is the housekeeping after a large apply (PRAGMA optimize, the WAL checkpoint) and the staged file's removal.
+        report.Set("applyElapsedMs", result.Changes.Diagnostics.ElapsedMs);
+        report.Set("indexRebuildMs", result.Changes.Diagnostics.IndexRebuildMs);
+        var lastRun = (await engine.GetHealthAsync()).RecentRuns;
+        report.Set("applyingMs", lastRun.Count > 0 && lastRun[0].PhaseMs.TryGetValue("Applying", out var applyingMs) ? applyingMs : 0);
+
+        report.Set("stagedFilesLeft", Directory.Exists(stagingDirectory) ? Directory.GetFiles(stagingDirectory).Length : 0);
         var pending = await engine.GetPendingSummaryAsync();
         report.Set("pendingRows", pending.TotalRows);
         report.Set("potCount", Scalar(databasePath, "SELECT count(*) FROM Pot"));
@@ -142,6 +182,11 @@ public static class SyncScenario
         report.Set("potDistinctRidges", Scalar(databasePath, "SELECT count(DISTINCT RidgeId) FROM Pot"));
         report.Set("potGenderSum", Scalar(databasePath, "SELECT coalesce(sum(Gender), 0) FROM Pot"));
         report.Set("potPushMarked", Scalar(databasePath, $"SELECT count(*) FROM Pot WHERE UpdatedTime = '{PushMarker}'"));
+        if (farm)
+        {
+            foreach (var table in FarmReplaySchema.Tables) report.Set("count" + table, Scalar(databasePath, $"SELECT count(*) FROM [{table}]"));
+        }
+
         report.Set("databaseMb", FileSize(databasePath) / 1048576d);
         report.Set("walMb", FileSize(databasePath + "-wal") / 1048576d);
     }

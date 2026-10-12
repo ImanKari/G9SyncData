@@ -7,7 +7,7 @@ namespace G9SyncData.Server.Hosting;
 
 /// <summary>
 ///     Initialises the store at startup (a failure stops the host: a bad model must fail the server, never a device),
-///     listens for committed changes, and purges old tombstones on a timer.
+///     listens for committed changes, purges old tombstones on a timer and delivers effects. Every loop waits for the store first.
 /// </summary>
 internal sealed partial class G9CSyncServerHostedService(
     G9CSyncServerEngine engine,
@@ -27,8 +27,46 @@ internal sealed partial class G9CSyncServerHostedService(
 
         var listen = settings.EnableChangeNotifications ? ListenLoopAsync(stoppingToken) : Task.CompletedTask;
         var cleanup = CleanupLoopAsync(settings, stoppingToken);
-        var dispatch = effects.RunAsync(settings, stoppingToken);
+        var dispatch = DispatchLoopAsync(settings, stoppingToken);
         await Task.WhenAll(listen, cleanup, dispatch).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     The effect outbox lives in the store, so delivery waits for the store like the other loops. Without
+    ///     <see cref="G9CSyncServerOptions.InitializeOnStartup" /> the first claim used to race the initialisation and log a dispatch failure.
+    /// </summary>
+    private async Task DispatchLoopAsync(G9CSyncServerOptions settings, CancellationToken stoppingToken)
+    {
+        var delay = TimeSpan.FromSeconds(1);
+        while (true)
+        {
+            try
+            {
+                await engine.EnsureInitializedAsync(stoppingToken).ConfigureAwait(false);
+                break;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                LogDispatchWaitFailed(logger, ex, delay.TotalSeconds);
+            }
+
+            try
+            {
+                await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            delay = TimeSpan.FromSeconds(Math.Min(60, delay.TotalSeconds * 2));
+        }
+
+        await effects.RunAsync(settings, stoppingToken).ConfigureAwait(false);
     }
 
     private async Task ListenLoopAsync(CancellationToken stoppingToken)
@@ -106,4 +144,7 @@ internal sealed partial class G9CSyncServerHostedService(
 
     [LoggerMessage(EventId = 21012, Level = LogLevel.Warning, Message = "Tombstone cleanup failed")]
     private static partial void LogCleanupFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 21014, Level = LogLevel.Warning, Message = "Effect delivery is waiting for the store, whose initialisation failed; retrying in {DelaySeconds} s")]
+    private static partial void LogDispatchWaitFailed(ILogger logger, Exception exception, double delaySeconds);
 }

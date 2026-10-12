@@ -30,7 +30,13 @@ public enum G9EPullPartKind : byte
 {
     Snapshot = 0,
     Delta = 1,
-    Backfill = 2
+    Backfill = 2,
+
+    /// <summary>
+    ///     A subscription's snapshot as a SQLite file (ADR-0072): one part for all of the subscription's tables, streamed as file segments
+    ///     (<see cref="G9DtSyncChunk.File" />). The part's <see cref="G9DtPlannedPart.File" /> names the file and its tables.
+    /// </summary>
+    SnapshotFile = 3
 }
 
 /// <summary>Structured error. Code is from <see cref="G9SyncErrorCodes" />.</summary>
@@ -96,6 +102,12 @@ public sealed class G9DtSyncChunk
     public bool IsFinal { get; set; }
     public G9DtPullContinuation? Continuation { get; set; }
     public G9DtReconcileSummary? ReconcileSummary { get; set; }
+
+    /// <summary>
+    ///     Set when the chunk carries a snapshot-file segment (ADR-0072): <see cref="Payload" /> is then the segment, Brotli-compressed on
+    ///     its own, not a G9RowBatch frame.
+    /// </summary>
+    public G9DtFileSegment? File { get; set; }
 }
 
 /// <summary>Server → client hint that tables changed.</summary>

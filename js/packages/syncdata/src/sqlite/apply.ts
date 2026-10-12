@@ -20,6 +20,16 @@ import { findByServerName, keyValue, meta, nowMs, persistedJson, readPersistedDe
 import { disposeReleasedRow, disposeReleasedRows, REVOKED_REJECTION_CODE } from './revocation.js';
 import { bit, EPHEMERAL_SLOT, quote } from './sql.js';
 import { frameValueToSql } from './values.js';
+import {
+  applySnapshotFile,
+  attachedSchema,
+  attachFiles,
+  deleteFiles,
+  fileSnapshotTimes,
+  readStagedFiles,
+  takeStagedFiles,
+  verifyStagedFile,
+} from './snapshotFiles.js';
 
 const NEXT_SEQ = '(SELECT seq FROM g9_clock WHERE id = 1) + 1';
 const BUMP_IF_CHANGED = 'UPDATE g9_clock SET seq = seq + 1 WHERE id = 1 AND changes() > 0';
@@ -71,6 +81,17 @@ export class ApplyContext {
   wantsChangedKey(table: string): boolean {
     const keys = this.report.changedKeys[table];
     return !keys || keys.length < this._maxChangedKeys;
+  }
+
+  get maxChangedKeys(): number {
+    return this._maxChangedKeys;
+  }
+
+  /** Counts rows applied in bulk (a snapshot file's table) and reports progress once for them. */
+  advance(rows: number): void {
+    if (rows <= 0) return;
+    this.rows += rows;
+    if (this._progress) this._progress(this.rows);
   }
 
   addChanged(table: string, key: string): void {
@@ -574,13 +595,23 @@ export async function applyStagedPull(
       if (!staged) throw new G9SyncException(G9SyncErrorCodes.LocalStoreError, 'The staged pull no longer exists.');
       const sequences = (await connection.query('SELECT seq FROM g9_stage WHERE run_id = $r AND payload IS NOT NULL ORDER BY seq', { $r: runId })).map((r) => asNumber(r[0]));
 
+      // Snapshot files (ADR-0072) apply where their part sits in the plan: at the sequence of their first segment. Checked and
+      // ATTACHed before the transaction (SQLite cannot attach inside one), detached whatever happens.
+      const files = await readStagedFiles(connection, runId);
+      for (const file of files) await verifyStagedFile(store, file);
+      const units: { sequence: number; file: number }[] = sequences.map((sequence) => ({ sequence, file: -1 }));
+      files.forEach((file, i) => units.push({ sequence: file.firstSequence, file: i }));
+      units.sort((a, b) => a.sequence - b.sequence || a.file - b.file);
+      const detach = await attachFiles(connection, files);
+      try {
+
       // Slicing only pays for itself when someone is listening for the slices (ADR-0053); a LARGE snapshot stays in one
       // transaction with its indexes deferred (ADR-0056/0058).
       const sliceRows = slices === null ? 0 : store.options.applySliceRows;
       const snapshotRows = snapshotRowsByTable(staged.plan);
-      let largeSnapshot = false;
+      let largeSnapshot = files.length > 0;
       if (store.options.rebuildIndexesAfterRows > 0) snapshotRows.forEach((rows) => (largeSnapshot = largeSnapshot || rows >= store.options.rebuildIndexesAfterRows));
-      const progressive = sliceRows > 0 && sequences.length > 1 && !largeSnapshot;
+      const progressive = sliceRows > 0 && units.length > 1 && !largeSnapshot;
       // Read ONCE, before any slice commits (ADR-0046 + ADR-0053).
       const protectedRows = progressive ? await readProtectedRows(store, connection, staged.stageSequence) : null;
       const skipTriggers = staged.plan.totalRows >= store.options.skipTriggersMinRows && !progressive;
@@ -594,12 +625,12 @@ export async function applyStagedPull(
       // do/while: a pull with no payload chunks still writes its cursors and clears its stage, exactly once.
       do {
         if (signal && signal.aborted) throw cancellation();
-        const slice: number[] = [];
+        const slice: { sequence: number; file: number }[] = [];
         let final = true;
-        for (; index < sequences.length; index++) {
-          slice.push(sequences[index] as number);
+        for (; index < units.length; index++) {
+          slice.push(units[index] as { sequence: number; file: number });
           if (!progressive) continue;
-          if ((await stagedRowCount(connection, runId, slice)) >= sliceBudget && index + 1 < sequences.length) {
+          if ((await stagedRowCount(connection, runId, slice.map((unit) => unit.sequence))) >= sliceBudget && index + 1 < units.length) {
             index++;
             final = false;
             break;
@@ -608,6 +639,7 @@ export async function applyStagedPull(
         if (store.options.applySliceRowsMax > sliceBudget) sliceBudget = Math.min(store.options.applySliceRowsMax, sliceBudget * 2);
 
         let context: ApplyContext | null = null;
+        let doneFiles: string[] = [];
         const syncedUpdates: { table: LocalTable; synced: string[] }[] = [];
         await connection.transaction('immediate', async () => {
           context = await beginApply(store, connection, {
@@ -619,8 +651,13 @@ export async function applyStagedPull(
             skipTriggers,
             signal,
           });
-          for (const sequence of slice) {
+          for (const unit of slice) {
             if (signal && signal.aborted) throw cancellation();
+            if (unit.file >= 0) {
+              await applySnapshotFile(store, context, attachedSchema(unit.file), files[unit.file] as (typeof files)[number]);
+              continue;
+            }
+            const sequence = unit.sequence;
             const rows = await connection.query('SELECT payload, subscription_key FROM g9_stage WHERE run_id = $r AND seq = $s', { $r: runId, $s: sequence });
             const row = rows[0];
             if (!row) continue;
@@ -631,10 +668,16 @@ export async function applyStagedPull(
 
           if (final) {
             // Cursors move only here, and only when still the one the plan started from (ADR-0060; IS, a first pull plans from NULL).
+            // A subscription that came as a file counts its next safety reconciliation from the file's snapshot (ADR-0072).
+            const reconciledAt = fileSnapshotTimes(staged.plan);
             for (const cursor of staged.plan.cursors) {
+              const at = reconciledAt[cursor.key];
               const update =
-                'UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, last_success_utc = $now WHERE key = $k';
-              const params = { $c: cursor.cursor, $d: cursor.definitionHash, $a: cursor.authHash, $now: nowMs(), $k: cursor.key };
+                'UPDATE g9_subscriptions SET cursor = $c, definition_hash = $d, auth_hash = $a, state = 0, error_code = NULL, last_success_utc = $now' +
+                (at === undefined ? '' : ', last_reconcile_utc = $rec') +
+                ' WHERE key = $k';
+              const params: { [name: string]: G9SqlValue } = { $c: cursor.cursor, $d: cursor.definitionHash, $a: cursor.authHash, $now: nowMs(), $k: cursor.key };
+              if (at !== undefined) params['$rec'] = at;
               if (Object.prototype.hasOwnProperty.call(staged.plannedFromCursors, cursor.key)) {
                 await context.flush();
                 await connection.exec(update + ' AND cursor IS $from', { ...params, $from: staged.plannedFromCursors[cursor.key] ?? null });
@@ -654,9 +697,18 @@ export async function applyStagedPull(
           }
 
           await endApply(context);
-          if (slice.length > 0) await connection.exec('DELETE FROM g9_stage WHERE run_id = $r AND seq IN (' + slice.join(',') + ')', { $r: runId });
-          if (final) await connection.exec('DELETE FROM g9_stage_runs WHERE run_id = $r', { $r: runId });
+          const consumed = slice.filter((unit) => unit.file < 0).map((unit) => unit.sequence);
+          if (consumed.length > 0) await connection.exec('DELETE FROM g9_stage WHERE run_id = $r AND seq IN (' + consumed.join(',') + ')', { $r: runId });
+          if (final) {
+            // Everything left of the stage - markers, file checkpoints, file records - goes with the last slice.
+            doneFiles = await takeStagedFiles(connection, '$r', { $r: runId });
+            await connection.exec('DELETE FROM g9_stage WHERE run_id = $r; DELETE FROM g9_stage_runs WHERE run_id = $r', { $r: runId });
+          }
         });
+        if (doneFiles.length > 0) {
+          await detach();
+          await deleteFiles(store, doneFiles);
+        }
 
         const applied = context as unknown as ApplyContext;
         for (const { table, synced } of syncedUpdates) table.syncedColumns = synced;
@@ -664,12 +716,15 @@ export async function applyStagedPull(
         total.merge(applied.report);
         rowsApplied?.(appliedTotal);
         slices?.({ report: applied.report, rowsApplied: applied.rows, rowsAppliedTotal: appliedTotal, rowsPlanned: staged.plan.totalRows, isFinal: final });
-      } while (index < sequences.length);
+      } while (index < units.length);
 
       total.diagnostics.elapsedMs = Date.now() - started;
       if (total.diagnostics.transactions > 0 && appliedTotal > 0) store.log('information', 20112, `G9SyncData applied ${appliedTotal} row(s): ${total.diagnostics.toString()}`);
       await maintainAfterApply(store, connection, appliedTotal);
       return total;
+      } finally {
+        await detach();
+      }
     } finally {
       if (restore) await restore();
     }

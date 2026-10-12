@@ -13,8 +13,11 @@ import type {
   G9DtCommandResult,
   G9DtHelloResult,
   G9DtNegotiatedTable,
+  G9DtFileSegment,
+  G9DtPlannedFile,
   G9DtPlannedPart,
   G9DtPullContinuation,
+  G9DtSnapshotFileManifest,
   G9DtPullPlan,
   G9DtPushResult,
   G9DtReconcileSummary,
@@ -307,6 +310,23 @@ export function readPushResult(value: unknown): G9DtPushResult {
   };
 }
 
+/** A wire DateTime (`snapshotUtc`) or the persisted epoch milliseconds (`snapshotUtcMs`) of the same field. */
+function msOf(v: Plain, name: string): number {
+  return v[name + 'Ms'] !== undefined ? num(v[name + 'Ms']) : dateTimeMs(v[name]);
+}
+
+function readPlannedFile(value: unknown): G9DtPlannedFile | null {
+  if (!isPlainObject(value)) return null;
+  return {
+    fileId: str(value.fileId),
+    snapshotUtcMs: msOf(value, 'snapshotUtc'),
+    tables: arr(value.tables).map((t) => {
+      const d = obj(t);
+      return { tableId: num(d.tableId), rows: num(d.rows) };
+    }),
+  };
+}
+
 function readPlannedPart(value: unknown): G9DtPlannedPart {
   const v = obj(value);
   return {
@@ -315,6 +335,38 @@ function readPlannedPart(value: unknown): G9DtPlannedPart {
     kind: num(v.kind) as G9DtPlannedPart['kind'],
     rows: num(v.rows),
     estimatedBytes: num(v.estimatedBytes),
+    file: readPlannedFile(v.file),
+  };
+}
+
+/** A snapshot-file manifest (wire or persisted). */
+export function readFileManifest(value: unknown): G9DtSnapshotFileManifest | null {
+  if (!isPlainObject(value)) return null;
+  return {
+    fileId: str(value.fileId),
+    formatVersion: num(value.formatVersion),
+    bytes: num(value.bytes),
+    segmentBytes: num(value.segmentBytes),
+    segments: num(value.segments),
+    sha256: str(value.sha256),
+    compression: str(value.compression, 'br'),
+    builtUtcMs: msOf(value, 'builtUtc'),
+    tables: arr(value.tables).map((t) => {
+      const d = obj(t);
+      return { tableId: num(d.tableId), name: str(d.name), versionTable: str(d.versionTable), rows: num(d.rows) };
+    }),
+  };
+}
+
+function readFileSegment(value: unknown): G9DtFileSegment | null {
+  if (!isPlainObject(value)) return null;
+  return {
+    fileId: str(value.fileId),
+    index: num(value.index),
+    offset: num(value.offset),
+    length: num(value.length),
+    sha256: str(value.sha256),
+    manifest: readFileManifest(value.manifest),
   };
 }
 
@@ -366,6 +418,7 @@ export function readSyncChunk(value: unknown): G9DtSyncChunk {
     isFinal: bool(v.isFinal),
     continuation: readContinuation(v.continuation),
     reconcileSummary: readReconcileSummary(v.reconcileSummary),
+    file: readFileSegment(v.file),
   };
 }
 

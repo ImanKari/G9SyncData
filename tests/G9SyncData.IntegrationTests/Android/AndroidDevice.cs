@@ -121,6 +121,24 @@ internal sealed class AndroidDevice
         return new PortReverse(this, port);
     }
 
+    /// <summary>The battery's temperature in °C (`dumpsys battery`, tenths of a degree), or null when the device does not say.</summary>
+    public async Task<double?> BatteryTemperatureAsync()
+    {
+        var (code, text) = await AdbAsync(["shell", "dumpsys", "battery"], TimeSpan.FromSeconds(30));
+        if (code != 0) return null;
+        foreach (var line in text.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("temperature:", StringComparison.Ordinal)
+                && int.TryParse(trimmed["temperature:".Length..].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var tenths))
+            {
+                return tenths / 10d;
+            }
+        }
+
+        return null;
+    }
+
     public Task<(int Code, string Text)> AdbAsync(IReadOnlyList<string> arguments, TimeSpan timeout) =>
         RunAsync(Adb, ["-s", Serial, .. arguments], timeout);
 

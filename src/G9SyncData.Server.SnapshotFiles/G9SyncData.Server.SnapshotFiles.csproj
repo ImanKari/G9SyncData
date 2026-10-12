@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Import Project="..\..\build\G9SyncData.Library.props" />
+
+  <PropertyGroup>
+    <RootNamespace>G9SyncData.Server.SnapshotFiles</RootNamespace>
+    <Description>G9SyncData snapshot files for the server (ADR-0072): a subscription's large first download built once as a SQLite file with the device's own DDL, cached by what it holds, and streamed in independently Brotli-compressed, resumable segments that the device copies b-tree to b-tree instead of inserting row by row.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The writer is the client store's own code (same DDL, same value forms), and the server needs a native SQLite to run it: the bundle
+         ships one, so a server needs no SQLite setup of its own (ADR-0072). -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\G9SyncData.Server\G9SyncData.Server.csproj" />
+    <ProjectReference Include="..\G9SyncData.Client.Sqlite\G9SyncData.Client.Sqlite.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="G9SyncData.Tests" />
+    <InternalsVisibleTo Include="G9SyncData.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

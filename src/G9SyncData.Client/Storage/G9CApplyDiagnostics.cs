@@ -45,6 +45,31 @@ public sealed class G9CApplyDiagnostics
     /// <summary>Milliseconds from opening the first apply transaction to committing the last.</summary>
     public long ElapsedMs { get; set; }
 
+    /// <summary>Snapshot files copied in (ADR-0072).</summary>
+    public int SnapshotFiles { get; set; }
+
+    /// <summary>Rows that arrived through snapshot files instead of frames.</summary>
+    public long FileRows { get; set; }
+
+    /// <summary>Milliseconds spent copying snapshot files, metadata included.</summary>
+    public long FileCopyMs { get; set; }
+
+    /// <summary>
+    ///     How each table came out of a snapshot file: <see cref="FileModeCopy" /> (the transfer optimisation: raw records and index
+    ///     b-trees), <see cref="FileModeColumns" /> (an empty table whose columns differ from the file's) or <see cref="FileModeMerge" />
+    ///     (a table that already held rows, or protected rows).
+    /// </summary>
+    public Dictionary<string, string> FileTables { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A file table copied record for record into an empty table with identical columns.</summary>
+    public const string FileModeCopy = "copy";
+
+    /// <summary>A file table copied into an empty table by column name.</summary>
+    public const string FileModeColumns = "columns";
+
+    /// <summary>A file table merged into a table that held rows or protected rows: changed rows only.</summary>
+    public const string FileModeMerge = "merge";
+
     /// <summary>
     ///     True when every transaction ran with trigger execution off, false when any ran with it on, null when nothing was applied.
     /// </summary>
@@ -60,6 +85,10 @@ public sealed class G9CApplyDiagnostics
         TransactionsWithTriggersSkipped += other.TransactionsWithTriggersSkipped;
         IndexRebuildMs += other.IndexRebuildMs;
         ElapsedMs += other.ElapsedMs;
+        SnapshotFiles += other.SnapshotFiles;
+        FileRows += other.FileRows;
+        FileCopyMs += other.FileCopyMs;
+        foreach (var (table, mode) in other.FileTables) FileTables[table] = mode;
         foreach (var name in other.ForeignTriggers)
         {
             if (ForeignTriggers.Count >= MaxForeignTriggerNames) break;
@@ -87,6 +116,11 @@ public sealed class G9CApplyDiagnostics
         }
 
         if (LiveIndexReasons.Count > 0) text.Append("; live indexes on ").AppendJoin(", ", LiveIndexReasons.Select(pair => pair.Key + " (" + pair.Value + ")"));
+        if (SnapshotFiles > 0)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"; {SnapshotFiles} snapshot file(s), {FileRows} rows copied in {FileCopyMs} ms (")
+                .AppendJoin(", ", FileTables.Select(pair => pair.Key + ":" + pair.Value)).Append(')');
+        }
 
         var slowest = MsByTable.OrderByDescending(pair => pair.Value).Take(4).ToList();
         if (slowest.Count > 0)

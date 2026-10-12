@@ -99,7 +99,19 @@ internal static class JsGoldenSamples
     public static G9DtPullPlan PullPlan() => new()
     {
         Token = "tok.en",
-        Parts = [new G9DtPlannedPart { SubscriptionKey = "Site", TableId = 3, Kind = G9EPullPartKind.Delta, Rows = 123, EstimatedBytes = 5_000_000_000 }],
+        Parts =
+        [
+            new G9DtPlannedPart { SubscriptionKey = "Site", TableId = 3, Kind = G9EPullPartKind.Delta, Rows = 123, EstimatedBytes = 5_000_000_000 },
+            new G9DtPlannedPart
+            {
+                SubscriptionKey = "Farm?farmId=7", TableId = 0, Kind = G9EPullPartKind.SnapshotFile, Rows = 450_000, EstimatedBytes = 22_000_000,
+                File = new G9DtPlannedFile
+                {
+                    FileId = "53c01b6fc8a629f20732c103c23758d0", SnapshotUtc = new DateTime(2026, 10, 12, 8, 30, 0, DateTimeKind.Utc),
+                    Tables = [new G9DtPlannedFileTable { TableId = 3, Rows = 300_000 }, new G9DtPlannedFileTable { TableId = 4, Rows = 150_000 }]
+                }
+            }
+        ],
         TotalRows = 123,
         EstimatedBytes = 5_000_000_000,
         Cursors = [new G9DtSubscriptionCursor { Key = "Site", Cursor = "c:43", DefinitionHash = "def1", AuthHash = "auth1" }],
@@ -117,6 +129,18 @@ internal static class JsGoldenSamples
         ReconcileSummary = new G9DtReconcileSummary
         {
             Cursor = "c:44", DefinitionHash = "def1", AuthHash = "auth1", Mismatched = [new G9DtTableBuckets { TableId = 3, Buckets = [0, 255] }]
+        },
+        File = new G9DtFileSegment
+        {
+            FileId = "53c01b6fc8a629f20732c103c23758d0", Index = 2, Offset = 2_097_152, Length = 1_048_576,
+            Sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            Manifest = new G9DtSnapshotFileManifest
+            {
+                FileId = "53c01b6fc8a629f20732c103c23758d0", FormatVersion = 1, Bytes = 5_000_000_000, SegmentBytes = 1_048_576, Segments = 4769,
+                Sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Compression = "br",
+                BuiltUtc = new DateTime(2026, 10, 12, 8, 31, 5, DateTimeKind.Utc),
+                Tables = [new G9DtSnapshotFileTableInfo { TableId = 3, Name = "Pot", VersionTable = "g9snap_ver_3", Rows = 300_000 }]
+            }
         }
     };
 
@@ -169,7 +193,24 @@ internal static class JsGoldenSamples
         Subscriptions = [Subscription()],
         Tables = [new G9DtTableColumns { TableId = 3, Columns = ["Code"] }],
         Backfills = [new G9DtBackfillRequest { TableId = 3, Columns = ["Weight"] }],
-        FrameVersion = 2
+        FrameVersion = 2,
+        SnapshotFiles = new G9DtSnapshotFileRequest
+        {
+            FormatVersion = 1,
+            Storage = new G9DtSnapshotFileStorage { DateTimeAsTicks = false, DateTimeFormat = "yyyy-MM-dd'T'HH:mm:ss.fffffff", DecimalAsText = false },
+            Tables =
+            [
+                new G9DtSnapshotFileTable
+                {
+                    TableId = 3, LocalName = "Pot", KeyColumn = "Id", KeyType = G9ESyncColumnType.Guid,
+                    Columns = [new G9DtColumnModel { Name = "Code", Type = G9ESyncColumnType.String, Nullable = false }],
+                    Indexes = [new G9DtSnapshotFileIndex { Name = "IX_Pot_Code", Columns = ["Code"], Unique = true }]
+                }
+            ],
+            MinRows = 20_000,
+            MaxBytes = 2_147_483_648,
+            MaxFiles = 8
+        }
     };
 
     public static G9DtPullContinuation Continuation() => new() { PartIndex = 2, AfterKey = "after", NextSequence = 9 };
