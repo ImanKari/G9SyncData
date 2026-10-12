@@ -8,6 +8,9 @@
       ],
       "@g9tm/syncdata/signalr": [
         "../syncdata/src/signalr/index.ts"
+      ],
+      "@g9tm/syncdata/sqlite": [
+        "../syncdata/src/sqlite/index.ts"
       ]
     }
   },
