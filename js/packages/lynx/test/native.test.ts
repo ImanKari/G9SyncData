@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { crc32 } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import { VERSION } from '../src/index.js';
 import { createG9SyncDataBridge, exposeG9SyncData, type G9SyncDataBridgeEnvelope } from '../src/lynxtron/index.js';
 import {
   G9NativeModuleError,
@@ -120,7 +121,7 @@ describe('the Lynxtron bridge (node:zlib, the reference implementation)', () => 
 
   it('reports its capabilities', async () => {
     const reply = (await bridge.capabilities()) as { ok: true; value: Record<string, unknown> };
-    expect(reply).toMatchObject({ ok: true, value: { version: '1.2.2', platform: 'lynxtron', brotli: true, snapshotFiles: true } });
+    expect(reply).toMatchObject({ ok: true, value: { version: VERSION, platform: 'lynxtron', brotli: true, snapshotFiles: true } });
     expect(typeof reply.value.cacheDirectory).toBe('string');
   });
 
@@ -180,7 +181,7 @@ describe.each([
 
   it('reports the capabilities', async () => {
     const capabilities = await native.capabilities();
-    expect(capabilities).toMatchObject({ version: '1.2.2', platform: 'lynxtron', brotli: true, snapshotFiles: true });
+    expect(capabilities).toMatchObject({ version: VERSION, platform: 'lynxtron', brotli: true, snapshotFiles: true });
     expect(capabilities.cacheDirectory).toEqual(expect.any(String));
   });
 
