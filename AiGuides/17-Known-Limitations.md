@@ -9,6 +9,7 @@ Read before promising a feature. Remove an entry only in the change that lifts i
 | Single-column keys: Guid, String, Int32, Int64 | canonical key text, digests, tracking tables (ADR-0006) | surrogate key |
 | ≤ 62 synced physical columns per table | 64-bit change masks | split the table or ignore columns |
 | ≤ 63 persistent subscriptions per device | membership bitmask (ADR-0013) | per-item subscriptions as ephemeral |
+| The SignalR transport does not reconnect between runs; a poke sent while it is closed is lost, and hint groups are joined only by a hello | pokes are hints and the cursor is the authority; a reconnect without a hello would sit in no group | an app that needs freshness treats "hub closed" as a missed hint and runs one sync (AgriPad: `SiteUploadScheduler`, 2026-10-12) |
 | PostgreSQL 13+ | `xid8`, `pg_snapshot` | — |
 | A row leaving a subscription's **scope** (not its When filter) reaches the device only at reconciliation | a delta cannot see rows that no longer match (proven by `A_row_moved_out_of_a_subscription_scope_is_removed_by_reconciliation`) | put volatile predicates in When; `ReconcileEvery` |
 | A permission read **only inside** a scope provider's query changes no auth hash, so no device reconciles when it changes | the server keeps no per-device state; the auth hash is what signals a change (pinned by `Revoking_a_membership_…_once_the_permission_stamp_changes`) | declare the permission as a server parameter — a permission stamp is enough (ADR-0029) |

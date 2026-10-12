@@ -616,16 +616,27 @@ public sealed partial class G9CSyncEngine
 
     private async Task<(long Rows, long Bytes)> DownloadAsync(string runId, G9DtPullPlan plan, G9CSyncProgressTracker tracker, CancellationToken ct)
     {
-        for (var attempt = 0; ; attempt++)
+        // MaxRetries counts failures in a row WITHOUT progress, not failures per download: a long download over a flaky link that
+        // drops six times but moves on between the drops must not fail at the sixth. Progress is the DURABLE resume point moving (rows
+        // staged, a snapshot-file checkpoint) - not a chunk arriving: segments after the last checkpoint are written again on resume,
+        // so a link that always drops before the next checkpoint still runs out of retries.
+        var failures = 0;
+        G9CResumePoint? lastFailedAt = null;
+        while (true)
         {
             var resume = await _store.GetResumePointAsync(runId, ct).ConfigureAwait(false);
             var rows = resume.StagedRows;
             var bytes = resume.StagedBytes;
             if (resume.Complete) return (rows, bytes);
+            if (lastFailedAt is not null && (resume.StagedRows > lastFailedAt.StagedRows || resume.StagedBytes > lastFailedAt.StagedBytes)) failures = 0;
             tracker.Report(rows, bytes);
 
             try
             {
+                // Inside the try: a reconnect that fails because the network is still down is one more transient failure, retried
+                // like the drop itself. In the catch below it escaped the retry loop and failed the whole run at the first attempt -
+                // a real phone that lost its network for 25 s mid-download (2026-10-12) failed 22 s in with four retries unused.
+                await EnsureConnectedAsync(ct).ConfigureAwait(false);
                 await foreach (var chunk in _transport.PullAsync(plan.Token, resume.Continuation, ct).ConfigureAwait(false))
                 {
                     await _store.StageChunkAsync(runId, chunk, ct).ConfigureAwait(false);
@@ -643,11 +654,12 @@ public sealed partial class G9CSyncEngine
                 await _store.DiscardStagedPullAsync(runId, CancellationToken.None).ConfigureAwait(false);
                 throw;
             }
-            catch (Exception exception) when (!ct.IsCancellationRequested && G9CSyncErrors.IsTransient(exception) && attempt < _options.MaxRetries)
+            catch (Exception exception) when (!ct.IsCancellationRequested && G9CSyncErrors.IsTransient(exception) && failures < _options.MaxRetries)
             {
-                LogRetry(_logger, "pull", attempt + 1, exception.Message);
-                await Task.Delay(Backoff(attempt), ct).ConfigureAwait(false);
-                await EnsureConnectedAsync(ct).ConfigureAwait(false);
+                LogRetry(_logger, "pull", failures + 1, exception.Message);
+                await Task.Delay(Backoff(failures), ct).ConfigureAwait(false);
+                failures++;
+                lastFailedAt = resume;
             }
         }
     }

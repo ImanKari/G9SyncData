@@ -136,6 +136,90 @@ public sealed class SnapshotFileSyncTests(ITestOutputHelper output) : IDisposabl
     }
 
     [PostgresFact]
+    public async Task A_download_that_moves_on_between_drops_survives_more_drops_than_the_retry_limit()
+    {
+        await using var harness = await HarnessAsync(o => o.SegmentBytes = 16 * 1024);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 4000);
+
+        // One retry allowed, three drops - each after six segments, i.e. after three checkpoints of 32 KiB. Counted per download, the
+        // second drop failed the run; counted per drop without progress, each drop starts from a later checkpoint and the run finishes.
+        await using var client = await harness.CreateClientAsync(o => o.MaxRetries = 1, store: o =>
+        {
+            o.AcceptSnapshotFiles = true;
+            o.SnapshotFileCheckpointBytes = 32 * 1024;
+        });
+        await client.Engine.SubscribeAsync("sites");
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+        client.InMemory.Faults.BreakStreamAfter(G9ETransportOperation.Pull, chunks: 6, times: 3);
+        await client.SyncOkAsync();
+
+        var resumes = client.InMemory.PullContinuations.Where(c => c is not null).ToList();
+        Assert.Equal(3, resumes.Count);
+
+        await using var reference = await SubscribedAsync(harness, site, files: false);
+        await reference.SyncOkAsync();
+        await AssertSameDatabaseAsync(reference, client, compareVersions: false);
+    }
+
+    [PostgresFact]
+    public async Task A_link_that_drops_before_every_checkpoint_still_runs_out_of_retries()
+    {
+        await using var harness = await HarnessAsync(o => o.SegmentBytes = 16 * 1024);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 4000);
+
+        // A checkpoint every 1 MiB, a drop after every second segment: segments arrive, but the resume point never moves, so this is
+        // not progress and the run fails after MaxRetries instead of retrying for ever.
+        await using var client = await harness.CreateClientAsync(o => o.MaxRetries = 2, store: o =>
+        {
+            o.AcceptSnapshotFiles = true;
+            o.SnapshotFileCheckpointBytes = 1024 * 1024;
+        });
+        // The sites first, in a run of their own: their rows would be durable progress inside the faulted stream.
+        await client.Engine.SubscribeAsync("sites");
+        await client.SyncOkAsync();
+        var pullsBefore = client.InMemory.PullContinuations.Count;
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+        client.InMemory.Faults.BreakStreamAfter(G9ETransportOperation.Pull, chunks: 2, times: 10);
+        var run = await client.SyncAsync();
+
+        Assert.False(run.IsSuccess);
+        Assert.Equal(G9SyncErrorCodes.NetworkFailure, run.Error?.Code);
+        Assert.Equal(3, client.InMemory.PullContinuations.Count - pullsBefore);
+    }
+
+    [PostgresFact]
+    public async Task A_reconnect_that_fails_while_the_network_is_still_down_is_retried_not_the_end_of_the_run()
+    {
+        await using var harness = await HarnessAsync(o => o.SegmentBytes = 16 * 1024);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 4000);
+
+        // The connection drops after six segments, and the next two reconnects fail - the network is still down. Three retries are
+        // allowed; the reconnect used to run in the catch, outside the retry, so the first failed reconnect failed the run.
+        DroppingTransport? dropping = null;
+        await using var client = await harness.CreateClientAsync(o => o.MaxRetries = 3, store: o =>
+        {
+            o.AcceptSnapshotFiles = true;
+            o.SnapshotFileCheckpointBytes = 32 * 1024;
+        }, transportFactory: () => dropping = new DroppingTransport(new G9CInMemorySyncTransport(harness.Engine, harness.Notifier), dropAfter: 6));
+        await client.Engine.SubscribeAsync("sites");
+        await client.SyncOkAsync();
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+        dropping!.Inner.Faults.FailBefore(G9ETransportOperation.Connect, times: 2);
+        await client.SyncOkAsync();
+
+        Assert.True(dropping.Inner.CallCount(G9ETransportOperation.Connect) >= 4, "the two failed reconnects and the one that worked");
+        await using var reference = await SubscribedAsync(harness, site, files: false);
+        await reference.SyncOkAsync();
+        await AssertSameDatabaseAsync(reference, client, compareVersions: false);
+    }
+
+    [PostgresFact]
     public async Task A_second_site_merges_into_the_table_the_first_one_filled()
     {
         await using var harness = await HarnessAsync();
@@ -342,6 +426,50 @@ public sealed class SnapshotFileSyncTests(ITestOutputHelper output) : IDisposabl
     }
 
     /// <summary>Passes everything through, except that the first snapshot-file segment arrives with one byte flipped.</summary>
+    /// <summary>Drops the connection once, after <paramref name="dropAfter" /> pull chunks, as a phone losing its network does.</summary>
+    private sealed class DroppingTransport(G9CInMemorySyncTransport inner, int dropAfter) : G9SyncData.Client.Transport.IG9SyncTransport
+    {
+        private int _dropped;
+
+        public G9CInMemorySyncTransport Inner => inner;
+
+        public bool IsConnected => inner.IsConnected;
+
+        public event Action<G9DtChangesAvailable>? ChangesAvailable
+        {
+            add => inner.ChangesAvailable += value;
+            remove => inner.ChangesAvailable -= value;
+        }
+
+        public Task ConnectAsync(CancellationToken cancellationToken) => inner.ConnectAsync(cancellationToken);
+
+        public Task<G9DtHelloResult> HelloAsync(G9DtHelloRequest request, CancellationToken cancellationToken) => inner.HelloAsync(request, cancellationToken);
+
+        public Task<G9DtPushResult> PushAsync(G9DtPushRequest request, IAsyncEnumerable<G9DtSyncChunk> chunks, CancellationToken cancellationToken) =>
+            inner.PushAsync(request, chunks, cancellationToken);
+
+        public Task<G9DtPullPlan> PlanPullAsync(G9DtPullRequest request, CancellationToken cancellationToken) => inner.PlanPullAsync(request, cancellationToken);
+
+        public async IAsyncEnumerable<G9DtSyncChunk> PullAsync(string token, G9DtPullContinuation? continuation,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var delivered = 0;
+            await foreach (var chunk in inner.PullAsync(token, continuation, cancellationToken))
+            {
+                if (chunk.File is not null && ++delivered > dropAfter && Interlocked.Exchange(ref _dropped, 1) == 0) inner.Disconnect();
+                yield return chunk;
+            }
+        }
+
+        public IAsyncEnumerable<G9DtSyncChunk> ReconcileAsync(G9DtReconcileRequest request, CancellationToken cancellationToken) =>
+            inner.ReconcileAsync(request, cancellationToken);
+
+        public IAsyncEnumerable<G9DtSyncChunk> FetchRowsAsync(G9DtFetchRowsRequest request, CancellationToken cancellationToken) =>
+            inner.FetchRowsAsync(request, cancellationToken);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
     private sealed class CorruptingTransport(G9CInMemorySyncTransport inner) : G9SyncData.Client.Transport.IG9SyncTransport
     {
         private int _corrupted;

@@ -1014,13 +1014,21 @@ export class G9SyncEngine {
   }
 
   private async _download(runId: string, plan: G9DtPullPlan, tracker: G9SyncProgressTracker, ct: AbortSignal): Promise<{ rows: number; bytes: number }> {
-    for (let attempt = 0; ; attempt++) {
+    // maxRetries counts failures in a row WITHOUT progress (the .NET twin, DownloadAsync): progress is the DURABLE resume point
+    // moving, not a chunk arriving - segments after the last checkpoint are written again on resume.
+    let failures = 0;
+    let lastFailedAt: { stagedRows: number; stagedBytes: number } | null = null;
+    for (;;) {
       const resume = await this._store.getResumePoint(runId, ct);
       let rows = resume.stagedRows;
       let bytes = resume.stagedBytes;
       if (resume.complete) return { rows, bytes };
+      if (lastFailedAt !== null && (resume.stagedRows > lastFailedAt.stagedRows || resume.stagedBytes > lastFailedAt.stagedBytes)) failures = 0;
       tracker.report(rows, bytes);
       try {
+        // Inside the try (the .NET twin, DownloadAsync): a reconnect that fails while the network is still down is one more
+        // transient failure, not the end of the run.
+        await this._ensureConnected(ct);
         for await (const chunk of this._transport.pull(plan.token, resume.continuation, ct)) {
           await this._store.stageChunk(runId, chunk, ct);
           if (chunk.isFinal) return { rows, bytes };
@@ -1040,10 +1048,11 @@ export class G9SyncEngine {
           await this._store.discardStagedPull(runId);
           throw exception;
         }
-        if (!ct.aborted && isTransientError(exception) && attempt < this._options.maxRetries) {
-          this._log('warning', 20013, `Transient pull failure, retry ${attempt + 1}: ${messageOf(exception)}`);
-          await delay(this._backoff(attempt), ct);
-          await this._ensureConnected(ct);
+        if (!ct.aborted && isTransientError(exception) && failures < this._options.maxRetries) {
+          this._log('warning', 20013, `Transient pull failure, retry ${failures + 1}: ${messageOf(exception)}`);
+          await delay(this._backoff(failures), ct);
+          failures++;
+          lastFailedAt = resume;
           continue;
         }
         throw exception;

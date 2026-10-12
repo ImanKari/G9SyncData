@@ -80,5 +80,6 @@ the app: `Agriculture.AgriPad.App/AiGuides/33-G9SyncData.md` §7. What the pilot
 | Change-feed floor (ADR-0059) | `GeoSyncCoordinator.ReconcileFarmAsync`: a farm whose watermark is below the floor is rebuilt (event 6967) |
 | `G9S-LOCAL-CORRUPT` / `-DISK-FULL` (ADR-0068) | `SyncFailureClassifier` kinds `LocalDatabaseDamaged` / `StorageFull`; unsent rows exported before the failure is shown |
 | Server options (ADR-0062, 0064, 0065) | `Agriculture.Server.Mobile/Sync/G9Sync/G9SyncDataExtensions.cs` and `Ops/g9sync-database-runbook.md` |
+| Pokes (2026-10-12) | `EnablePokes = true` on Server.Mobile; the engine keeps `PullOnChangesAvailable = false` and the app listens on the transport's `ChangesAvailable` (`SyncEngineProvider.ServerTablesChanged`): `SiteUploadScheduler` refreshes the site on the map silently, 3 s after a hint, at most every 30 s - an office edit reached the emulator's map in 7-8 s. The transport does not reconnect by itself, so the scheduler treats a closed hub as a missed hint (one silent refresh reconnects it; its hello re-joins the groups) |
 
 Detail: AgriPad `AiGuides/33-G9SyncData.md` and `AiGuides/35-Pot-Feature-Store.md`.

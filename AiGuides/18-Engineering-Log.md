@@ -643,3 +643,22 @@ authorises every table first (against the state before the push - deleted childr
 them), applies deletes child-first, then upserts parent-first. Two `CrossTableWriteScopeTests` fail without it. Lesson: a
 replacement must keep the ordering guarantees of what it replaces even where nobody wrote them down - the old engine's apply
 order was part of the contract every FK in the application relied on.
+
+## LES-0064 — 2026-10-12 · A long download failed at its sixth drop even when every drop had moved it on
+
+`DownloadAsync` counted `MaxRetries` per download: a site download over a flaky link that dropped six times failed at the
+sixth, however much each attempt had brought. The counter now counts failures in a row WITHOUT progress, and progress is the
+DURABLE resume point moving (rows staged, a snapshot-file checkpoint) - not a chunk arriving: segments after the last
+checkpoint are written again on resume, so counting chunks would let a link that always drops before the next checkpoint
+retry for ever. `A_download_that_moves_on_between_drops_survives_more_drops_than_the_retry_limit` fails without it,
+`A_link_that_drops_before_every_checkpoint_still_runs_out_of_retries` keeps the bound. Lesson: a retry budget is a budget
+for being stuck, not for being slow.
+
+## LES-0065 — 2026-10-12 · A reconnect that failed ended the run with retries left
+
+Found on the Android emulator with the network switched off for 25 s in the middle of a production farm's file: `retry 1`, then the
+reconnect - still no network - threw from INSIDE the catch block, outside the retry loop, and the whole run failed 22 s in
+with four retries unused. The reconnect now opens each attempt inside the `try` (both clients), so a failed reconnect is one
+more transient failure. The same device run then waited the outage out and finished with every row
+(`A_reconnect_that_fails_while_the_network_is_still_down_is_retried_not_the_end_of_the_run` fails without it). Lesson:
+nothing that can fail for the same reason as the thing being retried belongs in the handler of that retry.
