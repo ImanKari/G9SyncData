@@ -48,7 +48,7 @@ export interface G9SyncDataBridge {
   snapshotFileList(directory: string): Promise<G9SyncDataBridgeEnvelope>;
 }
 
-const VERSION = '1.2.2';
+const VERSION = '1.3.0';
 const MAX_EXPECTED_LENGTH = 603979776;
 const ARG = 'G9SYNC-BROTLI-ARG';
 const INVALID = 'G9SYNC-BROTLI-INVALID';

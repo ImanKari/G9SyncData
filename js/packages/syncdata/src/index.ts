@@ -4,7 +4,7 @@
 // separate package `@g9tm/syncdata-lynx`. Every public type keeps its .NET name without the G9C prefix (PARITY.md).
 
 /** The package version; equal to the .NET packages' (G9SyncDataVersion) — one release, both sides. */
-export const VERSION = '1.2.2';
+export const VERSION = '1.3.0';
 
 // abstractions
 export { G9EConflictPolicy, G9EMoveOutPolicy, G9ESyncColumnType, G9ESyncDirection, columnTypeName, isColumnType } from './abstractions/enums.js';
