@@ -60,6 +60,7 @@ parameters:
       - 'src/G9SyncData.Server.PostgreSql/G9SyncData.Server.PostgreSql.csproj'
       - 'src/G9SyncData.Server.EfCore/G9SyncData.Server.EfCore.csproj'
       - 'src/G9SyncData.Server.SignalR/G9SyncData.Server.SignalR.csproj'
+      - 'src/G9SyncData.Server.SnapshotFiles/G9SyncData.Server.SnapshotFiles.csproj'
       - 'src/G9SyncData.Testing/G9SyncData.Testing.csproj'
   - name: repositoryName
     type: string
