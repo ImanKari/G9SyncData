@@ -95,8 +95,12 @@ async function referenceSaveHello(store: G9SqliteSyncStore, connection: G9Sqlite
         $c: persistedJson(synced),
         $t: local.tid,
       });
-      if (negotiated.direction === G9ESyncDirection.DownloadOnly) await connection.exec(dropTriggers(local.model));
-      else if (local.negotiated && local.negotiated.direction === G9ESyncDirection.DownloadOnly) await connection.exec(dropTriggers(local.model) + createTriggers(local.model, local.tid));
+      if (negotiated.direction === G9ESyncDirection.DownloadOnly) {
+        await connection.exec(dropTriggers(local.model));
+        // A pending row in a download-only table can never be sent: it takes the server's copy (G9CSqliteSyncStore.SaveHelloAsync).
+        await connection.exec('UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0 WHERE tid = $t AND dirty <> 0', { $t: local.tid });
+        await connection.exec('DELETE FROM g9_rejections WHERE tid = $t', { $t: local.tid });
+      } else if (local.negotiated && local.negotiated.direction === G9ESyncDirection.DownloadOnly) await connection.exec(dropTriggers(local.model) + createTriggers(local.model, local.tid));
       local.negotiated = negotiated;
       local.syncedColumns = synced;
     }
@@ -145,6 +149,10 @@ async function scenario(batched: boolean): Promise<{ dump: unknown; calls: numbe
   const calls = [await save(first)];
   await driver.run(session, [
     { sql: "INSERT INTO Note (Id, Text) VALUES ('6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a51', 'a')", params: [] },
+    // A local delete in Tag while it is bidirectional (pending, and Tag still holds no live row); the second hello makes Tag
+    // download-only.
+    { sql: "INSERT INTO Tag (Id, Name) VALUES ('6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a52', 't')", params: [] },
+    { sql: "DELETE FROM Tag WHERE Id = '6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a52'", params: [] },
     { sql: 'UPDATE g9_rows SET local_seq = 50', params: [] },
   ]);
   calls.push(await save(second));
@@ -159,6 +167,7 @@ async function scenario(batched: boolean): Promise<{ dump: unknown; calls: numbe
       meta: await q("SELECT key, value FROM g9_meta WHERE key IN ('epoch', 'definitions_json', 'tables_json') ORDER BY key"),
       subscriptions: await q('SELECT key, move_out_policy FROM g9_subscriptions ORDER BY key'),
       triggers: await q("SELECT name, tbl_name, replace(sql, char(13), '') FROM sqlite_master WHERE type = 'trigger' ORDER BY name"),
+      pending: await q('SELECT t.local_name, count(*) FROM g9_rows r JOIN g9_tables t ON t.tid = r.tid WHERE r.dirty <> 0 GROUP BY t.local_name ORDER BY 1'),
     },
   };
 }
@@ -172,6 +181,8 @@ describe('saveHello in one batch', () => {
     expect(d.tables.map((r) => r[3])).toEqual(['["Text"]', '["Name","Color"]', '["Title"]']);
     expect(d.triggers.some((t) => t[0] === 'g9_Kind_ai')).toBe(true);
     expect(d.triggers.some((t) => t[0] === 'g9_Tag_ai')).toBe(false);
+    // Tag's local edit can never be sent once Tag is download-only: no longer pending. Note's still is.
+    expect((batched.dump as { pending: unknown[][] }).pending).toEqual([['Note', 1]]);
     // One round trip for the writes (plus the transaction and one read when a table gains columns).
     expect(batched.calls[0]).toBeLessThanOrEqual(3);
     expect(batched.calls[1]).toBeLessThanOrEqual(4);

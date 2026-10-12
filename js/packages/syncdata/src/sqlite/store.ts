@@ -399,6 +399,12 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
           });
           if (negotiated.direction === G9ESyncDirection.DownloadOnly) {
             batch.add(dropTriggers(local.model));
+            // A row marked as a local change in a download-only table can never be sent: it would stay pending for ever and hold
+            // the server's updates off. The engine's capture cannot make one there (no triggers); rows imported from outside it
+            // can. The server's copy wins. In the batch, not behind a read: the partial dirty index makes it free when there is
+            // nothing to clear. (The C# twin, SaveHelloAsync, also logs the count as 20109.)
+            batch.add('UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0 WHERE tid = $t AND dirty <> 0', { $t: local.tid });
+            batch.add('DELETE FROM g9_rejections WHERE tid = $t', { $t: local.tid });
           } else if (local.negotiated && local.negotiated.direction === G9ESyncDirection.DownloadOnly) {
             batch.add(dropTriggers(local.model) + createTriggers(local.model, local.tid));
           }

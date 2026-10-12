@@ -116,6 +116,38 @@ public sealed class SqliteDotmimRetirementTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Imported_work_on_a_table_the_server_makes_download_only_stops_being_pending_and_takes_the_servers_copy()
+    {
+        // AgriPad's Block: bidirectional under Dotmim (a block's state uploaded through INITIAL), download-only under G9SyncData
+        // (the state travels as a StateTransitionHistories row). The 5.8.8 -> 6.0.4 upgrade test left such a row "pending" for ever:
+        // never pushed, never rejected, counted in the pill, and protected from the server's updates as a local edit.
+        await PrepareDotmimDeviceAsync(withForeignTable: false, withAppTriggers: false);
+        var store = await OpenStoreAsync();
+        await store.RetireDotmimCaptureAsync();
+        Assert.Equal(3, (await store.GetPendingSummaryAsync(CancellationToken.None)).TotalRows);
+
+        var hello = Hello(G9ESyncDirection.DownloadOnly);
+        await store.SaveHelloAsync(hello, CancellationToken.None);
+
+        Assert.Contains(20109, _events);
+        Assert.Equal(0, (await store.GetPendingSummaryAsync(CancellationToken.None)).TotalRows);
+        Assert.Null(await store.BuildPushBatchAsync(hello.Tables, 100, long.MaxValue, CancellationToken.None));
+        Assert.Equal(0L, await ScalarAsync("SELECT count(*) FROM g9_rejections"));
+
+        // The offline edit no longer holds the server's version off.
+        await ApplyAsync(store, hello, Pots[0]);
+        Assert.Equal("downloaded", await ScalarAsync($"SELECT Note FROM Pot WHERE Id = '{Pots[0]}'"));
+
+        // A later Hello that makes the table bidirectional again finds nothing pending and captures new edits as usual.
+        _events.Clear();
+        await store.SaveHelloAsync(Hello(), CancellationToken.None);
+        Assert.DoesNotContain(20109, _events);
+        Assert.Equal(0, (await store.GetPendingSummaryAsync(CancellationToken.None)).TotalRows);
+        await ExecAsync($"UPDATE Pot SET Note = 'after' WHERE Id = '{Pots[2]}'");
+        Assert.Equal(1, (await store.GetPendingSummaryAsync(CancellationToken.None)).TotalRows);
+    }
+
+    [Fact]
     public async Task Retiring_again_changes_and_imports_nothing()
     {
         await PrepareDotmimDeviceAsync(withForeignTable: true, withAppTriggers: true);
@@ -266,7 +298,7 @@ public sealed class SqliteDotmimRetirementTests : IAsyncLifetime
         await store.ApplyReconcileAsync(subscription.Key, hello.Tables[0], [writer.ToFrame()], [], [], G9EMoveOutPolicy.Delete, CancellationToken.None);
     }
 
-    private static G9DtHelloResult Hello() => new()
+    private static G9DtHelloResult Hello(G9ESyncDirection direction = G9ESyncDirection.Bidirectional) => new()
     {
         Epoch = Guid.NewGuid(),
         ServerTimeUtc = DateTime.UtcNow,
@@ -274,7 +306,7 @@ public sealed class SqliteDotmimRetirementTests : IAsyncLifetime
         [
             new G9DtNegotiatedTable
             {
-                TableId = 1, Name = "farm.Pot", KeyColumn = "Id", KeyType = G9ESyncColumnType.Guid, Direction = G9ESyncDirection.Bidirectional,
+                TableId = 1, Name = "farm.Pot", KeyColumn = "Id", KeyType = G9ESyncColumnType.Guid, Direction = direction,
                 Columns =
                 [
                     new G9DtColumnModel { Name = "Note", Type = G9ESyncColumnType.String, Nullable = true },

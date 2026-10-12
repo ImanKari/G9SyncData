@@ -287,6 +287,20 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
                 if (negotiated.Direction == G9ESyncDirection.DownloadOnly)
                 {
                     Exec(connection, transaction, SqliteSql.DropTriggers(local.Model));
+
+                    // A download-only table can never send a row, so a row marked as a local change in it stays pending for ever:
+                    // counted by every pending summary, skipped by every push, never rejected - and kept as a local edit against the
+                    // server's updates. The engine's own capture cannot produce one (the table has no triggers); they come from
+                    // outside it - RetireDotmimCaptureAsync imports every unsent row of the old tracking tables before the first
+                    // Hello says which tables may upload, and a table that was bidirectional under Dotmim may be download-only here
+                    // (AgriPad's Block: a block's state travels as its StateTransitionHistories row). The server's copy wins.
+                    var cleared = Exec(connection, transaction,
+                        "UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0 WHERE tid = $t AND dirty <> 0", ("$t", local.Tid));
+                    if (cleared > 0)
+                    {
+                        Exec(connection, transaction, "DELETE FROM g9_rejections WHERE tid = $t", ("$t", local.Tid));
+                        LogDownloadOnlyPendingCleared(_logger, local.Model.LocalName, cleared);
+                    }
                 }
                 else if (local.Negotiated?.Direction == G9ESyncDirection.DownloadOnly)
                 {
@@ -743,6 +757,10 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
 
     [LoggerMessage(EventId = 20101, Level = LogLevel.Information, Message = "G9SyncData SQLite store initialised with {Tables} tables")]
     private static partial void LogInitialized(ILogger logger, int tables);
+
+    [LoggerMessage(EventId = 20109, Level = LogLevel.Warning,
+        Message = "{Table} is download-only: {Rows} row(s) marked as local changes can never be sent and now take the server's copy")]
+    private static partial void LogDownloadOnlyPendingCleared(ILogger logger, string table, int rows);
 
     [LoggerMessage(EventId = 20102, Level = LogLevel.Information, Message = "Added column {Table}.{Column} from the client model")]
     private static partial void LogColumnAdded(ILogger logger, string table, string column);

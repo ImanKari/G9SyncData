@@ -92,7 +92,10 @@ Local names may not start with `g9_`. The app must never write `g9_*` tables.
   insert), in which case its metadata is simply removed.
 - Keys are stored canonically: GUID keys `lower(...)`, integers as text (ADR-0006).
 - Triggers use `INSERT OR IGNORE` + `UPDATE`, never UPSERT (UPSERT inside triggers has parser ambiguities).
-- `DownloadOnly` tables get no triggers.
+- `DownloadOnly` tables get no triggers, and a Hello that negotiates a table download-only clears its pending rows
+  (`dirty = 0`, rejections deleted, event 20109 with the count): such a row could never be sent and would hold the
+  server's updates off for ever. Only rows written outside the capture can be pending there - the Dotmim retirement
+  imports unsent rows before the first Hello says which tables may upload (LES-0061).
 
 ## Command outbox (`G9CSqliteSyncStore.Commands.cs`, ADR-0025)
 

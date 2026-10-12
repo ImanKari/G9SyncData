@@ -175,14 +175,25 @@ One `READ COMMITTED` transaction per push:
 
 1. Upsert the client row and lock it `FOR UPDATE`; `BatchId <= last_push_batch` → roll back and replay the stored result.
 2. `set_config('g9sync.origin', clientId, true)` so capture records the origin.
-3. Per table, in model registration order: binary `COPY` into a temp staging table (`g9_seq, g9_op, g9_key, g9_base_ver,
-   g9_dirty_mask, g9_hlc` + values) → write authorisation against the client's subscription scopes and `WriteRule` →
-   validators → transformers → conflict policy against tracking versions/column versions → delete handlers → apply.
+3. Staging, for EVERY table before anything is written: binary `COPY` into temp staging tables — one for the table's
+   deletes, one for its upserts (`g9_seq, g9_op, g9_key, g9_base_ver, g9_dirty_mask, g9_hlc` + values) → write
+   authorisation against the client's subscription scopes and `WriteRule`. Every row is judged by the state BEFORE the
+   push, so a tree deleted with its placement is still in the farm when its delete is authorised (LES-0063).
+   Then the staged sets apply in turn: **deletes child-first (reverse model order), then upserts parent-first (model
+   order)** — Dotmim's order; it also lets a replaced row leave a partial unique index before its successor arrives. Each
+   set: validators → transformers → conflict policy against tracking versions/column versions → delete handlers → apply.
+   A table can therefore report two `Accepted` entries in one result; both clients iterate them.
 4. Apply is set-based (delete → update of only dirty columns → insert), or row-by-row in device order for tables with extra
    unique indexes or `OrderedApply(true)`. When a statement fails, the staged set is **bisected under savepoints** until the
    failing rows are isolated; they become rejections with their real SQLSTATE, constraint and column, and the rest applies.
-5. Post-write authorisation; accepted keys with their new versions; canonical frames for conflicted or transformed rows.
-6. Store `last_push_batch` and the serialised result; commit.
+5. Accepted keys with their new versions; canonical frames for conflicted or transformed rows.
+6. Post-write authorisation, ONCE every table is applied (LES-0062): every staged upsert must end inside a writable scope.
+   A row's scope may run through a row of a later table (a new tree is in the farm through the placement planted with it),
+   so a per-table check would refuse it. The table loop runs under a push savepoint; rows that still end outside are
+   remembered, the savepoint is rolled back, the result lists are truncated and the tables are applied again with those rows
+   pre-rejected (`G9S-REJ-PERMISSION`) — their dependants then fail as usual (FK → `G9S-REJ-CONSTRAINT`). At most four
+   attempts, then `G9S-SERVER-ERROR`.
+7. Store `last_push_batch` and the serialised result; commit.
 
 More than `MaxRejectionsPerPush` rejections fail the whole push with `G9S-REJ-TOO-MANY`.
 

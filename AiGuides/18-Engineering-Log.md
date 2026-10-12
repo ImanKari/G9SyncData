@@ -606,3 +606,40 @@ like the other two (a failed initialisation is retried with back-off, event 2101
 holds the initialisation behind a gate and counts claims: 9 premature claims before the fix, 0 after. Lesson: when
 several loops share one lazily initialised resource, give every loop the same wait — the one that skips it works
 only as long as the others happen to win.
+
+## LES-0061 — 2026-10-12 · A row the device could never send stayed pending for ever
+
+AgriPad's upgrade test (Dotmim 5.8.8 → G9, DOOGEE S96Pro): a block-state change recorded offline under Dotmim came over as
+two pending rows, `StateTransitionHistories` and `Block`. Under Dotmim the INITIAL scope uploaded Block; under G9SyncData Block
+is download-only (the state travels as the history row and the server applies it). `RetireDotmimCaptureAsync` imports every
+unsent row of the old tracking tables before the first Hello - before anything says which tables may upload - so the Block
+row became pending in a table that can never push: skipped by every push, never rejected, counted by every pending summary
+(the app's «۲ تغییر ارسال‌نشده» pill never cleared) and protected from the server's updates as a local edit; the app's site
+upload retried it every two minutes. `SaveHelloAsync` (both twins) now clears pending rows of a table negotiated
+download-only (event 20109 with the count); `SqliteDotmimRetirementTests.Imported_work_on_a_table_the_server_makes_download_only…`
+fails without it. Lesson: a state that only one path can create (dirty rows in a capture-less table) still arrives through
+the paths that bypass capture - an import, a restore, a migration - so the rule that makes it impossible belongs where the
+direction becomes known, not where the capture is installed.
+
+## LES-0062 — 2026-10-12 · A new row whose scope runs through a later table was refused
+
+AgriPad on the DOOGEE (Didban flow `agripad.tree.plant-upload-restore`): a tree planted on the tablet never reached the server.
+The farm subscription scopes `Tree` through its current `Placement`; the push applied `Tree` (FK order: before `Placement`),
+ran post-write authorisation for that table at once, found the new tree outside every writable scope (its placement was not
+applied yet), rolled it back as `G9S-REJ-PERMISSION`, and the placement then failed on `FK_Placement_Tree_TreeId`. The app
+re-armed the permission rejection and the pair looped for ever; Dotmim never had the problem because it never authorised
+writes by scope. Post-write authorisation now runs once the whole push is applied, with a push-level retry that pre-rejects
+what still ends outside (06-Server-PostgreSql § Push apply). `CrossTableWriteScopeTests` fails without it. Lesson: a check
+of the FINAL state must run when the state is final - per-step checks of a multi-table write are only right when no scope
+crosses a table boundary, and real models (EF scopes through navigation) cross them routinely.
+
+## LES-0063 — 2026-10-12 · Deleting a tree with its placement failed on the foreign key
+
+The same DOOGEE flow, its restore half: the tablet deletes the planted tree, which removes the `Tree` and its `Placement` in
+one push. Tables applied in model (FK) order, each with its deletes first, so the tree's DELETE ran while the placement still
+referenced it: `23001 RESTRICT … FK_Placement_Tree_TreeId`, the tree parked as `G9S-REJ-CONSTRAINT` for ever, the placement
+gone. Dotmim never hit it: it applies every table's deletes in reverse order before any upsert. The push now stages and
+authorises every table first (against the state before the push - deleted children must not take their parent's scope with
+them), applies deletes child-first, then upserts parent-first. Two `CrossTableWriteScopeTests` fail without it. Lesson: a
+replacement must keep the ordering guarantees of what it replaces even where nobody wrote them down - the old engine's apply
+order was part of the contract every FK in the application relied on.

@@ -15,9 +15,11 @@ using NpgsqlTypes;
 namespace G9SyncData.Server.PostgreSql;
 
 /// <summary>
-///     The upload apply. One transaction per push: idempotency lock → per table (in model order): COPY into a temp
-///     staging table → write authorisation → validators → transformers → conflict policy → delete handlers → apply with
-///     bisection isolation → post-write authorisation → results. Rejected rows are excluded, never fatal (D-10).
+///     The upload apply. One transaction per push: idempotency lock → every table staged (COPY into temp staging tables, one
+///     for its deletes and one for its upserts) and write-authorised against the state BEFORE the push → deletes, children
+///     first (reverse model order) → upserts, parents first (model order) — each: validators → transformers → conflict policy
+///     → delete handlers → apply with bisection isolation → results → post-write authorisation over every table at once.
+///     Rejected rows are excluded, never fatal (D-10).
 /// </summary>
 public sealed partial class G9CPostgresSyncStore
 {
@@ -80,9 +82,59 @@ public sealed partial class G9CPostgresSyncStore
         // Commands first, in device order (ADR-0025): the rows a device pushed after recording a command may depend on it.
         await ExecuteCommandsAsync(connection, transaction, request, result, cancellationToken).ConfigureAwait(false);
 
-        foreach (var tableWork in work.OrderBy(w => w.Table.Model.Order))
+        // Post-write authorisation: every upserted row must be inside a writable scope right after its own table applied OR once
+        // the whole push is applied (LES-0062). Its scope may run through a row of a LATER table - a new tree is in the farm only
+        // through the placement planted with it - or a later row may take it away - a replanted tree loses its placement to the
+        // new one; either alone must not refuse it, and the rows that moved are checked themselves. A row outside at both points
+        // is rejected by applying the tables again with it excluded, so its dependants fail as usual.
+        var forced = new Dictionary<int, HashSet<long>>();
+        var baseline = (result.Accepted.Count, result.Rejections.Count, result.Conflicts.Count, result.CanonicalFrames.Count);
+        for (var attempt = 0; ; attempt++)
         {
-            await ApplyTableAsync(connection, transaction, request, tableWork, result, cancellationToken).ConfigureAwait(false);
+            var savepoint = "g9_push_" + attempt.ToString(CultureInfo.InvariantCulture);
+            await transaction.SaveAsync(savepoint, cancellationToken).ConfigureAwait(false);
+            // Deletes go child-first and before every upsert, as Dotmim applied them (LES-0063): a tree deleted with its placement
+            // otherwise reached RESTRICT on FK_Placement_Tree_TreeId while the placement still stood, and a placement replaced in a
+            // pot left the partial unique index holding two current rows for a moment. Every table is staged and authorised
+            // first, so a delete is judged by the scope the row had BEFORE the push, not after its children left.
+            var staged = new List<StagedTable>();
+            foreach (var tableWork in work.OrderBy(w => w.Table.Model.Order))
+            {
+                foreach (var deletes in (bool[])[true, false])
+                {
+                    var table = await StageTableAsync(connection, transaction, request, tableWork, deletes, forced, cancellationToken).ConfigureAwait(false);
+                    if (table is not null) staged.Add(table);
+                }
+            }
+
+            var checks = new List<WriteCheck>();
+            foreach (var table in staged.Where(t => t.Deletes).Reverse().Concat(staged.Where(t => !t.Deletes)))
+            {
+                await ApplyStagedAsync(connection, transaction, request, table, result, checks, cancellationToken).ConfigureAwait(false);
+            }
+
+            var violated = false;
+            foreach (var check in checks)
+            {
+                var violations = await FindWriteViolationsAsync(connection, transaction, check, cancellationToken).ConfigureAwait(false);
+                if (violations.Count == 0) continue;
+                violated = true;
+                if (!forced.TryGetValue(check.Table.TableId, out var seqs)) forced[check.Table.TableId] = seqs = [];
+                seqs.UnionWith(violations);
+            }
+
+            if (!violated)
+            {
+                await transaction.ReleaseAsync(savepoint, cancellationToken).ConfigureAwait(false);
+                break;
+            }
+
+            if (attempt >= 3) throw new G9CSyncException(G9SyncErrorCodes.ServerError, "Write authorisation did not converge for this push.");
+            await transaction.RollbackAsync(savepoint, cancellationToken).ConfigureAwait(false);
+            result.Accepted.RemoveRange(baseline.Item1, result.Accepted.Count - baseline.Item1);
+            result.Rejections.RemoveRange(baseline.Item2, result.Rejections.Count - baseline.Item2);
+            result.Conflicts.RemoveRange(baseline.Item3, result.Conflicts.Count - baseline.Item3);
+            result.CanonicalFrames.RemoveRange(baseline.Item4, result.CanonicalFrames.Count - baseline.Item4);
         }
 
         var json = JsonSerializer.SerializeToUtf8Bytes(result, G9SyncJsonContext.Default.G9DtPushResult);
@@ -182,11 +234,15 @@ public sealed partial class G9CPostgresSyncStore
 
     // ================================================================ one table
 
-    private async Task ApplyTableAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, G9CStorePushRequest request, PushWork work,
-        G9DtPushResult result, CancellationToken ct)
+    /// <summary>One table's deletes or upserts, staged and write-authorised, waiting for its turn to apply.</summary>
+    private sealed record StagedTable(PushWork Work, PgBoundColumn[] Columns, string Stage, bool Deletes, string? AuthPredicate,
+        List<(G9CResolvedSubscription Subscription, string Prefix, PgScope Scope)> AuthBindings);
+
+    /// <summary>Steps 1-2 for the deletes (or the upserts) of one table; null when the push carries none.</summary>
+    private async Task<StagedTable?> StageTableAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, G9CStorePushRequest request,
+        PushWork work, bool deletes, Dictionary<int, HashSet<long>> forced, CancellationToken ct)
     {
         var table = work.Table;
-        var model = table.Model;
         var columns = work.Shape.Columns.Select(table.Bound).ToArray();
         var key = table.Key.Quoted;
         var stage = PgNames.Quote("g9_stage_" + table.TableId.ToString(CultureInfo.InvariantCulture) + "_" + Guid.NewGuid().ToString("N")[..12]);
@@ -201,7 +257,12 @@ public sealed partial class G9CPostgresSyncStore
         foreach (var column in columns) ddl.Append(", ").Append(column.Db!.Quoted).Append(' ').Append(column.StagingType);
         ddl.Append(") ON COMMIT DROP");
         await ExecuteAsync(connection, transaction, ddl.ToString(), ct).ConfigureAwait(false);
-        await CopyPushRowsAsync(connection, request, work, stage, columns, ct).ConfigureAwait(false);
+        if (await CopyPushRowsAsync(connection, request, work, stage, columns, deletes, ct).ConfigureAwait(false) == 0)
+        {
+            await ExecuteAsync(connection, transaction, "DROP TABLE " + stage, ct).ConfigureAwait(false);
+            return null;
+        }
+
         await ExecuteAsync(connection, transaction,
             $"CREATE INDEX ON {stage} (g9_key); CREATE UNIQUE INDEX ON {stage} (g9_seq); ANALYZE {stage}; " +
             $"UPDATE {stage} AS s SET g9_exists = true FROM {table.BaseName} AS t WHERE t.{key} = s.g9_key", ct).ConfigureAwait(false);
@@ -230,6 +291,30 @@ public sealed partial class G9CPostgresSyncStore
             }
             await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+
+        // rows an earlier attempt of this push found outside every writable subscription once all tables were applied
+        if (forced.TryGetValue(table.TableId, out var outside))
+        {
+            await ExecuteAsync(connection, transaction,
+                $"UPDATE {stage} SET g9_action = 0, g9_code = @g9_code, g9_message = @g9_message WHERE g9_action = 1 AND g9_seq = ANY(@g9_seqs)", ct,
+                P("g9_code", NpgsqlDbType.Text, G9SyncErrorCodes.RejectPermission),
+                P("g9_message", NpgsqlDbType.Text, "After the push the row would be outside every subscription the caller may write to."),
+                P("g9_seqs", NpgsqlDbType.Array | NpgsqlDbType.Bigint, outside.ToArray())).ConfigureAwait(false);
+        }
+
+        return new StagedTable(work, columns, stage, deletes, authPredicate, authBindings);
+    }
+
+    /// <summary>Steps 3-7 for one staged set, in its turn.</summary>
+    private async Task ApplyStagedAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, G9CStorePushRequest request, StagedTable staged,
+        G9DtPushResult result, List<WriteCheck> checks, CancellationToken ct)
+    {
+        var work = staged.Work;
+        var table = work.Table;
+        var model = table.Model;
+        var columns = staged.Columns;
+        var key = table.Key.Quoted;
+        var stage = staged.Stage;
 
         // 3. validators and transformers
         var context = new G9CUploadStepContext((rejections, token) => RejectRowsAsync(connection, transaction, stage, table, rejections, token))
@@ -290,7 +375,7 @@ public sealed partial class G9CPostgresSyncStore
             }
         }
 
-        // 6. apply with isolation, then post-write authorisation
+        // 6. apply with isolation (post-write authorisation follows once every table is applied)
         var rows = new List<ApplyRow>();
         await using (var command = Command(connection, transaction, $"SELECT g9_seq, g9_op, g9_exists FROM {stage} WHERE g9_action = 1 ORDER BY g9_seq"))
         await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
@@ -314,32 +399,12 @@ public sealed partial class G9CPostgresSyncStore
             };
         }
 
-        var permissionFailures = new HashSet<long>();
-        for (var attempt = 0; ; attempt++)
+        await ApplyIsolatedAsync(state, rows, ct).ConfigureAwait(false);
+        if (staged.AuthPredicate is not null && !staged.Deletes)
         {
-            var savepoint = "g9_table_" + attempt.ToString(CultureInfo.InvariantCulture);
-            await transaction.SaveAsync(savepoint, ct).ConfigureAwait(false);
-            if (attempt > 0) await RemarkFailuresAsync(state, ct).ConfigureAwait(false);
-            await ApplyIsolatedAsync(state, rows.Where(r => !state.Failures.ContainsKey(r.Seq) && !permissionFailures.Contains(r.Seq)).ToList(), ct)
-                .ConfigureAwait(false);
-
-            var violations = authPredicate is null
-                ? []
-                : await FindWriteViolationsAsync(connection, transaction, table, stage, authPredicate, authBindings, ct).ConfigureAwait(false);
-            if (violations.Count == 0)
-            {
-                await transaction.ReleaseAsync(savepoint, ct).ConfigureAwait(false);
-                break;
-            }
-
-            if (attempt >= 2) throw new G9CSyncException(G9SyncErrorCodes.ServerError, "Write authorisation did not converge for " + model.LogicalName + ".");
-            await transaction.RollbackAsync(savepoint, ct).ConfigureAwait(false);
-            permissionFailures.UnionWith(violations);
-            await ExecuteAsync(connection, transaction,
-                $"UPDATE {stage} SET g9_action = 0, g9_code = @g9_code, g9_message = @g9_message WHERE g9_seq = ANY(@g9_seqs)", ct,
-                P("g9_code", NpgsqlDbType.Text, G9SyncErrorCodes.RejectPermission),
-                P("g9_message", NpgsqlDbType.Text, "After the change the row would be outside every subscription the caller may write to."),
-                P("g9_seqs", NpgsqlDbType.Array | NpgsqlDbType.Bigint, violations.ToArray())).ConfigureAwait(false);
+            var check = new WriteCheck(table, stage, staged.AuthPredicate, staged.AuthBindings, null);
+            var outside = await FindWriteViolationsAsync(connection, transaction, check, ct).ConfigureAwait(false);
+            if (outside.Count > 0) checks.Add(check with { Candidates = outside.ToArray() });   // judged again at the end
         }
 
         // 7. results
@@ -396,8 +461,8 @@ public sealed partial class G9CPostgresSyncStore
 
     // ================================================================ COPY
 
-    private static async Task CopyPushRowsAsync(NpgsqlConnection connection, G9CStorePushRequest request, PushWork work, string stage,
-        PgBoundColumn[] columns, CancellationToken ct)
+    private static async Task<ulong> CopyPushRowsAsync(NpgsqlConnection connection, G9CStorePushRequest request, PushWork work, string stage,
+        PgBoundColumn[] columns, bool deletes, CancellationToken ct)
     {
         var names = string.Concat(columns.Select(c => ", " + c.Db!.Quoted));
         var allBits = columns.Length >= 63 ? -1L : (1L << columns.Length) - 1;
@@ -410,6 +475,7 @@ public sealed partial class G9CPostgresSyncStore
                 for (var i = 0; i <= sectionIndex; i++) reader.NextSection();
                 while (reader.ReadRow())
                 {
+                    if ((reader.PushOp == G9EPushRowOp.Delete) != deletes) continue;
                     await importer.StartRowAsync(ct).ConfigureAwait(false);
                     await importer.WriteAsync(reader.Sequence, NpgsqlDbType.Bigint, ct).ConfigureAwait(false);
                     await importer.WriteAsync((short)(reader.PushOp == G9EPushRowOp.Delete ? 2 : 1), NpgsqlDbType.Smallint, ct).ConfigureAwait(false);
@@ -443,7 +509,7 @@ public sealed partial class G9CPostgresSyncStore
                 }
             }
 
-            await importer.CompleteAsync(ct).ConfigureAwait(false);
+            return await importer.CompleteAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -800,19 +866,19 @@ public sealed partial class G9CPostgresSyncStore
         }
     }
 
-    private async Task RemarkFailuresAsync(ApplyState state, CancellationToken ct)
-    {
-        foreach (var (seq, exception) in state.Failures) await MarkFailureAsync(state, seq, exception, ct).ConfigureAwait(false);
-    }
+    /// <summary>The post-write check of one applied table; <see cref="Candidates" /> limits it to the rows outside after their step.</summary>
+    private sealed record WriteCheck(PgTable Table, string Stage, string AuthPredicate,
+        List<(G9CResolvedSubscription Subscription, string Prefix, PgScope Scope)> Bindings, long[]? Candidates);
 
-    private async Task<List<long>> FindWriteViolationsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, string stage,
-        string authPredicate, List<(G9CResolvedSubscription Subscription, string Prefix, PgScope Scope)> bindings, CancellationToken ct)
+    private async Task<List<long>> FindWriteViolationsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, WriteCheck check, CancellationToken ct)
     {
         var violations = new List<long>();
         await using var command = Command(connection, transaction,
-            $"SELECT s.g9_seq FROM {stage} AS s JOIN {table.BaseName} AS t ON t.{table.Key.Quoted} = s.g9_key " +
-            $"WHERE s.g9_action = 1 AND s.g9_op = 1 AND NOT coalesce({authPredicate}, false)");
-        foreach (var (subscription, prefix, scope) in bindings)
+            $"SELECT s.g9_seq FROM {check.Stage} AS s JOIN {check.Table.BaseName} AS t ON t.{check.Table.Key.Quoted} = s.g9_key " +
+            $"WHERE s.g9_action = 1 AND s.g9_op = 1 AND NOT coalesce({check.AuthPredicate}, false)" +
+            (check.Candidates is null ? "" : " AND s.g9_seq = ANY(@g9_candidates)"));
+        if (check.Candidates is not null) command.Parameters.Add(P("g9_candidates", NpgsqlDbType.Array | NpgsqlDbType.Bigint, check.Candidates));
+        foreach (var (subscription, prefix, scope) in check.Bindings)
         {
             BindSubscription(command.Parameters, subscription, prefix);
             BindScopeParameters(command.Parameters, scope, prefix);
