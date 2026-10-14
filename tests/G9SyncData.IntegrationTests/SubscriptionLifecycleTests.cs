@@ -40,6 +40,49 @@ public sealed class SubscriptionLifecycleTests(ITestOutputHelper output)
         Assert.Equal(3L, await client.ScalarAsync("SELECT count(*) FROM Pot WHERE SiteId = $p0", Key(north)));
     }
 
+    /// <summary>
+    ///     The incumbent's 2026-10-14 field loss, pinned for this engine: a permission change re-pulled the scope as a NEW scope, uploaded
+    ///     nothing, and moved the watermark past the device's unsent edits — an indicator marked on a tablet vanished from it and never
+    ///     reached the server (AgriPad agripad-hot-fix). Here the run pushes before it reconciles, and the reconcile never overwrites a
+    ///     row with a pending change, so both the edit and the insert must land and stay.
+    /// </summary>
+    [PostgresFact]
+    public async Task A_permission_change_with_unsent_edits_uploads_them_and_the_reconcile_keeps_them()
+    {
+        await using var harness = await SyncHarness.CreateAsync(output, server: s => s.UseAuthContextProvider<MutableAuthProvider>());
+        var auth = (MutableAuthProvider)harness.Services.GetRequiredService<IG9SyncAuthContextProvider>();
+        var north = Guid.NewGuid();
+        var south = Guid.NewGuid();
+        await harness.InsertSiteAsync(north, "North");
+        await harness.InsertSiteAsync(south, "South");
+        await harness.InsertPotsAsync(north, 3);
+        await harness.InsertPotsAsync(south, 2);
+
+        auth.AllowedSites = [north];
+        await using var client = await harness.CreateClientAsync();
+        await client.Engine.SubscribeAsync("sites");
+        await client.Engine.SubscribeAsync("allowed-pots");
+        await client.SyncOkAsync();
+        Assert.Equal(3, await client.CountAsync("Pot"));
+
+        var pots = await harness.PotIdsAsync(north);
+        var created = Guid.NewGuid();
+        await client.ExecAsync("UPDATE Pot SET Note = 'unsent edit' WHERE Id = $p0", Key(pots[0]));
+        await client.ExecAsync("INSERT INTO Pot (Id, SiteId, Code, Status, Note, IsDeleted) VALUES ($p0, $p1, 'LOCAL-1', 2, 'unsent insert', 0)",
+            Key(created), Key(north));
+
+        // A grant: the auth hash changes, so this run reconciles - and is forced to as well, as AgriPad forces its repair runs.
+        auth.AllowedSites = [north, south];
+        await client.SyncOkAsync(new G9CSyncRequest { ForceReconcile = true });
+
+        Assert.True(client.InMemory.CallCount(G9ETransportOperation.Reconcile) >= 1, "The permission change must reconcile.");
+        Assert.Equal("unsent edit", await harness.ScalarServerAsync<string>("""SELECT "Note" FROM farm."Pot" WHERE "Id" = $1""", pots[0]));
+        Assert.Equal("unsent insert", await harness.ScalarServerAsync<string>("""SELECT "Note" FROM farm."Pot" WHERE "Id" = $1""", created));
+        Assert.Equal("unsent edit", await client.ScalarAsync("SELECT Note FROM Pot WHERE Id = $p0", Key(pots[0])));
+        Assert.Equal(0, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
+        Assert.Equal(6, await client.CountAsync("Pot"));
+    }
+
     [PostgresFact]
     public async Task A_forbidden_subscription_is_reported_and_marked_failed_while_the_rest_sync()
     {
