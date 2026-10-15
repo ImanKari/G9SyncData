@@ -11,7 +11,7 @@ the .NET client byte for byte.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.2.2.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.3.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -22,6 +22,29 @@ the .NET client byte for byte.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.3.1
+
+- **On G9SignalRSuperNetCore 2.11.0** (NuGet and npm). For Lynx apps: the Android host can hand its own `OkHttpClient`
+  (TLS policy, proxy) to the WebSocket (`G9SignalRLynxModule.useHttpClient`), and a SignalR handshake failure the client
+  already handled no longer surfaces as a Lynx runtime error.
+- **Security:** `Microsoft.AspNetCore.SignalR.Client` 10.0.12 → 10.0.13 and G9SignalRSuperNetCore 2.11.0 (SignalR.Client
+  10.0.13 / 8.0.32) leave `Microsoft.AspNetCore.SignalR.Common` behind the high-severity advisory CVE-2026-70159
+  (GHSA-334f-vvp4-7g6p) — consumers no longer get NuGet audit warning NU1903 from this family. The samples' and tests'
+  `Microsoft.Extensions.Logging.Console` / `DependencyInjection` / `Hosting` move to 10.0.13 with it (10.0.12 would be a
+  package downgrade against SignalR.Client 10.0.13); the libraries keep their 10.0.0 floor.
+- **A test pins a guarantee apps rely on:** when a permission change re-scopes a subscription while the device holds unsent
+  edits, the run uploads them first and the reconcile keeps them (`SubscriptionLifecycleTests`). An app needs no
+  "upload before re-pull" step of its own.
+
+## What's new in 1.3.0
+
+- **Snapshot files (ADR-0072):** a large first download can arrive as one SQLite file instead of row frames (proven on real
+  devices; `UseSnapshotFiles` on the server, `lynxSnapshotFileSink` on Lynx).
+- **Push apply:** cross-table write authorisation, deletes applied child-first; pending rows of a download-only table take
+  the server's copy.
+- **Download retries** count drops without durable progress and reconnect inside the retry (LES-0064, LES-0065).
+- **SQLite store:** the pending-row push walks the partial dirty index; apply and connection fixes (LES-0057).
 
 ## What's new in 1.2.2
 

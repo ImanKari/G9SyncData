@@ -1,6 +1,6 @@
 {
   "name": "@g9tm/syncdata",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "TypeScript twin of the G9SyncData .NET client for Lynx, Node and browsers: the sync engine, the G9RowBatch protocol, the SQLite client store (same schema as the .NET store) and the SignalR transport.",
   "license": "MIT",
   "author": "Iman Kari (G9TM)",
@@ -73,7 +73,7 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "@g9tm/signalr-supernetcore-client": "^2.10.1",
+    "@g9tm/signalr-supernetcore-client": "^2.11.0",
     "@microsoft/signalr": "^10.0.0",
     "@microsoft/signalr-protocol-msgpack": "^10.0.0",
     "@msgpack/msgpack": "^2.8.0"
@@ -93,7 +93,7 @@
     }
   },
   "devDependencies": {
-    "@g9tm/signalr-supernetcore-client": "2.10.1",
+    "@g9tm/signalr-supernetcore-client": "2.11.0",
     "@microsoft/signalr": "^10.0.11",
     "@microsoft/signalr-protocol-msgpack": "^10.0.11",
     "@msgpack/msgpack": "2.8.0",
