@@ -319,7 +319,20 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
         return await _store.ReadChangeFeedAsync(localTable, afterSequence, limit, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>The highest sequence <see cref="ReadChangeFeedAsync" /> can return today.</summary>
+    /// <summary>
+    ///     The change feed for one table narrowed to the keys <paramref name="keyFilter" /> selects (plus every deletion), so a
+    ///     projection of one site does not walk the entries of every other one. See <see cref="G9CChangeFeedKeyFilter" />.
+    /// </summary>
+    public async Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit,
+        G9CChangeFeedKeyFilter keyFilter, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(keyFilter);
+        keyFilter.Validate();
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.ReadChangeFeedAsync(localTable, afterSequence, limit, keyFilter, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The highest sequence <see cref="ReadChangeFeedAsync(string, long, int, CancellationToken)" /> can return today.</summary>
     /// <remarks>
     ///     Compare a stored feed watermark against this before resuming from it: a watermark above the current sequence belongs to a
     ///     store that no longer exists, and resuming from it would leave the projection permanently stale.

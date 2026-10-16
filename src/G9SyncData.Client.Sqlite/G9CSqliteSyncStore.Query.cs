@@ -449,6 +449,36 @@ public sealed partial class G9CSqliteSyncStore
         return entries;
     }
 
+    public async Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit,
+        G9CChangeFeedKeyFilter keyFilter, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(keyFilter);
+        keyFilter.Validate();
+        EnsureInitialized();
+        var table = GetLocal(localTable);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        var entries = new List<G9CChangeFeedEntry>();
+
+        // The key query is evaluated once per read (SQLite materialises an IN subquery), so the cost is one pass over the
+        // table's feed range with a set lookup per entry - nothing leaves the database for an entry of another site. Deletions
+        // pass whatever the query says: their rows are gone, so no query can place them.
+        using var command = Command(connection, null,
+            "SELECT local_seq, pk, (deleted = 1 OR dirty = 2), dirty <> 0 FROM g9_rows " +
+            $"WHERE tid = $g9t AND local_seq > $g9a AND (deleted = 1 OR dirty = 2 OR pk IN ({keyFilter.KeySql.Trim()})) " +
+            "ORDER BY local_seq LIMIT $g9l");
+        command.Parameters.AddWithValue("$g9t", table.Tid);
+        command.Parameters.AddWithValue("$g9a", afterSequence);
+        command.Parameters.AddWithValue("$g9l", Math.Max(1, limit));
+        foreach (var (name, value) in keyFilter.Parameters ?? new Dictionary<string, object?>())
+        {
+            command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        }
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) entries.Add(new G9CChangeFeedEntry(reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2) != 0, reader.GetInt64(3) != 0));
+        return entries;
+    }
+
     public async Task<long> GetChangeSequenceAsync(CancellationToken cancellationToken)
     {
         EnsureInitialized();

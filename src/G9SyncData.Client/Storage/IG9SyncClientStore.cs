@@ -177,7 +177,18 @@ public interface IG9SyncClientStore : IAsyncDisposable
     /// </remarks>
     Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit, CancellationToken cancellationToken);
 
-    /// <summary>The store's current change sequence: the highest value <see cref="ReadChangeFeedAsync" /> can return today.</summary>
+    /// <summary>
+    ///     Change-feed entries for one table after a sequence, oldest first, for the keys <paramref name="keyFilter" /> selects
+    ///     and every deletion.
+    /// </summary>
+    /// <remarks>
+    ///     A read that returns fewer than <paramref name="limit" /> entries is complete: no entry of a selected key exists between
+    ///     the last one returned and the store's sequence at the time of the read, so a projection may move its watermark there.
+    /// </remarks>
+    Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit,
+        G9CChangeFeedKeyFilter keyFilter, CancellationToken cancellationToken);
+
+    /// <summary>The store's current change sequence: the highest value <see cref="ReadChangeFeedAsync(string, long, int, CancellationToken)" /> can return today.</summary>
     /// <remarks>
     ///     A consumer that keeps a derived projection (a cache, a map layer, a search index) holds a watermark into the feed, and
     ///     that watermark is only meaningful against the store it came from. Compare it with this: a watermark ABOVE the current
@@ -443,6 +454,57 @@ public sealed class G9CPendingSummary
 
 /// <summary>One entry of the local change feed (downloaded and local changes alike).</summary>
 public sealed record G9CChangeFeedEntry(long Sequence, string Key, bool Deleted, bool LocalPending);
+
+/// <summary>
+///     Narrows a change-feed read to the keys a query of the app's own tables selects - "the rows of the site I am projecting" -
+///     so the entries of everything else are dropped inside the database instead of being read, allocated and thrown away.
+/// </summary>
+/// <remarks>
+///     <para>
+///         <b>Why it exists.</b> The feed is one clock over every table and every subscription, so a projection of ONE site reads
+///         the whole feed since its watermark: an app that kept a map of one farm walked 460,000 entries of another farm, in passes
+///         of 100,000 a table, to learn that its own farm had not changed (AgriPad, 2026-10-16: ~5 s of CPU and a GC every 50 ms
+///         on an emulator, several times that on a phone).
+///     </para>
+///     <para>
+///         <b>Deletions are always returned</b>, whatever the query says: a deleted row is gone from its table, so no query of
+///         the app's tables can say which site it belonged to, and a projection that missed it would keep showing it.
+///     </para>
+///     <para>
+///         <see cref="KeySql" /> is a single <c>SELECT</c> returning one column of keys, run in the store's database; it is
+///         embedded as <c>pk IN (...)</c>. Its parameters are bound by name (<c>$name</c>, <c>@name</c> or <c>:name</c>); the
+///         names <c>$g9t</c>, <c>$g9a</c> and <c>$g9l</c> belong to the read itself.
+///     </para>
+/// </remarks>
+/// <param name="KeySql">A <c>SELECT</c> of one column: the keys whose entries the read returns.</param>
+/// <param name="Parameters">The query's named parameters.</param>
+public sealed record G9CChangeFeedKeyFilter(string KeySql, IReadOnlyDictionary<string, object?>? Parameters = null)
+{
+    private static readonly string[] ReservedNames = ["$g9t", "$g9a", "$g9l"];
+
+    /// <summary>Throws when the filter cannot be embedded safely: not a single SELECT, or a parameter the read owns.</summary>
+    public void Validate()
+    {
+        var sql = KeySql?.Trim() ?? string.Empty;
+        if (!sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) || sql.Contains(';', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("A change-feed key filter is a single SELECT statement of one column.", nameof(KeySql));
+        }
+
+        foreach (var name in Parameters?.Keys ?? [])
+        {
+            if (name.Length < 2 || name[0] is not ('$' or '@' or ':'))
+            {
+                throw new ArgumentException($"Change-feed key filter parameter '{name}' must be named ($name, @name or :name).", nameof(Parameters));
+            }
+
+            if (ReservedNames.Any(reserved => string.Equals(reserved, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ArgumentException($"Change-feed key filter parameter '{name}' is reserved by the read.", nameof(Parameters));
+            }
+        }
+    }
+}
 
 public sealed class G9CSyncRejection
 {

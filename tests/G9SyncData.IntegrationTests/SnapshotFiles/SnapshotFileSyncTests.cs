@@ -220,7 +220,7 @@ public sealed class SnapshotFileSyncTests(ITestOutputHelper output) : IDisposabl
     }
 
     [PostgresFact]
-    public async Task A_second_site_merges_into_the_table_the_first_one_filled()
+    public async Task A_second_site_is_appended_to_the_table_the_first_one_filled_and_leaves_what_the_row_path_leaves()
     {
         await using var harness = await HarnessAsync();
         var north = Guid.NewGuid();
@@ -233,8 +233,14 @@ public sealed class SnapshotFileSyncTests(ITestOutputHelper output) : IDisposabl
         await using var viaFile = await SubscribedAsync(harness, north, files: true);
         await viaFile.SyncOkAsync();
         await viaFile.Engine.SubscribeAsync("site-pots", SitePots(south));
+        var sequenceBefore = await viaFile.Engine.GetChangeSequenceAsync();
         var second = await viaFile.SyncOkAsync();
-        Assert.Equal(G9SyncData.Client.Storage.G9CApplyDiagnostics.FileModeMerge, second.Changes.Diagnostics.FileTables["Pot"]);
+        Assert.Equal(G9SyncData.Client.Storage.G9CApplyDiagnostics.FileModeAppend, second.Changes.Diagnostics.FileTables["Pot"]);
+
+        // Every appended row is announced on the feed, after everything the first site left there - a projection reads them like rows.
+        var feed = await viaFile.Engine.ReadChangeFeedAsync("Pot", sequenceBefore, 5000);
+        Assert.Equal(1200, feed.Count);
+        Assert.All(feed, entry => Assert.False(entry.Deleted));
 
         await using var viaRows = await SubscribedAsync(harness, north, files: false);
         await viaRows.SyncOkAsync();

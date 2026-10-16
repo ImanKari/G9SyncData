@@ -239,6 +239,45 @@ describe('snapshot files on the device', () => {
     expect(query(`SELECT dirty, subs FROM g9_rows WHERE pk = '${guid(5)}'`)).toEqual([[1, 1]]);
   });
 
+  it('appends to a table that holds only other rows, and a key-filtered feed read keeps to one site plus every deletion', async () => {
+    const { dir, store, query } = await deviceAsync();
+    const file = buildFile(dir, 1000, 4096 * 8);
+    // Another site's rows, already settled on the device (written outside change capture, as an apply leaves them).
+    const other = (i: number): string => '99999999-0000-4000-8000-' + i.toString(16).padStart(12, '0');
+    const app = nodeSqliteDriver();
+    const session = await app.open({ path: join(dir, 'device.db') });
+    await app.run(session, [
+      { sql: 'UPDATE g9_ctx SET applying = 1 WHERE id = 1', params: [] },
+      { sql: 'INSERT INTO Pot (Id, Code, Status) VALUES (?, ?, ?)', params: [other(1), 'O1', 1] },
+      { sql: 'INSERT INTO Pot (Id, Code, Status) VALUES (?, ?, ?)', params: [other(2), 'O2', 2] },
+      { sql: 'UPDATE g9_ctx SET applying = 0 WHERE id = 1', params: [] },
+    ]);
+    await store.beginStagedPull({ runId: 'r1', plan: planOf(file, 1000), createdUtcMs: Date.now(), backfills: [], generation: 'g', plannedFromCursors: {}, stageSequence: 0 });
+    for (const chunk of chunksOf(file, 1000)) await store.stageChunk('r1', chunk);
+    const report = await store.applyStagedPull('r1', null, null);
+
+    expect(report.diagnostics.fileTables).toEqual({ Pot: 'append' });
+    expect(query('SELECT count(*) FROM Pot')).toEqual([[1002]]);
+    expect(query("SELECT count(*), min(local_seq), max(local_seq) FROM g9_rows WHERE pk LIKE '00000000-%'")).toEqual([[1000, 1, 1000]]);
+
+    // On the device the OTHER site is edited (a feed entry the filter must drop) and one of THIS site's pots is deleted: its row is
+    // gone, so the key query cannot select it - it comes back through the "every deletion" rule.
+    await app.run(session, [
+      { sql: 'UPDATE Pot SET Status = 9 WHERE Id = ?', params: [other(2)] },
+      { sql: 'DELETE FROM Pot WHERE Id = ?', params: [guid(5)] },
+    ]);
+    await app.close(session);
+    expect((await store.readChangeFeed('Pot', 0, 5000)).length).toBe(1001);
+    const filter = { keySql: 'SELECT Id FROM Pot WHERE Code LIKE $site', parameters: { $site: 'P%' } };
+    const feed = await store.readChangeFeedFiltered('Pot', 0, 5000, filter);
+    expect(feed.length).toBe(1000);
+    expect(feed.some((e) => e.key === other(2))).toBe(false);
+    expect(feed.filter((e) => e.deleted).map((e) => e.key)).toEqual([guid(5)]);
+    expect((await store.readChangeFeedFiltered('Pot', 0, 10, filter)).map((e) => e.key)).toEqual(feed.slice(0, 10).map((e) => e.key));
+    await expect(store.readChangeFeedFiltered('Pot', 0, 10, { keySql: 'DELETE FROM Pot' })).rejects.toThrow(/single SELECT/);
+    await expect(store.readChangeFeedFiltered('Pot', 0, 10, { keySql: 'SELECT Id FROM Pot WHERE Status = $g9t', parameters: { $g9t: 1 } })).rejects.toThrow(/reserved/);
+  });
+
   it('a staged file no stage refers to is deleted when the store starts - and nothing else in the directory', async () => {
     const { store, files } = await deviceAsync();
     await store.dispose();

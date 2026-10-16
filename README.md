@@ -11,7 +11,7 @@ the .NET client byte for byte.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.3.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.4.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -22,6 +22,19 @@ the .NET client byte for byte.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.4.0
+
+- **A change-feed read narrowed to one site.** `ReadChangeFeedAsync(table, after, limit, G9CChangeFeedKeyFilter)` (TypeScript:
+  `readChangeFeedFiltered`) takes a `SELECT` of the app's own tables - "the keys of the farm I am projecting" - and returns only
+  those entries plus every deletion, dropping the rest inside SQLite. A projection of one site no longer walks the feed of every
+  other one: AgriPad's map of one farm read 460,000 entries of a farm opened in between, in passes of 100,000, to learn nothing had
+  changed (~5 s of CPU and a GC every 50 ms on an emulator). A read shorter than its limit is complete up to the clock, so the
+  projection may move its watermark there.
+- **A second site's snapshot file is appended, not merged.** When the table already holds OTHER rows but none of the file's and
+  none protected, the file is inserted as it is and numbered like a copy (`G9CApplyDiagnostics.FileModeAppend`, "append"): the
+  per-row diff of a merge proved nothing there and was the whole cost - 232,005 rows took 12.4 s as a merge. The database it
+  leaves is the row path's (end-to-end and TypeScript/.NET interop tests).
 
 ## What's new in 1.3.1
 

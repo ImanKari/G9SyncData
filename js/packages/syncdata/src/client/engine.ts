@@ -58,6 +58,8 @@ import {
   toSubscriptionRef,
   type G9ApplySlice,
   type G9ChangeFeedEntry,
+  type G9ChangeFeedKeyFilter,
+  validateChangeFeedKeyFilter,
   type G9LocalCommand,
   type G9LocalCommandWriter,
   type G9ELocalCommandState,
@@ -334,6 +336,16 @@ export class G9SyncEngine {
   async readChangeFeed(localTable: string, afterSequence: number, limit = 1000, signal?: AbortSignal): Promise<G9ChangeFeedEntry[]> {
     await this.initialize(signal);
     return this._store.readChangeFeed(localTable, afterSequence, limit, signal);
+  }
+
+  /**
+   * The change feed for one table narrowed to the keys `keyFilter` selects (plus every deletion), so a projection of one site does
+   * not walk the entries of every other one (`ReadChangeFeedAsync(..., G9CChangeFeedKeyFilter, ...)`).
+   */
+  async readChangeFeedFiltered(localTable: string, afterSequence: number, limit: number, keyFilter: G9ChangeFeedKeyFilter, signal?: AbortSignal): Promise<G9ChangeFeedEntry[]> {
+    validateChangeFeedKeyFilter(keyFilter);
+    await this.initialize(signal);
+    return this._store.readChangeFeedFiltered(localTable, afterSequence, limit, keyFilter, signal);
   }
 
   /** The highest sequence readChangeFeed can return today (a watermark above it belongs to a store that no longer exists). */

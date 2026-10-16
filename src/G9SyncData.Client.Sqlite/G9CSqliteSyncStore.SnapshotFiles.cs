@@ -378,14 +378,20 @@ public sealed partial class G9CSqliteSyncStore
                     ? $"INSERT INTO main.{table.Quoted} SELECT * FROM {source}"
                     : $"INSERT INTO main.{table.Quoted} ({list}) SELECT {list} FROM {source}");
 
-                // Every row is new to the table: each gets its membership, its server version and the next number on the clock.
-                var numbered = Exec(context.Connection, context.Transaction,
-                    "INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) " +
-                    $"SELECT $t, v.pk, v.ver, $base + row_number() OVER (ORDER BY v.r), $bit, 0, 0, 0, 0 FROM {pairs} AS v WHERE true " +
-                    "ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, " +
-                    "dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0",
-                    ("$t", table.Tid), ("$base", context.Clock), ("$bit", bit));
-                context.Clock += numbered;
+                NumberNewRows(context, table, pairs, bit);
+                if (context.WantsChangedKey(table.Model.LocalName)) AddChangedKeys(context, table, $"SELECT {sourceKey} FROM {source} AS s ORDER BY s.rowid");
+            }
+            else if (!isProtected && !OverlapsStoredRows(context, table, source))
+            {
+                // A table that holds OTHER rows - the first load of a second site into tables the first one filled. Every row of the
+                // file is new, so the merge's whole apparatus (a version table by key, a per-row diff against the stored row, an
+                // upsert, a second pass over g9_rows for the unchanged ones) proves nothing it does not already know: 232,005 rows
+                // took 12.4 s as a merge on an emulator where the same shape copies 449,856 rows in 1 s (AgriPad, 2026-10-16).
+                mode = G9CApplyDiagnostics.FileModeAppend;
+                var list = string.Join(", ", shared.Select(SqliteSql.Quote));
+                rows = Exec(context.Connection, context.Transaction,
+                    $"INSERT INTO main.{table.Quoted} ({list}) SELECT {list} FROM {source} AS s ORDER BY s.{SqliteSql.Quote(table.Model.KeyColumn)}");
+                NumberNewRows(context, table, pairs, bit);
                 if (context.WantsChangedKey(table.Model.LocalName)) AddChangedKeys(context, table, $"SELECT {sourceKey} FROM {source} AS s ORDER BY s.rowid");
             }
             else
@@ -509,6 +515,32 @@ public sealed partial class G9CSqliteSyncStore
 
         Exec(connection, transaction, "DROP TABLE IF EXISTS temp.g9_file_changed; DROP TABLE IF EXISTS temp.g9_file_protect; DROP TABLE IF EXISTS temp.g9_file_versions");
         return total - skipped;
+    }
+
+    /// <summary>
+    ///     Every row of the file is new to the table: each gets its membership, its server version and the next number on the clock.
+    ///     A key the table does not hold may still have metadata (a row deleted earlier), which the conflict clause brings back to life.
+    /// </summary>
+    private static void NumberNewRows(ApplyContext context, LocalTable table, string pairs, long bit)
+    {
+        var numbered = Exec(context.Connection, context.Transaction,
+            "INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) " +
+            $"SELECT $t, v.pk, v.ver, $base + row_number() OVER (ORDER BY v.r), $bit, 0, 0, 0, 0 FROM {pairs} AS v WHERE true " +
+            "ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, " +
+            "dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0",
+            ("$t", table.Tid), ("$base", context.Clock), ("$bit", bit));
+        context.Clock += numbered;
+    }
+
+    /// <summary>
+    ///     Whether any row of the file is already in the table - the one thing that separates an append from a merge once the table
+    ///     has no protected rows. One indexed lookup per file row, stopping at the first hit.
+    /// </summary>
+    private static bool OverlapsStoredRows(ApplyContext context, LocalTable table, string source)
+    {
+        var key = SqliteSql.Quote(table.Model.KeyColumn);
+        return Scalar(context.Connection, context.Transaction,
+            $"SELECT 1 FROM {source} AS s WHERE EXISTS (SELECT 1 FROM main.{table.Quoted} AS m WHERE m.{key} = s.{key}) LIMIT 1") is not null;
     }
 
     private static void AddChangedKeys(ApplyContext context, LocalTable table, string sql)

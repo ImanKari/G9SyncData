@@ -6,6 +6,7 @@ import { G9Long, parseJson } from '../abstractions/long.js';
 import { guidToN, tryNormalizeGuid } from '../abstractions/guid.js';
 import type {
   G9ChangeFeedEntry,
+  G9ChangeFeedKeyFilter,
   G9LocalRowEntry,
   G9PendingSummary,
   G9PendingTable,
@@ -14,6 +15,7 @@ import type {
   G9SyncRejection,
   G9SyncRunReport,
 } from '../client/storeTypes.js';
+import { validateChangeFeedKeyFilter } from '../client/storeTypes.js';
 import type { G9DtNegotiatedTable, G9DtSyncChunk, G9DtTableDigest } from '../protocol/dtos.js';
 import { readContinuation, readPullPlan } from '../protocol/wire.js';
 import { asLong, asNumber, asOptionalString, asString, statementsOf, type G9SqliteConnection } from './connection.js';
@@ -370,6 +372,29 @@ export async function readChangeFeed(store: StoreInternals, localTable: string, 
       $a: afterSequence,
       $l: Math.max(1, limit),
     });
+  return rows.map((r) => ({ sequence: asNumber(r[0]), key: asString(r[1]), deleted: asNumber(r[2]) !== 0, localPending: asNumber(r[3]) !== 0 }));
+}
+
+/** `ReadChangeFeedAsync(..., G9CChangeFeedKeyFilter, ...)`: the same read, narrowed in SQL to the selected keys plus every deletion. */
+export async function readChangeFeedFiltered(
+  store: StoreInternals,
+  localTable: string,
+  afterSequence: number,
+  limit: number,
+  keyFilter: G9ChangeFeedKeyFilter,
+): Promise<G9ChangeFeedEntry[]> {
+  validateChangeFeedKeyFilter(keyFilter);
+  store.ensureInitialized();
+  const table = getLocal(store, localTable);
+  const parameters: { [name: string]: G9SqlValue } = { $g9t: table.tid, $g9a: afterSequence, $g9l: Math.max(1, limit) };
+  for (const [name, value] of Object.entries(keyFilter.parameters ?? {})) parameters[name] = value;
+  const rows = await store
+    .reader()
+    .query(
+      'SELECT local_seq, pk, (deleted = 1 OR dirty = 2), dirty <> 0 FROM g9_rows ' +
+        `WHERE tid = $g9t AND local_seq > $g9a AND (deleted = 1 OR dirty = 2 OR pk IN (${keyFilter.keySql.trim()})) ORDER BY local_seq LIMIT $g9l`,
+      parameters,
+    );
   return rows.map((r) => ({ sequence: asNumber(r[0]), key: asString(r[1]), deleted: asNumber(r[2]) !== 0, localPending: asNumber(r[3]) !== 0 }));
 }
 

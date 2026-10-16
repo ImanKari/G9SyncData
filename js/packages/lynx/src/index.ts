@@ -4,7 +4,7 @@
 // driver satisfies the store's G9SqliteDriver contract).
 
 /** The package version; equal to @g9tm/syncdata's and to the .NET packages' (one release, every side). */
-export const VERSION = '1.3.1';
+export const VERSION = '1.4.0';
 
 export * from './native.js';
 export {

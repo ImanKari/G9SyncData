@@ -5,7 +5,7 @@
 // few thousand statements: the whole reason this exists for the TypeScript client.
 import { G9SyncErrorCodes, G9SyncException } from '../abstractions/errors.js';
 import { parseJson } from '../abstractions/long.js';
-import { FILE_MODE_COLUMNS, FILE_MODE_COPY, FILE_MODE_MERGE } from '../client/storeTypes.js';
+import { FILE_MODE_APPEND, FILE_MODE_COLUMNS, FILE_MODE_COPY, FILE_MODE_MERGE } from '../client/storeTypes.js';
 import { G9EPullPartKind, type G9DtNegotiatedTable, type G9DtPullPlan, type G9DtSnapshotFileManifest, type G9DtSnapshotFileRequest, type G9DtSyncChunk } from '../protocol/dtos.js';
 import { readFileManifest } from '../protocol/wire.js';
 import { G9ESyncDirection } from '../abstractions/enums.js';
@@ -442,15 +442,15 @@ export async function applySnapshotFile(store: StoreInternals, context: ApplyCon
       mode = identical ? FILE_MODE_COPY : FILE_MODE_COLUMNS;
       const list = shared.map(quote).join(', ');
       rows = await connection.exec(identical ? `INSERT INTO main.${table.quoted} SELECT * FROM ${source}` : `INSERT INTO main.${table.quoted} (${list}) SELECT ${list} FROM ${source}`);
-      const clock = asNumber(await connection.scalar('SELECT seq FROM g9_clock WHERE id = 1'));
-      const numbered = await connection.exec(
-        'INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) ' +
-          `SELECT $t, v.pk, v.ver, $base + row_number() OVER (ORDER BY v.r), $bit, 0, 0, 0, 0 FROM ${pairs} AS v WHERE true ` +
-          'ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, ' +
-          'dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0',
-        { $t: table.tid, $base: clock, $bit: bitValue },
-      );
-      await connection.exec('UPDATE g9_clock SET seq = seq + $n WHERE id = 1', { $n: numbered });
+      await numberNewRows(context, table, pairs, bitValue);
+      if (context.wantsChangedKey(table.model.localName)) await addChangedKeys(context, table, `SELECT ${sourceKey} FROM ${source} AS s ORDER BY s.rowid`);
+    } else if (!isProtected && !(await overlapsStoredRows(context, table, source))) {
+      // A table holding only OTHER rows (a second site's first load): every row is new, so the merge's per-row diff proves nothing.
+      // The .NET twin measured 12.4 s as a merge against ~1 s as a plain insert for 232,005 rows (AgriPad, 2026-10-16).
+      mode = FILE_MODE_APPEND;
+      const list = shared.map(quote).join(', ');
+      rows = await connection.exec(`INSERT INTO main.${table.quoted} (${list}) SELECT ${list} FROM ${source} AS s ORDER BY s.${quote(table.model.keyColumn)}`);
+      await numberNewRows(context, table, pairs, bitValue);
       if (context.wantsChangedKey(table.model.localName)) await addChangedKeys(context, table, `SELECT ${sourceKey} FROM ${source} AS s ORDER BY s.rowid`);
     } else {
       mode = FILE_MODE_MERGE;
@@ -476,6 +476,26 @@ export async function applySnapshotFile(store: StoreInternals, context: ApplyCon
 
   diagnostics.snapshotFiles++;
   diagnostics.fileCopyMs += Date.now() - started;
+}
+
+/** `NumberNewRows`: every row of the file is new to the table - membership, server version and the next number on the clock. */
+async function numberNewRows(context: ApplyContext, table: LocalTable, pairs: string, bitValue: G9SqlValue): Promise<void> {
+  const connection = context.connection;
+  const clock = asNumber(await connection.scalar('SELECT seq FROM g9_clock WHERE id = 1'));
+  const numbered = await connection.exec(
+    'INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) ' +
+      `SELECT $t, v.pk, v.ver, $base + row_number() OVER (ORDER BY v.r), $bit, 0, 0, 0, 0 FROM ${pairs} AS v WHERE true ` +
+      'ON CONFLICT(tid, pk) DO UPDATE SET server_ver = excluded.server_ver, local_seq = excluded.local_seq, subs = subs | excluded.subs, ' +
+      'dirty = 0, dirty_mask = 0, rejected = 0, deleted = 0',
+    { $t: table.tid, $base: clock, $bit: bitValue },
+  );
+  await connection.exec('UPDATE g9_clock SET seq = seq + $n WHERE id = 1', { $n: numbered });
+}
+
+/** `OverlapsStoredRows`: whether any row of the file is already in the table - what separates an append from a merge. */
+async function overlapsStoredRows(context: ApplyContext, table: LocalTable, source: string): Promise<boolean> {
+  const key = quote(table.model.keyColumn);
+  return (await context.connection.scalar(`SELECT 1 FROM ${source} AS s WHERE EXISTS (SELECT 1 FROM main.${table.quoted} AS m WHERE m.${key} = s.${key}) LIMIT 1`)) !== null;
 }
 
 /** `MergeSnapshotTable`: changed rows only; protected rows gain membership; unchanged rows keep their feed position. */

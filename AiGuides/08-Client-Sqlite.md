@@ -127,6 +127,11 @@ Every apply is one write transaction with `applying = 1`:
   it is not dirty.
 - Staged pulls apply every chunk, store cursors and mark backfilled columns synced in the same transaction.
 - The local clock advances once per applied row, so the change feed sees downloads too.
+- `ReadChangeFeedAsync(table, after, limit, G9CChangeFeedKeyFilter)` narrows the feed to the keys a query of the app's own
+  tables selects (`pk IN (<KeySql>)`) plus every deletion, so a projection of one site never reads another site's entries: an
+  app that kept a map of one farm walked 460,000 entries of a farm opened in between to learn nothing had changed. A read that
+  returns fewer than `limit` entries is complete up to the clock read before it, so the projection may move its watermark
+  there. The filter is validated (one `SELECT`, named parameters, `$g9t`/`$g9a`/`$g9l` reserved).
 
 ### Large downloads (ADR-0034)
 
@@ -249,12 +254,13 @@ application id is "G9SF". Anything else is `G9S-FILE-CORRUPT` and the engine fal
 |---|---|---|
 | `copy` | the local table is empty, nothing protected, and its columns are the file's in the same order | `INSERT INTO main.T SELECT * FROM g9snapN.T` - SQLite's transfer optimisation copies the table and every index b-tree page by page. Local indexes the file cannot supply (another column list, collation, uniqueness, a partial index) are dropped first and rebuilt at the end of the apply, like deferred indexes |
 | `columns` | empty and unprotected, but the column lists differ (a column the server does not send) | the same copy with an explicit column list |
-| `merge` | the table holds rows (a second site into the first one's table) or has protected rows | set-based per-row rules: protected rows (dirty, command rows, changed after the stage began) are not written but gain membership; identical rows keep their feed position (ADR-0058); everything else is upserted and numbered |
+| `append` | the table holds rows, none of them shares a key with the file and none is protected - a second site's first load into the table the first one filled | `INSERT INTO main.T (cols) SELECT cols FROM g9snapN.T ORDER BY key` and the same numbering as `copy`: every row is new, so no per-row diff. 232,005 rows took 12.4 s as a merge on an emulator (AgriPad, 2026-10-16) - the diff, not the write, was the cost |
+| `merge` | the table holds some of the file's rows, or has protected rows | set-based per-row rules: protected rows (dirty, command rows, changed after the stage began) are not written but gain membership; identical rows keep their feed position (ADR-0058); everything else is upserted and numbered |
 
 `g9_rows` follows in ONE statement per table from the version table, each written row numbered on the clock in rowid
 (= arrival) order - the numbering the row path gives the same rows. `last_reconcile_utc` of the subscription is the
 file's snapshot time. `G9CApplyDiagnostics.SnapshotFiles`, `FileRows`, `FileCopyMs` and `FileTables` ("Pot":
-"copy", or "copy+merge" across two files) say what happened.
+"copy", or "copy+append" across two files) say what happened.
 
 | Option (`G9CSqliteSyncStoreOptions`) | Default | Meaning |
 |---|---|---|

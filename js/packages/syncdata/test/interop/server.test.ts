@@ -80,8 +80,8 @@ describe.skipIf(unavailable !== null)('the TypeScript client against the real .N
       }
       // Both sites came as files (2 x 25,000 pots, the sample server's threshold is 20,000), copied record for record.
       expect(files).toBe(2);
-      // The first site lands in an empty table (copied record for record), the second merges into it.
-      expect(modes).toContain('Pot:copy+merge');
+      // The first site lands in an empty table (copied record for record), the second - none of whose rows the table holds - is appended.
+      expect(modes).toContain('Pot:copy+append');
       expect(readdirSync(join(folder, 'typescript.g9files'))).toEqual([]);
       compareDatabases(dotnet, join(folder, 'typescript.db'));
     }, 900000);

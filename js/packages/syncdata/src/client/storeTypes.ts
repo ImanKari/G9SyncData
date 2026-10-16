@@ -149,6 +149,8 @@ export const FILE_MODE_COPY = 'copy';
 export const FILE_MODE_COLUMNS = 'columns';
 /** A file table merged into a table that held rows or protected rows: changed rows only. */
 export const FILE_MODE_MERGE = 'merge';
+/** A file table inserted into a table holding only OTHER rows (a second site's first load): every row is new, no per-row diff. */
+export const FILE_MODE_APPEND = 'append';
 
 export class G9ApplyDiagnostics {
   transactions = 0;
@@ -325,6 +327,31 @@ export interface G9ChangeFeedEntry {
   key: string;
   deleted: boolean;
   localPending: boolean;
+}
+
+/**
+ * Narrows a change-feed read to the keys a query of the app's own tables selects (`G9CChangeFeedKeyFilter`): a projection of one
+ * site no longer walks the entries of every other site. Deletions are always returned - their rows are gone, so no query can place
+ * them. `keySql` is one SELECT of one column, embedded as `pk IN (...)`; parameters are bound by name (`$name`, `@name`, `:name`)
+ * and `$g9t`, `$g9a`, `$g9l` belong to the read.
+ */
+export interface G9ChangeFeedKeyFilter {
+  keySql: string;
+  parameters?: { [name: string]: string | number | null };
+}
+
+const RESERVED_FEED_PARAMETERS = ['$g9t', '$g9a', '$g9l'];
+
+/** Throws when the filter cannot be embedded safely (`G9CChangeFeedKeyFilter.Validate`). */
+export function validateChangeFeedKeyFilter(filter: G9ChangeFeedKeyFilter): void {
+  const sql = (filter.keySql ?? '').trim();
+  if (sql.slice(0, 6).toUpperCase() !== 'SELECT' || sql.indexOf(';') >= 0) {
+    throw new Error('A change-feed key filter is a single SELECT statement of one column.');
+  }
+  for (const name of Object.keys(filter.parameters ?? {})) {
+    if (name.length < 2 || '$@:'.indexOf(name[0] as string) < 0) throw new Error(`Change-feed key filter parameter '${name}' must be named ($name, @name or :name).`);
+    if (RESERVED_FEED_PARAMETERS.indexOf(name.toLowerCase()) >= 0) throw new Error(`Change-feed key filter parameter '${name}' is reserved by the read.`);
+  }
 }
 
 export interface G9SyncRejection {
@@ -666,6 +693,8 @@ export interface G9SyncClientStore {
   reevaluateRetained(signal?: AbortSignal): Promise<number>;
   getCommands(state: G9ELocalCommandState | null, limit: number, signal?: AbortSignal): Promise<G9LocalCommand[]>;
   readChangeFeed(localTable: string, afterSequence: number, limit: number, signal?: AbortSignal): Promise<G9ChangeFeedEntry[]>;
+  /** The feed narrowed to the keys `keyFilter` selects, plus every deletion; fewer than `limit` entries means the read is complete. */
+  readChangeFeedFiltered(localTable: string, afterSequence: number, limit: number, keyFilter: G9ChangeFeedKeyFilter, signal?: AbortSignal): Promise<G9ChangeFeedEntry[]>;
   getChangeSequence(signal?: AbortSignal): Promise<number>;
   getChangeFeedFloor(signal?: AbortSignal): Promise<number>;
   getRejections(signal?: AbortSignal): Promise<G9SyncRejection[]>;

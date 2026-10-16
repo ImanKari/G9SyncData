@@ -163,6 +163,51 @@ public sealed class SqliteBulkApplyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_key_filtered_feed_read_returns_one_sites_entries_and_every_deletion_and_nothing_of_the_others()
+    {
+        // Two "sites" in one table, one clock: the second site's rows land after the first's, as a second farm does on a device.
+        await DownloadAsync(30, prefix: "a");
+        await DownloadAsync(40, prefix: "b");
+        await ExecAsync("DELETE FROM Pot WHERE Id = $p0", Key(5, "b"));   // a pending local delete of the OTHER site
+        var filter = new G9CChangeFeedKeyFilter("SELECT Id FROM Pot WHERE Code LIKE $site || '-%'",
+            new Dictionary<string, object?> { ["$site"] = "a" });
+
+        var feed = await _store.ReadChangeFeedAsync("Pot", 0, 1000, filter, CancellationToken.None);
+
+        Assert.Equal(31, feed.Count);
+        Assert.Equal(30, feed.Count(e => !e.Deleted && e.Key.StartsWith(Key(0, "a")[..4], StringComparison.Ordinal)));
+        var deletion = Assert.Single(feed, e => e.Deleted);
+        Assert.Equal(Key(5, "b"), deletion.Key);
+        Assert.Equal(feed.OrderBy(e => e.Sequence).Select(e => e.Sequence), feed.Select(e => e.Sequence));
+
+        // The limit counts only what the filter keeps, so a read that returns less than it is the whole of the site's feed.
+        var capped = await _store.ReadChangeFeedAsync("Pot", 0, 10, filter, CancellationToken.None);
+        Assert.Equal(feed.Take(10).Select(e => e.Key), capped.Select(e => e.Key));
+        var afterFirstSite = feed.Where(e => !e.Deleted).Max(e => e.Sequence);
+        Assert.Equal(deletion.Key, Assert.Single(await _store.ReadChangeFeedAsync("Pot", afterFirstSite, 1000, filter, CancellationToken.None)).Key);
+    }
+
+    [Theory]
+    [InlineData("DELETE FROM Pot")]
+    [InlineData("SELECT Id FROM Pot; DELETE FROM Pot")]
+    public async Task A_key_filter_that_is_not_a_single_select_is_refused_before_it_reaches_the_database(string sql)
+    {
+        await DownloadAsync(10);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _store.ReadChangeFeedAsync("Pot", 0, 1000, new G9CChangeFeedKeyFilter(sql), CancellationToken.None));
+        Assert.Equal(10L, await ScalarAsync("SELECT count(*) FROM Pot"));
+    }
+
+    [Fact]
+    public async Task A_key_filter_may_not_reuse_the_reads_own_parameter_names()
+    {
+        var filter = new G9CChangeFeedKeyFilter("SELECT Id FROM Pot WHERE Status = $g9t", new Dictionary<string, object?> { ["$g9t"] = 1 });
+
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.ReadChangeFeedAsync("Pot", 0, 1000, filter, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Slices_of_a_delta_double_from_the_first_size_up_to_the_cap()
     {
         await _store.DisposeAsync();

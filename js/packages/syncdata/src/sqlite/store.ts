@@ -14,6 +14,7 @@ import {
   G9ESubscriptionState,
   type G9ApplySlice,
   type G9ChangeFeedEntry,
+  type G9ChangeFeedKeyFilter,
   type G9ClientServerState,
   type G9CommandRequest,
   type G9ELocalCommandState,
@@ -721,6 +722,10 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
 
   readChangeFeed(localTable: string, afterSequence: number, limit: number): Promise<G9ChangeFeedEntry[]> {
     return query.readChangeFeed(this, localTable, afterSequence, limit);
+  }
+
+  readChangeFeedFiltered(localTable: string, afterSequence: number, limit: number, keyFilter: G9ChangeFeedKeyFilter): Promise<G9ChangeFeedEntry[]> {
+    return query.readChangeFeedFiltered(this, localTable, afterSequence, limit, keyFilter);
   }
 
   getChangeSequence(): Promise<number> {

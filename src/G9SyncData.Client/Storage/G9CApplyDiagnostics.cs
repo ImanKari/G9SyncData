@@ -56,8 +56,9 @@ public sealed class G9CApplyDiagnostics
 
     /// <summary>
     ///     How each table came out of a snapshot file: <see cref="FileModeCopy" /> (the transfer optimisation: raw records and index
-    ///     b-trees), <see cref="FileModeColumns" /> (an empty table whose columns differ from the file's) or <see cref="FileModeMerge" />
-    ///     (a table that already held rows, or protected rows).
+    ///     b-trees), <see cref="FileModeColumns" /> (an empty table whose columns differ from the file's), <see cref="FileModeAppend" />
+    ///     (a table holding only other rows) or <see cref="FileModeMerge" /> (a table that already held some of the file's rows, or
+    ///     protected rows).
     /// </summary>
     public Dictionary<string, string> FileTables { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -69,6 +70,12 @@ public sealed class G9CApplyDiagnostics
 
     /// <summary>A file table merged into a table that held rows or protected rows: changed rows only.</summary>
     public const string FileModeMerge = "merge";
+
+    /// <summary>
+    ///     A file table inserted into a table that holds OTHER rows only (a second site's first load): no stored row shares a key with
+    ///     the file and none is protected, so every row is new and no per-row diff is needed.
+    /// </summary>
+    public const string FileModeAppend = "append";
 
     /// <summary>
     ///     True when every transaction ran with trigger execution off, false when any ran with it on, null when nothing was applied.
