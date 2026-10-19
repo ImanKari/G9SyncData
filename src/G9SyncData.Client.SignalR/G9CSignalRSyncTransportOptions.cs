@@ -48,4 +48,29 @@ public sealed class G9CSignalRSyncTransportOptions
     public TimeSpan ServerTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan KeepAliveInterval { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    ///     How long a single-answer call (Hello, PlanPull) waits for its answer before it counts as a retryable
+    ///     <c>G9S-NET-FAILURE</c>. Default 60 s; <see cref="TimeSpan.Zero" /> = no limit (ADR-0074).
+    /// </summary>
+    /// <remarks>
+    ///     A live connection does not guarantee an answer: the server's pings keep <see cref="ServerTimeout" /> satisfied while
+    ///     the call's message was lost on the way (a proxy that corrupted it, a LongPolling connection the server already
+    ///     dropped). Without a limit such a call waited for ever and the run never ended — on a phone, a first sync stuck at
+    ///     89 % with no error (2026-10-19).
+    /// </remarks>
+    public TimeSpan CallTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    ///     How long a push may take from its first chunk to its result. Default 10 minutes: a push uploads up to the server's
+    ///     MaxPushBytes and the server applies it before answering, so this is a safety net, not a pace; zero = no limit.
+    /// </summary>
+    public TimeSpan PushTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    ///     How long a server stream (Pull, Reconcile, FetchRows) may go without delivering a chunk before it counts as a retryable
+    ///     <c>G9S-NET-FAILURE</c>; the engine then resumes from its last continuation. Default 120 s, because a site's first
+    ///     snapshot file may still be building when the stream opens; zero = no limit (ADR-0074).
+    /// </summary>
+    public TimeSpan StreamIdleTimeout { get; set; } = TimeSpan.FromSeconds(120);
 }

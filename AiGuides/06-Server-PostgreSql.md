@@ -98,7 +98,9 @@ A pull plan takes `pg_current_snapshot()` as the new snapshot. Parts per include
   at `@prev` and committed before `@new` is included — the case timestamp cursors lose.
 - **Backfill** — only the requested new columns for rows the client already holds.
 
-Each page becomes one frame and one chunk; its last key is the continuation.
+Each page becomes one frame and one chunk; its last key is the continuation. A page is also closed once its rows reach `MaxPageBytes` (1 MiB, ADR-0073),
+checked after each row; such a page is never the part's last, and the next page's `LIMIT` is lowered to what the bound holds at the
+average row size seen so far. A fetch splits one key chunk into as many frames as the bound asks for.
 
 **Every page must cost O(page) wherever it falls in the part** (ADR-0035, LES-0037). A page resumes with `key > @after` on its driving
 table, and PostgreSQL does not carry that inequality across the join: snapshot and reconciliation pages repeat it on the joined tracking

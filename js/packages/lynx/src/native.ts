@@ -90,7 +90,7 @@ export interface G9SyncDataNativeFiles {
  * implementation of the Brotli contract stays valid; the wrappers of this package always have them.
  */
 export interface G9SyncDataNative extends Partial<G9SyncDataNativeFiles> {
-  /** `{ version: '1.4.0', platform: 'android' | 'ios' | 'lynxtron', brotli, snapshotFiles, cacheDirectory }`. */
+  /** `{ version: '1.5.0', platform: 'android' | 'ios' | 'lynxtron', brotli, snapshotFiles, cacheDirectory }`. */
   capabilities(): Promise<G9SyncDataCapabilities>;
   /** The raw Brotli stream `data` decoded off the JS thread: EXACTLY `expectedLength` bytes, or a rejection. */
   brotliDecompress(data: Uint8Array, expectedLength: number): Promise<Uint8Array>;

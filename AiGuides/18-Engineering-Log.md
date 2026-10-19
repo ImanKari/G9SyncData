@@ -662,3 +662,20 @@ with four retries unused. The reconnect now opens each attempt inside the `try` 
 more transient failure. The same device run then waited the outage out and finished with every row
 (`A_reconnect_that_fails_while_the_network_is_still_down_is_retried_not_the_end_of_the_run` fails without it). Lesson:
 nothing that can fail for the same reason as the thing being retried belongs in the handler of that retry.
+
+## LES-0066 — 2026-10-19 · A sync waited for ever at 89 % behind a proxy that rewrote a binary message
+
+AgriPad on Test1 (IIS without WebSockets, so LongPolling) through the Didban tunnel: the tunnel took Android's binary Hello POST,
+labelled `application/x-www-form-urlencoded`, for text, rewrote host names in it and re-encoded it. The server could not read it, never
+answered, kept pinging, and the client waited for ever - no error, the app's creep showing 89 %. A logging proxy between the emulator
+and the tunnel showed the content type; a 13-byte binary invocation sent the same way proved it (direct: answered; through the old
+tunnel: "Connection closed with an error"). Fixed in the tunnel, and here by ADR-0074 (no call or stream waits without a limit).
+Lesson: "the connection is alive" says nothing about whether an answer is coming.
+
+## LES-0067 — 2026-10-19 · A 17.8 MB page cost a dropped connection on a slow LongPolling link
+
+The same rig after the tunnel fix: the people subscription's pages (an avatar per row) were 2,000 rows = 17.8 MB, one message each.
+At ~0.7 MB/s a page took 25 s; the client polls again only after a whole answer, the server dropped the connection after 15 s
+without a poll, and the next poll got 404 - once per page. Raising the server's disconnect timeout would have hidden it and kept dead
+connections longer; the fix is pages bounded by bytes (ADR-0073), so every message is about 1 MiB. Lesson: a page bounded only by rows
+has no size.

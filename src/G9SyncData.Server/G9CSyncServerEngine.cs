@@ -642,7 +642,7 @@ public sealed partial class G9CSyncServerEngine
         {
             await foreach (var page in _store.FetchRowsAsync(new G9CStoreFetchRequest
                                {
-                                   Table = table, Include = include, Columns = columns, Subscription = resolved, Keys = keys, PageRows = _options.PageRows,
+                                   Table = table, Include = include, Columns = columns, Subscription = resolved, Keys = keys, PageRows = _options.PageRows, MaxPageBytes = _options.MaxPageBytes,
                                    FrameVersion = G9SyncProtocol.NegotiateFrameVersion(request.FrameVersion)
                                }, cancellationToken).ConfigureAwait(false))
             {
@@ -1063,6 +1063,7 @@ public sealed partial class G9CSyncServerEngine
             NewSnapshot = payload.NewSnapshot,
             AfterKey = afterKey,
             PageRows = _options.PageRows,
+            MaxPageBytes = _options.MaxPageBytes,
             FrameVersion = G9SyncProtocol.NegotiateFrameVersion(payload.FrameVersion)
         };
     }

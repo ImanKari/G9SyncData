@@ -103,10 +103,23 @@ services.AddG9SyncDataClient(model)
 | `ConfigureHttpConnection`, `ConfigureBuilder` | hooks |
 | `ConnectTimeout` | 20 s |
 | `ServerTimeout` / `KeepAliveInterval` | 30 s / 10 s |
+| `CallTimeout` (Hello, PlanPull) | 60 s (ADR-0074) |
+| `PushTimeout` | 10 min |
+| `StreamIdleTimeout` (between chunks of Pull, Reconcile, FetchRows) | 120 s |
 
 Error mapping: `HubException` with an envelope → that code; other `HubException` → `G9S-SRV-ERROR`; HTTP 401/403 →
 `G9S-AUTH-401` (not retryable); everything else (socket, timeout, "connection is not active") → `G9S-NET-FAILURE`
 (retryable). Caller cancellation is rethrown as is.
+
+A call or stream that runs out of its limit is a retryable `G9S-NET-FAILURE`, and the transport STOPS the connection so the retry
+starts on a fresh one (ADR-0074): a live connection with pings flowing is no proof that an answer is coming.
+
+**A host without WebSockets.** An IIS host without the "WebSocket Protocol" feature offers only ServerSentEvents and LongPolling;
+MessagePack is binary, so the connection runs over LongPolling: one HTTP request per message. It works, but each message is one poll
+answer, and the server drops a connection whose next poll does not come within its disconnect timeout (15 s) - hence the byte bound on
+pages (ADR-0073). A proxy in front of LongPolling must pass request bodies through byte for byte: Android labels the binary POST
+`application/x-www-form-urlencoded` (LES-0066). Install the WebSocket feature on every IIS that hosts the hub. The Lynx client has
+only a WebSocket transport and cannot connect to such a host at all.
 
 Concurrent `ConnectAsync` calls share one attempt. SignalR stateful reconnect is **not** relied on — resumption is
 application-level (batch ids, continuations).

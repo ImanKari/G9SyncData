@@ -72,7 +72,7 @@ internal static class EfScopeFixture
 
     /// <summary>A store-level part request for <c>ef-allowed-pots</c> over <c>farm.Pot</c>, resolved the way the engine resolves one.</summary>
     public static G9CStorePartRequest AllowedPotsPart(SyncHarness harness, Guid[] allowedSites, G9EPullPartKind kind, string newSnapshot,
-        string? previousSnapshot = null, string? afterKey = null)
+        string? previousSnapshot = null, string? afterKey = null, int maxPageBytes = 0)
     {
         var definition = harness.Engine.Model.FindSubscription("ef-allowed-pots")!;
         var include = definition.Tables.Single();
@@ -99,7 +99,8 @@ internal static class EfScopeFixture
             NewSnapshot = newSnapshot,
             PreviousSnapshot = previousSnapshot,
             AfterKey = afterKey,
-            PageRows = 50
+            PageRows = 50,
+            MaxPageBytes = maxPageBytes
         };
     }
 }

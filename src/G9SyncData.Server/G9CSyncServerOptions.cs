@@ -45,6 +45,18 @@ public sealed class G9CSyncServerOptions
     /// <summary>Rows per pull page (one chunk per page).</summary>
     public int PageRows { get; set; } = 2000;
 
+    /// <summary>
+    ///     The most row bytes (uncompressed) one pull or fetch page carries before it is closed early, whatever <see cref="PageRows" />
+    ///     allows. 0 = no byte bound. Default 1 MiB (ADR-0073).
+    /// </summary>
+    /// <remarks>
+    ///     A page is one chunk and one transport message, and a message cannot be split. Bounded by rows alone, a table with an image
+    ///     per row made 17.8 MB messages; over LongPolling on a slow link one such message took 25 s, the server saw no poll for more
+    ///     than its 15 s disconnect timeout and dropped the connection (404 on the next poll). The bound is checked after each row, so
+    ///     one row larger than it still travels, alone. A page closed by bytes resumes after its last row like any other page.
+    /// </remarks>
+    public int MaxPageBytes { get; set; } = 1024 * 1024;
+
     public int MaxPushRows { get; set; } = 50_000;
 
     public int MaxPushBytes { get; set; } = 128 * 1024 * 1024;

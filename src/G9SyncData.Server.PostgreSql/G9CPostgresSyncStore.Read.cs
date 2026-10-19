@@ -50,17 +50,38 @@ public sealed partial class G9CPostgresSyncStore
             yield break;
         }
 
+        var limit = request.PageRows;
         while (true)
         {
             var bound = after;
-            var page = await ReadPartPageAsync(table, request, BuildPartSql(table, request, scope, bound is not null, countOnly: false),
-                parameters => BindPartParameters(parameters, table, request, scope, bound, includeLimit: true), cancellationToken).ConfigureAwait(false);
-            if (page is null) yield break;
-            yield return page;
-            if (page.IsLast) yield break;
-            after = page.LastKey;
+            var pageLimit = limit;
+            var read = await ReadPartPageAsync(table, request, BuildPartSql(table, request, scope, bound is not null, countOnly: false),
+                parameters => BindPartParameters(parameters, table, request, scope, bound, includeLimit: true, limit: pageLimit), pageLimit,
+                cancellationToken).ConfigureAwait(false);
+            if (read.Page is null) yield break;
+            yield return read.Page;
+            if (read.Page.IsLast) yield break;
+            after = read.Page.LastKey;
+            limit = NextPageLimit(request, read.RowsWritten, read.BytesWritten);
         }
     }
+
+    /// <summary>
+    ///     The row limit of the next page, so a byte-bounded page (ADR-0073) is closed by its LIMIT and not by reading rows only to drop
+    ///     them: the request's <c>PageRows</c>, lowered to what <c>MaxPageBytes</c> holds at the average row size seen so far.
+    /// </summary>
+    private static int NextPageLimit(G9CStorePartRequest request, int rowsWritten, long bytesWritten)
+    {
+        if (request.MaxPageBytes <= 0 || rowsWritten <= 0 || bytesWritten <= 0) return request.PageRows;
+        var averageRow = Math.Max(1d, (double)bytesWritten / rowsWritten);
+        return (int)Math.Clamp(Math.Ceiling(request.MaxPageBytes / averageRow) + 1, Math.Min(MinAdaptivePageRows, request.PageRows), request.PageRows);
+    }
+
+    /// <summary>The fewest rows an adapted page asks for: a few very large rows must not turn a part into one query per row.</summary>
+    private const int MinAdaptivePageRows = 16;
+
+    /// <summary>Whether a page has reached its byte bound (ADR-0073) and must be closed after the row just written.</summary>
+    private static bool PageFull(int maxPageBytes, G9CRowBatchWriter writer) => maxPageBytes > 0 && writer.Length >= maxPageBytes;
 
     /// <summary>
     ///     The statement, with its parameters, that one directly paged (not key-set) page of <paramref name="request" /> runs when resumed
@@ -84,11 +105,14 @@ public sealed partial class G9CPostgresSyncStore
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var set = await AcquireKeySetAsync(table, request, scope, cancellationToken).ConfigureAwait(false);
+        var limit = request.PageRows;
         while (true)
         {
             await TouchKeySetAsync(set, cancellationToken).ConfigureAwait(false);
-            var page = await ReadKeySetPageAsync(table, request, set, after, cancellationToken).ConfigureAwait(false);
-            var isLast = page.KeysRead < request.PageRows;
+            var page = await ReadKeySetPageAsync(table, request, set, after, limit, cancellationToken).ConfigureAwait(false);
+
+            // A page closed by bytes (ADR-0073) is never the last: it stopped before its LIMIT, the set did not run out.
+            var isLast = !page.Truncated && page.KeysRead < limit;
 
             // A full key page proves the set existed when it was read (its keys and its row vanish together). A short one may be
             // the end - or a set deleted under us: check, and if it is gone, rebuild and read this page again.
@@ -111,6 +135,7 @@ public sealed partial class G9CPostgresSyncStore
             // The resume point is the last KEY read, not the last row sent: a page whose rows were all filtered out still advances.
             if (page.Rows > 0) yield return new G9CStorePage(page.Frame!, page.Rows, page.LastKey, IsLast: false);
             after = page.LastKey;
+            limit = NextPageLimit(request, page.Rows, page.Bytes);
         }
     }
 
@@ -120,8 +145,8 @@ public sealed partial class G9CPostgresSyncStore
     ///     and limiting afterwards let the planner hash-join the whole set on every page: 9 s instead of 0.5 s for 144 k rows,
     ///     measured.) Rows deleted since the build, failing the row-state filter, or changed after the build are read but not sent.
     /// </summary>
-    private async Task<(byte[]? Frame, int Rows, int KeysRead, string? LastKey)> ReadKeySetPageAsync(PgTable table, G9CStorePartRequest request,
-        PgKeySet set, string? after, CancellationToken cancellationToken)
+    private async Task<(byte[]? Frame, int Rows, int KeysRead, string? LastKey, bool Truncated, long Bytes)> ReadKeySetPageAsync(PgTable table,
+        G9CStorePartRequest request, PgKeySet set, string? after, int limit, CancellationToken cancellationToken)
     {
         var definition = request.Subscription.Definition;
         var key = table.Key.Quoted;
@@ -144,13 +169,14 @@ public sealed partial class G9CPostgresSyncStore
         command.Parameters.Add(P("g9_set", NpgsqlDbType.Bigint, set.SetId));
         command.Parameters.Add(P("g9_build", NpgsqlDbType.Text, set.BuildSnapshot));
         if (after is not null) command.Parameters.Add(KeyParameter("g9_after", table, after));
-        command.Parameters.Add(P("g9_limit", NpgsqlDbType.Integer, request.PageRows));
+        command.Parameters.Add(P("g9_limit", NpgsqlDbType.Integer, limit));
 
         var op = request.Kind == G9EPullPartKind.Backfill ? G9ERowBatchOp.Backfill : G9ERowBatchOp.Upsert;
         var types = request.Columns.Select(c => c.Type).ToArray();
         using var writer = new G9CRowBatchWriter();
         var rows = 0;
         var keys = 0;
+        var truncated = false;
         string? lastKey = null;
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -164,12 +190,18 @@ public sealed partial class G9CPostgresSyncStore
                 BeginRow(writer, reader, table, reader.GetInt64(3), ordinal: 2);
                 for (var i = 0; i < types.Length; i++) WriteValue(writer, reader, 4 + i, types[i]);
                 writer.EndRow();
+                if (PageFull(request.MaxPageBytes, writer))
+                {
+                    truncated = true;
+                    break;
+                }
             }
         }
 
-        if (rows == 0) return (null, 0, keys, lastKey);
+        if (rows == 0) return (null, 0, keys, lastKey, truncated, 0);
+        var bytes = writer.Length;
         writer.EndSection();
-        return (writer.ToFrame(version: request.FrameVersion), rows, keys, lastKey);
+        return (writer.ToFrame(version: request.FrameVersion), rows, keys, lastKey, truncated, bytes);
     }
 
     public async IAsyncEnumerable<G9CStorePage> FetchRowsAsync(G9CStoreFetchRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -188,9 +220,9 @@ public sealed partial class G9CPostgresSyncStore
 
         foreach (var keys in request.Keys.Chunk(Math.Max(1, request.PageRows)))
         {
-            byte[]? frame = null;
-            var rows = 0;
-            string? lastKey = null;
+            // One query per key chunk; its rows leave in as many frames as the byte bound asks for (ADR-0073). A fetch has no resume
+            // point, so splitting its frames changes only how large each message is, never what the device receives.
+            var pages = new List<G9CStorePage>(1);
             await using (var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
             await using (var command = Command(connection, null, sql))
             {
@@ -198,6 +230,8 @@ public sealed partial class G9CPostgresSyncStore
                 BindScopeParameters(command.Parameters, scope, "p_");
                 command.Parameters.Add(KeyArrayParameter("g9_keys", table, keys));
                 using var writer = new G9CRowBatchWriter();
+                var rows = 0;
+                string? lastKey = null;
                 await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                 {
                     while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -206,22 +240,29 @@ public sealed partial class G9CPostgresSyncStore
                         lastKey = BeginRow(writer, reader, table, reader.GetInt64(1));
                         for (var i = 0; i < types.Length; i++) WriteValue(writer, reader, 2 + i, types[i]);
                         writer.EndRow();
+                        if (PageFull(request.MaxPageBytes, writer))
+                        {
+                            writer.EndSection();
+                            pages.Add(new G9CStorePage(writer.ToFrame(version: request.FrameVersion), rows, lastKey, IsLast: false));
+                            writer.Reset();
+                            rows = 0;
+                        }
                     }
                 }
 
                 if (rows > 0)
                 {
                     writer.EndSection();
-                    frame = writer.ToFrame(version: request.FrameVersion);
+                    pages.Add(new G9CStorePage(writer.ToFrame(version: request.FrameVersion), rows, lastKey, IsLast: false));
                 }
             }
 
-            if (frame is not null) yield return new G9CStorePage(frame, rows, lastKey, IsLast: false);
+            foreach (var page in pages) yield return page;
         }
     }
 
-    private async Task<G9CStorePage?> ReadPartPageAsync(PgTable table, G9CStorePartRequest request, string sql, Action<NpgsqlParameterCollection> bind,
-        CancellationToken cancellationToken)
+    private async Task<(G9CStorePage? Page, int RowsWritten, long BytesWritten)> ReadPartPageAsync(PgTable table, G9CStorePartRequest request,
+        string sql, Action<NpgsqlParameterCollection> bind, int limit, CancellationToken cancellationToken)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = Command(connection, null, sql);
@@ -236,6 +277,8 @@ public sealed partial class G9CPostgresSyncStore
         List<(string Key, long Version)>? tombstones = null;
         List<(string Key, long Version)>? moveOuts = null;
         var rows = 0;
+        var rowsWritten = 0;
+        var truncated = false;
         string? lastKey = null;
 
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
@@ -251,6 +294,15 @@ public sealed partial class G9CPostgresSyncStore
                     lastKey = BeginRow(writer, reader, table, version);
                     for (var i = 0; i < types.Length; i++) WriteValue(writer, reader, firstValue + i, types[i]);
                     writer.EndRow();
+                    rowsWritten++;
+
+                    // Closed after this row once the page is full (ADR-0073); the next page resumes after it. Tombstones and move-outs
+                    // are keys only and never fill a page.
+                    if (PageFull(request.MaxPageBytes, writer))
+                    {
+                        truncated = true;
+                        break;
+                    }
                 }
                 else
                 {
@@ -261,11 +313,13 @@ public sealed partial class G9CPostgresSyncStore
             }
         }
 
-        if (rows == 0) return null;
+        if (rows == 0) return (null, 0, 0);
+        long bytes = writer.Length;
         if (writer.InSection) writer.EndSection();
         AppendKeySection(writer, G9ERowBatchOp.Tombstone, table, tombstones);
         AppendKeySection(writer, G9ERowBatchOp.MoveOut, table, moveOuts);
-        return new G9CStorePage(writer.ToFrame(version: request.FrameVersion), rows, lastKey, rows < request.PageRows);
+        var page = new G9CStorePage(writer.ToFrame(version: request.FrameVersion), rows, lastKey, IsLast: !truncated && rows < limit);
+        return (page, rowsWritten, bytes);
     }
 
     private static string BuildPartSql(PgTable table, G9CStorePartRequest request, PgScope boundScope, bool withAfter, bool countOnly)
@@ -307,7 +361,7 @@ public sealed partial class G9CPostgresSyncStore
     }
 
     private static void BindPartParameters(NpgsqlParameterCollection parameters, PgTable table, G9CStorePartRequest request, PgScope scope, string? after,
-        bool includeLimit)
+        bool includeLimit, int? limit = null)
     {
         BindSubscription(parameters, request.Subscription, "p_");
         BindScopeParameters(parameters, scope, "p_");
@@ -319,6 +373,6 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         if (after is not null) parameters.Add(KeyParameter("g9_after", table, after));
-        if (includeLimit) parameters.Add(P("g9_limit", NpgsqlDbType.Integer, request.PageRows));
+        if (includeLimit) parameters.Add(P("g9_limit", NpgsqlDbType.Integer, limit ?? request.PageRows));
     }
 }

@@ -44,6 +44,7 @@ the agriculture repository root.
 | Before promising a feature | [17-Known-Limitations.md](17-Known-Limitations.md) |
 | Performance numbers, benchmarks | [19-Performance.md](19-Performance.md) |
 | Large first downloads as SQLite snapshot files | ADR-0072 in [10-Decisions.md](10-Decisions.md), then [04](04-Protocol.md) → Snapshot files, [05](05-Server-Model.md), [08](08-Client-Sqlite.md), [21](21-TypeScript-And-Lynx.md) |
+| Message size and time limits (a page bounded by bytes; call, push and stream-idle limits; hosts without WebSockets) | ADR-0073 and ADR-0074 in [10-Decisions.md](10-Decisions.md), then [06](06-Server-PostgreSql.md), [11](11-Transport-SignalR.md), LES-0066/0067 in [18](18-Engineering-Log.md) |
 | The TypeScript/Lynx client, or any change the .NET client and it must share | [21-TypeScript-And-Lynx.md](21-TypeScript-And-Lynx.md), then `js/packages/syncdata/PARITY.md` |
 
 ## Chapters

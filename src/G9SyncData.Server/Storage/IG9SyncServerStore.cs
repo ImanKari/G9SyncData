@@ -190,6 +190,13 @@ public sealed class G9CStorePartRequest
     public string? AfterKey { get; init; }
     public required int PageRows { get; init; }
 
+    /// <summary>
+    ///     Close a page early once its rows reach this many bytes (uncompressed); 0 = rows only. Checked after each row, so a page
+    ///     closed by bytes is never empty and resumes after its last row (ADR-0073). A store that ignores it stays correct, only
+    ///     its chunks are larger.
+    /// </summary>
+    public int MaxPageBytes { get; init; }
+
     /// <summary>G9RowBatch body layout of the frames this request produces (<see cref="G9SyncData.Protocol.G9SyncProtocol.NegotiateFrameVersion" />).</summary>
     public int FrameVersion { get; init; } = 1;
 }
@@ -202,6 +209,13 @@ public sealed class G9CStoreFetchRequest
     public required G9CResolvedSubscription Subscription { get; init; }
     public required IReadOnlyList<string> Keys { get; init; }
     public required int PageRows { get; init; }
+
+    /// <summary>
+    ///     Close a page early once its rows reach this many bytes (uncompressed); 0 = rows only. Checked after each row, so a page
+    ///     closed by bytes is never empty and resumes after its last row (ADR-0073). A store that ignores it stays correct, only
+    ///     its chunks are larger.
+    /// </summary>
+    public int MaxPageBytes { get; init; }
 
     /// <summary>G9RowBatch body layout of the frames this request produces (<see cref="G9SyncData.Protocol.G9SyncProtocol.NegotiateFrameVersion" />).</summary>
     public int FrameVersion { get; init; } = 1;

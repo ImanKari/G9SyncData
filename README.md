@@ -11,7 +11,7 @@ the .NET client byte for byte.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.4.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.5.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -22,6 +22,17 @@ the .NET client byte for byte.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.5.0
+
+- **A page is bounded by bytes as well as rows** (ADR-0073). `G9CSyncServerOptions.MaxPageBytes` (1 MiB; 0 = rows only) closes a
+  pull or fetch page once its rows reach it; such a page resumes after its last row, and the next page's limit follows the row size
+  seen. A page is one message and a message cannot be split: a table with an image per row made 17.8 MB messages, and over
+  LongPolling on a slow link one of them outlived the server's 15 s disconnect timeout and cost the connection, page after page.
+- **No call or stream waits for ever** (ADR-0074, both clients). `CallTimeout` (Hello, PlanPull: 60 s), `PushTimeout` (10 min) and
+  `StreamIdleTimeout` (between chunks: 120 s) end a wait that a live connection does not answer - a proxy had corrupted a Hello and a
+  device sat at 89 % of its first sync for half an hour - as a retryable `G9S-NET-FAILURE`, and the transport drops the connection
+  so the engine's retry runs on a fresh one. TypeScript: `callTimeoutMs`, `pushTimeoutMs`, `streamIdleTimeoutMs`.
 
 ## What's new in 1.4.0
 

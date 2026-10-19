@@ -1776,3 +1776,59 @@ first requester waits for the build.
 - The device side of Lynx is proven in each native core, on a Lynx-shaped runtime, and on real devices: the Android
   module in a Lynx host on a Samsung tablet and the iOS module in a Lynx host on an iPhone (`js/apps/lynx-ios-host`,
   N-SD-07 in `js/packages/lynx/Native-Validation-Pending.md`).
+
+## ADR-0073 — A page is bounded by bytes as well as rows
+
+**Status:** accepted (2026-10-19).
+
+**Context.** A pull or fetch page was bounded only by `PageRows` (2,000). A page is one chunk and one transport message, and SignalR
+cannot split a message. On AgriPad's people subscription, where every row carries an avatar, one page weighed 17.8 MB. Over
+LongPolling (an IIS host without the WebSocket feature) behind a slow tunnel (~0.7 MB/s) that message took 25 s to arrive; the client
+sends its next poll only after a whole answer, the server's disconnect timeout (15 s without a poll) had already removed the
+connection, and the next poll got 404. The engine reconnected and resumed, but every large page cost a dropped connection, and on one
+run the resumed stream then waited for ever (ADR-0074).
+
+**Decision.**
+1. `G9CSyncServerOptions.MaxPageBytes`, default 1 MiB (0 = rows only), reaches the store as `G9CStorePartRequest.MaxPageBytes` and
+   `G9CStoreFetchRequest.MaxPageBytes`. The bound is the uncompressed row bytes the writer holds (`G9CRowBatchWriter.Length`),
+   checked AFTER each row: a page closed by bytes is never empty, and one row larger than the bound still travels, alone.
+2. A part page closed by bytes is never the part's last; it resumes after its last row like any page (snapshot, delta, backfill and
+   key-set pages alike - a key-set page closed early is not taken for "the set ran out"). Tombstones and move-outs are keys only and
+   never close a page.
+3. The next page's `LIMIT` follows the bytes: `PageRows`, lowered to what `MaxPageBytes` holds at the average row size seen so far
+   (at least 16), so a wide table is not read 2,000 rows at a time only to send ~100.
+4. A fetch splits one key chunk's rows into as many frames as the bound asks for (a fetch has no resume point, so only the message
+   size changes).
+5. 1 MiB matches the snapshot-file segment size (ADR-0072): every message the server streams is about the same size.
+
+**Consequences.** No wire or client change: chunks, continuations and frames are the same, only smaller where rows are wide. A custom
+`IG9SyncServerStore` that ignores the field stays correct, with larger chunks. More messages for wide tables (1 MiB each instead of
+up to 17.8 MB), which is noise next to the transfer. Raising the server's disconnect timeout instead was rejected: it hides the
+symptom and keeps dead connections (and their pull slots) longer. Tests: `PageBytesTests`.
+
+## ADR-0074 — Every call has a time limit, every stream an idle limit, and either one ending drops the connection
+
+**Status:** accepted (2026-10-19). Both clients (ADR-0070).
+
+**Context.** A live connection does not guarantee an answer. On 2026-10-19 a proxy in front of a LongPolling hub rewrote a binary
+Hello it took for text; the server could not read it and never answered, its pings kept `ServerTimeout` satisfied, and the client
+waited for ever: the device sat at 89 % of its first sync with no error, for 30 minutes. After a 404'd LongPolling connection
+(ADR-0073) a resumed Pull stream likewise waited without end. Nothing in the client could end such a wait.
+
+**Decision.**
+1. Transport options (both clients): `CallTimeout` / `callTimeoutMs` for Hello and PlanPull (60 s), `PushTimeout` / `pushTimeoutMs`
+   for a push (10 min - it uploads up to `MaxPushBytes` and the server applies it before it answers: a safety net, not a pace), and
+   `StreamIdleTimeout` / `streamIdleTimeoutMs` between two chunks of a Pull, Reconcile or FetchRows stream (120 s - a site's
+   snapshot file may still be building when its stream opens). Zero = no limit.
+2. A limit that ends is a retryable `G9S-NET-FAILURE` ("did not answer Hello within 60 s", "sent nothing on Pull for 120 s"); the
+   engine's ordinary retry resumes from the staged continuation. The caller's own cancellation stays a cancellation.
+3. The idle limit runs only while the transport waits for the next chunk, never while the caller processes one.
+4. When a limit ends, the transport STOPS the connection; the retry connects afresh. A hub runs one invocation per connection at a
+   time, so a retry on the old connection would queue behind the call that never answered (the first version of the test proved
+   it); and whatever lost that answer may lose the next.
+5. Logged as events 20203 (call) and 20204 (stream) in .NET.
+
+**Consequences.** A sync can no longer hang on a silent server; the worst case is a bounded wait and the engine's retries, then a
+failed run the app can show. A server that legitimately takes longer than a limit before its first answer needs a longer option on
+the client. Tests: `SignalRTimeoutTests` (.NET, a real hub that withholds answers), `test/transportTimeouts.test.ts` (TypeScript, a
+client that never answers).

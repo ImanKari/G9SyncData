@@ -73,50 +73,23 @@ public sealed partial class G9CSignalRSyncTransport
         return connecting.WaitAsync(cancellationToken);
     }
 
-    public async Task<G9DtHelloResult> HelloAsync(G9DtHelloRequest request, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await _server.HelloAsync(request, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (Map(ex, cancellationToken) is { } mapped)
-        {
-            throw mapped;
-        }
-    }
+    public Task<G9DtHelloResult> HelloAsync(G9DtHelloRequest request, CancellationToken cancellationToken) =>
+        CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(request, token), cancellationToken);
 
-    public async Task<G9DtPushResult> PushAsync(G9DtPushRequest request, IAsyncEnumerable<G9DtSyncChunk> chunks, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await _server.PushAsync(request, chunks, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (Map(ex, cancellationToken) is { } mapped)
-        {
-            throw mapped;
-        }
-    }
+    public Task<G9DtPushResult> PushAsync(G9DtPushRequest request, IAsyncEnumerable<G9DtSyncChunk> chunks, CancellationToken cancellationToken) =>
+        CallAsync(G9SyncProtocol.Methods.Push, _options.PushTimeout, token => _server.PushAsync(request, chunks, token), cancellationToken);
 
-    public async Task<G9DtPullPlan> PlanPullAsync(G9DtPullRequest request, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await _server.PlanPullAsync(request, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (Map(ex, cancellationToken) is { } mapped)
-        {
-            throw mapped;
-        }
-    }
+    public Task<G9DtPullPlan> PlanPullAsync(G9DtPullRequest request, CancellationToken cancellationToken) =>
+        CallAsync(G9SyncProtocol.Methods.PlanPull, _options.CallTimeout, token => _server.PlanPullAsync(request, token), cancellationToken);
 
     public IAsyncEnumerable<G9DtSyncChunk> PullAsync(string token, G9DtPullContinuation? continuation, CancellationToken cancellationToken) =>
-        MapStream(_server.PullAsync(token, continuation, cancellationToken), cancellationToken);
+        MapStream(G9SyncProtocol.Methods.Pull, streamToken => _server.PullAsync(token, continuation, streamToken), cancellationToken);
 
     public IAsyncEnumerable<G9DtSyncChunk> ReconcileAsync(G9DtReconcileRequest request, CancellationToken cancellationToken) =>
-        MapStream(_server.ReconcileAsync(request, cancellationToken), cancellationToken);
+        MapStream(G9SyncProtocol.Methods.Reconcile, streamToken => _server.ReconcileAsync(request, streamToken), cancellationToken);
 
     public IAsyncEnumerable<G9DtSyncChunk> FetchRowsAsync(G9DtFetchRowsRequest request, CancellationToken cancellationToken) =>
-        MapStream(_server.FetchRowsAsync(request, cancellationToken), cancellationToken);
+        MapStream(G9SyncProtocol.Methods.FetchRows, streamToken => _server.FetchRowsAsync(request, streamToken), cancellationToken);
 
     // ================================================================ plumbing
 
@@ -145,9 +118,59 @@ public sealed partial class G9CSignalRSyncTransport
         }
     }
 
-    private static async IAsyncEnumerable<G9DtSyncChunk> MapStream(IAsyncEnumerable<G9DtSyncChunk> source, [EnumeratorCancellation] CancellationToken cancellationToken)
+    /// <summary>
+    ///     One single-answer call under <paramref name="timeout" /> (ADR-0074): an answer that does not come in time is a retryable
+    ///     <c>G9S-NET-FAILURE</c>, never a wait for ever. The caller's own cancellation still surfaces as a cancellation.
+    /// </summary>
+    private async Task<T> CallAsync<T>(string method, TimeSpan timeout, Func<CancellationToken, Task<T>> call, CancellationToken cancellationToken)
     {
-        var enumerator = source.GetAsyncEnumerator(cancellationToken);
+        using var limit = timeout > TimeSpan.Zero ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken) : null;
+        limit?.CancelAfter(timeout);
+        try
+        {
+            return await call(limit?.Token ?? cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (limit is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+        {
+            LogCallTimedOut(_logger, method, timeout.TotalSeconds);
+            await DropConnectionAsync().ConfigureAwait(false);
+            throw new G9CSyncException(G9SyncErrorCodes.NetworkFailure,
+                $"The sync server did not answer {method} within {timeout.TotalSeconds:0} s.", ex) { Retryable = true };
+        }
+        catch (Exception ex) when (Map(ex, cancellationToken) is { } mapped)
+        {
+            throw mapped;
+        }
+    }
+
+    /// <summary>
+    ///     Ends the connection after a call or stream ran out of time, so the retry runs on a fresh one. The old connection is not to be
+    ///     trusted: the server runs one invocation per connection at a time, so a retry on it would queue behind the call that never
+    ///     answered — and whatever lost that answer (a dropped LongPolling connection, a broken proxy) may have lost the next one too.
+    /// </summary>
+    private async Task DropConnectionAsync()
+    {
+        try
+        {
+            using var limit = new CancellationTokenSource(_options.ConnectTimeout);
+            await Connection.StopAsync(limit.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // Stopping a connection that is already gone may throw; the next call connects afresh either way.
+        }
+    }
+
+    /// <summary>
+    ///     A server stream with an idle limit between chunks (ADR-0074). The limit runs only while the transport waits for the next
+    ///     chunk, never while the caller processes one, and ending it cancels the invocation on the server too.
+    /// </summary>
+    private async IAsyncEnumerable<G9DtSyncChunk> MapStream(string method, Func<CancellationToken, IAsyncEnumerable<G9DtSyncChunk>> open,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var timeout = _options.StreamIdleTimeout;
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var enumerator = open(idle.Token).GetAsyncEnumerator(idle.Token);
         try
         {
             while (true)
@@ -155,8 +178,17 @@ public sealed partial class G9CSignalRSyncTransport
                 G9DtSyncChunk chunk;
                 try
                 {
+                    if (timeout > TimeSpan.Zero) idle.CancelAfter(timeout);
                     if (!await enumerator.MoveNextAsync().ConfigureAwait(false)) yield break;
+                    if (timeout > TimeSpan.Zero) idle.CancelAfter(Timeout.InfiniteTimeSpan);
                     chunk = enumerator.Current;
+                }
+                catch (Exception ex) when (idle.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    LogStreamIdle(_logger, method, timeout.TotalSeconds);
+                    await DropConnectionAsync().ConfigureAwait(false);
+                    throw new G9CSyncException(G9SyncErrorCodes.NetworkFailure,
+                        $"The sync server sent nothing on {method} for {timeout.TotalSeconds:0} s.", ex) { Retryable = true };
                 }
                 catch (Exception ex) when (Map(ex, cancellationToken) is { } mapped)
                 {
@@ -225,4 +257,10 @@ public sealed partial class G9CSignalRSyncTransport
 
     [LoggerMessage(EventId = 20202, Level = LogLevel.Warning, Message = "A ChangesAvailable handler threw")]
     private static partial void LogPokeHandlerFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 20203, Level = LogLevel.Warning, Message = "G9Sync {Method} got no answer within {Seconds} s; failing it as retryable")]
+    private static partial void LogCallTimedOut(ILogger logger, string method, double seconds);
+
+    [LoggerMessage(EventId = 20204, Level = LogLevel.Warning, Message = "G9Sync {Method} stream sent nothing for {Seconds} s; failing it as retryable")]
+    private static partial void LogStreamIdle(ILogger logger, string method, double seconds);
 }

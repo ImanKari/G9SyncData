@@ -57,6 +57,19 @@ export interface G9SignalRSyncTransportOptions {
   serverTimeoutMs?: number;
   keepAliveIntervalMs?: number;
   /**
+   * How long a single-answer call (Hello, PlanPull) waits for its answer before it is a retryable G9S-NET-FAILURE (ADR-0074).
+   * Default 60000; 0 = no limit. A live connection does not guarantee an answer: pings keep it up while the call's message
+   * was lost on the way.
+   */
+  callTimeoutMs?: number;
+  /** How long a push may take from its first chunk to its result; a safety net, not a pace. Default 600000; 0 = no limit. */
+  pushTimeoutMs?: number;
+  /**
+   * How long a server stream (Pull, Reconcile, FetchRows) may go without a chunk before it is a retryable G9S-NET-FAILURE; the
+   * engine resumes from its last continuation. Default 120000 (a snapshot file may still be building); 0 = no limit (ADR-0074).
+   */
+  streamIdleTimeoutMs?: number;
+  /**
    * Everything else the G9 client takes (transport, headers, WebSocket constructor, skipNegotiation, reconnect policy, log
    * level…) — the twin of ConfigureHttpConnection/ConfigureBuilder. `url`, `protocol` and the timeouts above win.
    */
@@ -149,12 +162,12 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
   }
 
   hello(request: G9DtHelloRequest, signal?: AbortSignal): Promise<G9DtHelloResult> {
-    return this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(request)], readHelloResult, signal);
+    return this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(request)], readHelloResult, this._callTimeoutMs(), signal);
   }
 
   push(request: G9DtPushRequest, chunks: AsyncIterable<G9DtSyncChunk>, signal?: AbortSignal): Promise<G9DtPushResult> {
     const subject = new Subject<unknown>();
-    const result = this._invoke(G9SyncProtocol.Methods.Push, [this._wire(request), subject], readPushResult, signal);
+    const result = this._invoke(G9SyncProtocol.Methods.Push, [this._wire(request), subject], readPushResult, this._options.pushTimeoutMs ?? 600000, signal);
     void (async () => {
       try {
         for await (const chunk of chunks) subject.next(this._wire(chunk));
@@ -167,7 +180,7 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
   }
 
   planPull(request: G9DtPullRequest, signal?: AbortSignal): Promise<G9DtPullPlan> {
-    return this._invoke(G9SyncProtocol.Methods.PlanPull, [this._wire(request)], readPullPlan, signal);
+    return this._invoke(G9SyncProtocol.Methods.PlanPull, [this._wire(request)], readPullPlan, this._callTimeoutMs(), signal);
   }
 
   pull(token: string, continuation: G9DtPullContinuation | null, signal?: AbortSignal): AsyncIterable<G9DtSyncChunk> {
@@ -197,22 +210,52 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
     return this.format === 'messagepack' ? fromMessagePackNames(value) : value;
   }
 
-  private async _invoke<T>(method: string, args: unknown[], read: (value: unknown) => T, signal?: AbortSignal): Promise<T> {
+  private _callTimeoutMs(): number {
+    return this._options.callTimeoutMs ?? 60000;
+  }
+
+  private async _invoke<T>(method: string, args: unknown[], read: (value: unknown) => T, timeoutMs: number, signal?: AbortSignal): Promise<T> {
     if (signal && signal.aborted) throw new G9SyncException(G9SyncErrorCodes.Canceled, 'The call was canceled.');
     let unsubscribe: () => void = () => undefined;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
     try {
       const call = this.client.connection.invoke(method, ...args);
-      const raw = signal
-        ? await new Promise<unknown>((resolve, reject) => {
-            unsubscribe = onAbort(signal, () => reject(new G9SyncException(G9SyncErrorCodes.Canceled, 'The call was canceled.')));
-            call.then(resolve, reject);
-          })
-        : await call;
+      const raw =
+        signal || timeoutMs > 0
+          ? await new Promise<unknown>((resolve, reject) => {
+              if (signal) unsubscribe = onAbort(signal, () => reject(new G9SyncException(G9SyncErrorCodes.Canceled, 'The call was canceled.')));
+              if (timeoutMs > 0) {
+                timer = setTimeout(() => {
+                  timedOut = true;
+                  reject(
+                    new G9SyncException(G9SyncErrorCodes.NetworkFailure, `The sync server did not answer ${method} within ${Math.round(timeoutMs / 1000)} s.`, {
+                      retryable: true,
+                    }),
+                  );
+                }, timeoutMs);
+              }
+              call.then(resolve, reject);
+            })
+          : await call;
       return read(this._read(raw));
     } catch (error) {
+      // ADR-0074: the answer did not come in time. The connection is not trusted any more (the server runs one invocation per
+      // connection at a time, and whatever lost this answer may lose the next): drop it, so the retry runs on a fresh one.
+      if (timedOut) await this._dropConnection();
       throw mapError(error, signal ? signal.aborted : false) ?? error;
     } finally {
+      if (timer !== null) clearTimeout(timer);
       unsubscribe();
+    }
+  }
+
+  /** Ends the connection after a call or stream ran out of time (ADR-0074); the next call connects afresh. Never throws. */
+  private async _dropConnection(): Promise<void> {
+    try {
+      await this.client.connection.stop();
+    } catch {
+      // Stopping a connection that is already gone may throw; the next call connects afresh either way.
     }
   }
 
@@ -232,6 +275,29 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
           if (w) w();
         };
         let unsubscribeAbort: () => void = () => undefined;
+        // ADR-0074: the idle limit runs only while the iterator waits for the next chunk, never while the caller processes one.
+        const idleMs = self._options.streamIdleTimeoutMs ?? 120000;
+        let idleTimer: ReturnType<typeof setTimeout> | null = null;
+        let idleExpired = false;
+        const stopIdle = (): void => {
+          if (idleTimer !== null) clearTimeout(idleTimer);
+          idleTimer = null;
+        };
+        const armIdle = (): void => {
+          stopIdle();
+          if (idleMs <= 0 || done) return;
+          idleTimer = setTimeout(() => {
+            idleTimer = null;
+            if (done) return;
+            idleExpired = true;
+            failure = new G9SyncException(G9SyncErrorCodes.NetworkFailure, `The sync server sent nothing on ${method} for ${Math.round(idleMs / 1000)} s.`, {
+              retryable: true,
+            });
+            done = true;
+            subscription?.dispose();
+            notify();
+          }, idleMs);
+        };
         const start = (): void => {
           if (subscription || done) return;
           let stream: IStreamResult<unknown>;
@@ -265,6 +331,7 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
           });
         };
         const finish = (): void => {
+          stopIdle();
           unsubscribeAbort();
           if (subscription && !done) subscription.dispose();
           done = true;
@@ -274,12 +341,18 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
             start();
             for (;;) {
               const item = queue.shift();
-              if (item) return { value: item, done: false };
+              if (item) {
+                stopIdle();
+                return { value: item, done: false };
+              }
               if (done) {
+                stopIdle();
                 unsubscribeAbort();
+                if (idleExpired) await self._dropConnection();
                 if (failure !== null) throw mapError(failure, signal ? signal.aborted : false) ?? failure;
                 return { value: undefined as unknown as G9DtSyncChunk, done: true };
               }
+              if (idleTimer === null) armIdle();
               await new Promise<void>((resolve) => {
                 wake = resolve;
               });
