@@ -103,7 +103,8 @@ services.AddG9SyncDataClient(model)
 | `ConfigureHttpConnection`, `ConfigureBuilder` | hooks |
 | `ConnectTimeout` | 20 s |
 | `ServerTimeout` / `KeepAliveInterval` | 30 s / 10 s |
-| `CallTimeout` (Hello, PlanPull) | 60 s (ADR-0074) |
+| `CallTimeout` (Hello) | 60 s (ADR-0074) |
+| `PlanTimeout` (PlanPull: key sets, snapshot-file plan) | 5 min (1.5.1) |
 | `PushTimeout` | 10 min |
 | `StreamIdleTimeout` (between chunks of Pull, Reconcile, FetchRows) | 120 s |
 

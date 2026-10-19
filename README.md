@@ -11,7 +11,7 @@ the .NET client byte for byte.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.5.0.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.5.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -22,6 +22,12 @@ the .NET client byte for byte.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.5.1
+
+- **A plan has a limit of its own.** `PlanTimeout` (TypeScript `planTimeoutMs`), 5 minutes, instead of the 60 s Hello limit 1.5.0 gave
+  PlanPull: a site's first plan builds key sets and plans its snapshot file (16 s for 450,000 rows on a desktop server), and a slower
+  server must not have it abandoned and asked again (ADR-0074 amendment, LES-0068).
 
 ## What's new in 1.5.0
 

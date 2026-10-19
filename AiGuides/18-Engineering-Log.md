@@ -679,3 +679,10 @@ At ~0.7 MB/s a page took 25 s; the client polls again only after a whole answer,
 without a poll, and the next poll got 404 - once per page. Raising the server's disconnect timeout would have hidden it and kept dead
 connections longer; the fix is pages bounded by bytes (ADR-0073), so every message is about 1 MiB. Lesson: a page bounded only by rows
 has no size.
+
+## LES-0068 — 2026-10-19 · A site's first plan took 16 s, and 1.5.0 gave it the 60 s of a Hello
+
+The 1.5.0 emulator run through the Didban tunnel opened a 450,000-row farm: the server took 16 s (desktop, local database) to answer
+its PlanPull - key sets and the snapshot-file plan. 1.5.0 had put PlanPull under the Hello limit (60 s), which a slower server would
+have exceeded, dropping the connection and asking for the same plan again. 1.5.1 gives PlanPull its own 5-minute limit. Lesson: a
+limit belongs to what the call DOES, not to its shape - two calls that both "return one answer" can differ by two orders of magnitude.

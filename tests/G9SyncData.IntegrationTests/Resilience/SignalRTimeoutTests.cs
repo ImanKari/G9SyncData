@@ -59,6 +59,28 @@ public sealed class SignalRTimeoutTests(ITestOutputHelper output)
     }
 
     [PostgresFact]
+    public async Task A_slow_plan_is_not_cut_by_the_hello_limit()
+    {
+        // 1.5.1: a site's first plan builds key sets and plans a snapshot file (16 s for 450,000 rows on a desktop). Under the Hello
+        // limit it was abandoned and asked again; it has a limit of its own.
+        var stall = new Staller(G9SyncProtocol.Methods.PlanPull, stallCalls: 1, delay: TimeSpan.FromSeconds(3));
+        await using var harness = await SyncHarness.CreateAsync(output, transport: SyncTransportKind.SignalR,
+            server: builder => builder.Services.Configure<HubOptions>(options => options.AddFilter(stall)));
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 20);
+        await using var client = await harness.CreateClientAsync(o => o.RetryBaseDelay = TimeSpan.FromMilliseconds(50),
+            transportFactory: () => Transport(harness, o => o.CallTimeout = TimeSpan.FromSeconds(1)));
+        await client.Engine.SubscribeAsync("sites");
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+
+        await client.SyncOkAsync();
+
+        Assert.Equal(20, await client.CountAsync("Pot"));
+        Assert.Equal(1, stall.Calls);
+    }
+
+    [PostgresFact]
     public async Task A_pull_stream_that_goes_silent_is_ended_by_its_idle_limit_and_resumes_from_its_continuation()
     {
         var stall = new Staller(G9SyncProtocol.Methods.Pull, stallCalls: 1, stallAfterItems: 2);
@@ -88,7 +110,7 @@ public sealed class SignalRTimeoutTests(ITestOutputHelper output)
     }
 
     /// <summary>Holds the first <c>stallCalls</c> invocations of a method without an answer (or a stream after a few items).</summary>
-    private sealed class Staller(string method, int stallCalls, int stallAfterItems = 0) : IHubFilter
+    private sealed class Staller(string method, int stallCalls, int stallAfterItems = 0, TimeSpan? delay = null) : IHubFilter
     {
         private int _calls;
 
@@ -110,7 +132,7 @@ public sealed class SignalRTimeoutTests(ITestOutputHelper output)
             if (method != G9SyncProtocol.Methods.Pull)
             {
                 // The answer is lost: nothing comes back while the connection stays up and pings flow.
-                await Task.Delay(TimeSpan.FromSeconds(30), invocationContext.Context.ConnectionAborted).ConfigureAwait(false);
+                await Task.Delay(delay ?? TimeSpan.FromSeconds(30), invocationContext.Context.ConnectionAborted).ConfigureAwait(false);
                 return await next(invocationContext);
             }
 

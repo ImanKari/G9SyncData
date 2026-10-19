@@ -80,7 +80,7 @@ public sealed partial class G9CSignalRSyncTransport
         CallAsync(G9SyncProtocol.Methods.Push, _options.PushTimeout, token => _server.PushAsync(request, chunks, token), cancellationToken);
 
     public Task<G9DtPullPlan> PlanPullAsync(G9DtPullRequest request, CancellationToken cancellationToken) =>
-        CallAsync(G9SyncProtocol.Methods.PlanPull, _options.CallTimeout, token => _server.PlanPullAsync(request, token), cancellationToken);
+        CallAsync(G9SyncProtocol.Methods.PlanPull, _options.PlanTimeout, token => _server.PlanPullAsync(request, token), cancellationToken);
 
     public IAsyncEnumerable<G9DtSyncChunk> PullAsync(string token, G9DtPullContinuation? continuation, CancellationToken cancellationToken) =>
         MapStream(G9SyncProtocol.Methods.Pull, streamToken => _server.PullAsync(token, continuation, streamToken), cancellationToken);

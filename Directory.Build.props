@@ -49,7 +49,7 @@
       The npm packages of js/ (@g9tm/syncdata, @g9tm/syncdata-lynx) carry the same version; js/scripts/check-versions.mjs
       fails the build when any of them, their VERSION constants or the native modules drift from this value.
     -->
-    <G9SyncDataVersion>1.5.0</G9SyncDataVersion>
+    <G9SyncDataVersion>1.5.1</G9SyncDataVersion>
     <Version>$(G9SyncDataVersion)</Version>
 
     <Authors>Iman Kari</Authors>

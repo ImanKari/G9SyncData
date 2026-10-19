@@ -64,9 +64,15 @@ describe('transport limits (ADR-0074)', () => {
     expect(fake.stops).toBe(1);
   });
 
-  it('plan pull has the same limit', async () => {
+  it('plan pull has a limit of its own, not the hello limit (1.5.1)', async () => {
     const fake = fakeClient();
-    const error = await failureOf(transport(fake, { callTimeoutMs: 50 }).planPull({} as never));
+    const outcome = await Promise.race([
+      transport(fake, { callTimeoutMs: 20 }).planPull({} as never).then(() => 'answered', () => 'failed'),
+      new Promise((resolve) => setTimeout(() => resolve('still waiting'), 150)),
+    ]);
+    expect(outcome).toBe('still waiting');
+
+    const error = await failureOf(transport(fake, { planTimeoutMs: 50 }).planPull({} as never));
     expect(error.code).toBe(G9SyncErrorCodes.NetworkFailure);
     expect(error.message).toContain('PlanPull');
   });

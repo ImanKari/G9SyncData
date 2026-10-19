@@ -45,7 +45,7 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
 | `ExportPendingChangesAsync(path)` | `exportPendingChanges(writeLine)` | the caller writes the lines where it wants |
 | `CheckIntegrityAsync` | `checkIntegrity()` | |
 | `G9CSqliteException` (`IG9SyncLocalStoreFailure`) | `G9SqliteStoreError` (`localStoreFailure`) | classified from the driver's code |
-| `G9CSignalRSyncTransport`, options | `G9SignalRSyncTransport` (`@g9tm/syncdata/signalr`) | over `G9Client` of `@g9tm/signalr-supernetcore-client`; Lynx: `createLynxSyncTransport`. Limits (ADR-0074): `CallTimeout` / `PushTimeout` / `StreamIdleTimeout` = `callTimeoutMs` / `pushTimeoutMs` / `streamIdleTimeoutMs`, same defaults, same retryable `G9S-NET-FAILURE`, same connection drop (`SignalRTimeoutTests` / `test/transportTimeouts.test.ts`) |
+| `G9CSignalRSyncTransport`, options | `G9SignalRSyncTransport` (`@g9tm/syncdata/signalr`) | over `G9Client` of `@g9tm/signalr-supernetcore-client`; Lynx: `createLynxSyncTransport`. Limits (ADR-0074): `CallTimeout` / `PlanTimeout` / `PushTimeout` / `StreamIdleTimeout` = `callTimeoutMs` / `planTimeoutMs` / `pushTimeoutMs` / `streamIdleTimeoutMs`, same defaults, same retryable `G9S-NET-FAILURE`, same connection drop (`SignalRTimeoutTests` / `test/transportTimeouts.test.ts`) |
 | `G9CInMemorySyncTransport`, `G9CTransportFaults` | `G9FaultInjectingTransport`, `G9TransportFaults` (`@g9tm/syncdata/testing`) | wraps a real transport (no in-process server engine in JavaScript) |
 
 ## Deliberate differences

@@ -1832,3 +1832,9 @@ waited for ever: the device sat at 89 % of its first sync with no error, for 30 
 failed run the app can show. A server that legitimately takes longer than a limit before its first answer needs a longer option on
 the client. Tests: `SignalRTimeoutTests` (.NET, a real hub that withholds answers), `test/transportTimeouts.test.ts` (TypeScript, a
 client that never answers).
+
+**Amended in 1.5.1 (2026-10-19).** PlanPull has a limit of its own, `PlanTimeout` / `planTimeoutMs`, default 5 minutes; Hello keeps
+the 60 s `CallTimeout`. A site's first plan estimates every part, builds the part's key set and plans its snapshot file: the AgriPad
+emulator run measured 16 s for a 450,000-row farm against a desktop server with a local database, and a busy server on a shared one
+can take several times that. Under the Hello limit such a plan was abandoned and the connection dropped, so the retry could ask for
+the same plan again and never finish (LES-0068). Test: `A_slow_plan_is_not_cut_by_the_hello_limit`.

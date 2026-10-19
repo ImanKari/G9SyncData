@@ -50,8 +50,8 @@ public sealed class G9CSignalRSyncTransportOptions
     public TimeSpan KeepAliveInterval { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    ///     How long a single-answer call (Hello, PlanPull) waits for its answer before it counts as a retryable
-    ///     <c>G9S-NET-FAILURE</c>. Default 60 s; <see cref="TimeSpan.Zero" /> = no limit (ADR-0074).
+    ///     How long a Hello waits for its answer before it counts as a retryable <c>G9S-NET-FAILURE</c>. Default 60 s;
+    ///     <see cref="TimeSpan.Zero" /> = no limit (ADR-0074).
     /// </summary>
     /// <remarks>
     ///     A live connection does not guarantee an answer: the server's pings keep <see cref="ServerTimeout" /> satisfied while
@@ -60,6 +60,17 @@ public sealed class G9CSignalRSyncTransportOptions
     ///     89 % with no error (2026-10-19).
     /// </remarks>
     public TimeSpan CallTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    ///     How long a PlanPull waits for its plan. Default 5 minutes; zero = no limit (ADR-0074, amended in 1.5.1).
+    /// </summary>
+    /// <remarks>
+    ///     A plan is not a cheap answer like a Hello: for a site's first download the server estimates every part, builds the
+    ///     part's key set and plans its snapshot file. On a desktop with a local database that took 16 s for a 450,000-row farm;
+    ///     a busy server on a shared database can take several times that. Under the 60 s Hello limit (1.5.0) such a plan was
+    ///     abandoned, the connection dropped, and the retry asked for the same plan again - possibly never finishing.
+    /// </remarks>
+    public TimeSpan PlanTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
     ///     How long a push may take from its first chunk to its result. Default 10 minutes: a push uploads up to the server's

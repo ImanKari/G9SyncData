@@ -57,11 +57,15 @@ export interface G9SignalRSyncTransportOptions {
   serverTimeoutMs?: number;
   keepAliveIntervalMs?: number;
   /**
-   * How long a single-answer call (Hello, PlanPull) waits for its answer before it is a retryable G9S-NET-FAILURE (ADR-0074).
-   * Default 60000; 0 = no limit. A live connection does not guarantee an answer: pings keep it up while the call's message
-   * was lost on the way.
+   * How long a Hello waits for its answer before it is a retryable G9S-NET-FAILURE (ADR-0074). Default 60000; 0 = no limit.
+   * A live connection does not guarantee an answer: pings keep it up while the call's message was lost on the way.
    */
   callTimeoutMs?: number;
+  /**
+   * How long a PlanPull waits for its plan. Default 300000 (5 minutes); 0 = no limit (ADR-0074, amended in 1.5.1): a site's first
+   * plan builds key sets and plans a snapshot file - 16 s for a 450,000-row farm on a desktop, several times that on a busy server.
+   */
+  planTimeoutMs?: number;
   /** How long a push may take from its first chunk to its result; a safety net, not a pace. Default 600000; 0 = no limit. */
   pushTimeoutMs?: number;
   /**
@@ -180,7 +184,7 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
   }
 
   planPull(request: G9DtPullRequest, signal?: AbortSignal): Promise<G9DtPullPlan> {
-    return this._invoke(G9SyncProtocol.Methods.PlanPull, [this._wire(request)], readPullPlan, this._callTimeoutMs(), signal);
+    return this._invoke(G9SyncProtocol.Methods.PlanPull, [this._wire(request)], readPullPlan, this._options.planTimeoutMs ?? 300000, signal);
   }
 
   pull(token: string, continuation: G9DtPullContinuation | null, signal?: AbortSignal): AsyncIterable<G9DtSyncChunk> {
