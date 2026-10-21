@@ -11,7 +11,7 @@ the .NET client byte for byte.
   cursor, notify)          ◀── pushes (idempotent, per-row results) ◀──                                 staging)
 ```
 
-> **Status: 1.5.1.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
+> **Status: 1.5.2.** The engines, PostgreSQL and SQLite providers, SignalR transports, source generator, server-side
 > change feed and OpenTelemetry instrumentation are implemented; 141 unit and 170 end-to-end tests pass against real
 > PostgreSQL, SQLite and SignalR (the end-to-end suite in both capture modes), the client and 200k/500k-row sites pass on the Android
 > emulator, and the NativeAOT client publishes without warnings. It is the sync engine in production use by a fleet
@@ -22,6 +22,14 @@ the .NET client byte for byte.
 > **Every package in this family releases together and must not be mixed.** The protocol frame layout is negotiated
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
+
+## What's new in 1.5.2
+
+- **An ordered table stays ordered through a row writer** (LES-0069). A table with unique indexes beyond its key is applied in device
+  order, but with `WriteThroughEfCore` the whole batch went into one `SaveChanges`, which EF Core orders by its own rules (a table's
+  updates by primary key). A partial unique index is invisible to that sort, so a claim could run before the release it depended
+  on: 23505, rescued only by bisection, and an error line in the server log for a push that then succeeded. `G9CRowWriteContext.Ordered`
+  tells a writer to keep the order; the EF writer saves after each row of such a table.
 
 ## What's new in 1.5.1
 
