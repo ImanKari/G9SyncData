@@ -38,7 +38,7 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 ## Versioning and packing
 
-- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.1.1`). `<Version>` only
+- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.5.2`). `<Version>` only
   consumes it. The indirection exists so a consuming repository can pin the family from one property — in an
   application project `$(Version)` means "the app's version", not "the version of the packages it references".
 - ⛔ **The family releases TOGETHER and must never be mixed.** The protocol frame layout is negotiated across
@@ -108,6 +108,24 @@ Order that matters, and why:
 A **pull-request** build runs everything up to and including pack and publishes the packages as a build artifact, but
 never mirrors and never pushes. That is the point: a PR proves the packages can be produced without making any of it
 public.
+
+### Releasing by hand (when the pipeline cannot run)
+
+Used for 1.5.2 (2026-10-22): the Azure DevOps free minutes were used up. The same steps as the pipeline, in its order:
+
+1. Bump `G9SyncDataVersion` **and** the npm packages (`js/packages/*/package.json`, their `@g9tm/syncdata` dependency, the
+   lockfile, the Lynx module's version constants: `src/index.ts`, `lynxtron/index.ts`, `G9SyncDataLynxModule.kt` / `.m`,
+   the podspec, `ios/Tests/linux/main.m`) — `npm run verify` checks they agree. Update `README.md` "What's new".
+2. Unit tests + `npm run verify` green; commit on `main`, tag `v<version>`, push both to `origin`.
+3. A CLEAN clone of the tag in a SHORT path (`D:\g9r-sd`), `CI=true`, a `github` remote
+   (`https://github.com/ImanKari/G9SyncData.git`) for SourceLink, `dotnet build G9SyncData.slnx -c Release`, then
+   `dotnet pack <each csproj of the pipeline's libraries list> -c Release --no-build -o <out>` (12 `.nupkg`, 11 `.snupkg`).
+   Check one nuspec: `<repository url="https://github.com/…" commit="<the tag's commit>">`.
+4. **Mirror BEFORE publishing**: push `main` and the tag to GitHub (a token through `http.extraheader`; the credential
+   manager prompt hangs a non-interactive shell).
+5. `dotnet nuget push <each .nupkg> --source https://api.nuget.org/v3/index.json --skip-duplicate` (symbols go with it).
+6. `npm run pack:all` in `js/`, then `npm publish artifacts/npm/<tgz> --access public` with a temporary `--userconfig`.
+7. Consumers pin only once the Nexus group lists the version (or through the app's temporary `nuget-local`, AgriPad guide 19).
 
 ### Verifying a version locally before publishing
 
