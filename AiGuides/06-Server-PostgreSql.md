@@ -210,6 +210,9 @@ for its keys, `ApplyColumns` sets `g9_apply_mask = g9_dirty_mask & mask` per dis
 the batch's staged rows (`WriteThroughWriterAsync`: key, op, exists, and only the columns in `coalesce(g9_apply_mask, g9_dirty_mask)`
 for updates). Isolation catches `RowFailure` — a row-level `PostgresException` or `G9CRowRejectedException` anywhere in the exception
 chain — and bisects exactly as for SQL. Written rows are returned as canonical rows.
+⛔ **An ordered table stays ordered through a writer** (`G9CRowWriteContext.Ordered`, LES-0069): the rows arrive in `g9_seq` order and
+the writer must write them one after another — the EF writer calls `SaveChanges` after each row. One `SaveChanges` for the batch let EF
+sort the statements itself (a table's updates by primary key), and a partial unique index is invisible to that sort.
 
 **Commands** (ADR-0025, `G9CPostgresSyncStore.Commands.cs`) run between step 2 and step 3: outcomes already in
 `g9sync.commands (client_id, command_id, …, status, code, message, result, executed_at)` are returned as stored; every other command

@@ -686,3 +686,15 @@ The 1.5.0 emulator run through the Didban tunnel opened a 450,000-row farm: the 
 its PlanPull - key sets and the snapshot-file plan. 1.5.0 had put PlanPull under the Hello limit (60 s), which a slower server would
 have exceeded, dropping the connection and asking for the same plan again. 1.5.1 gives PlanPull its own 5-minute limit. Lesson: a
 limit belongs to what the call DOES, not to its shape - two calls that both "return one answer" can differ by two orders of magnitude.
+
+## LES-0069 — 2026-10-21 · An ordered table was not ordered once it went through the EF writer
+
+AgriPad's server log showed 23505 on `IX_Placement_PotId` for uploads that were then accepted in full: a farm replant (the old tree's
+placement retired by a flag, the new tree's placement moved into the pot) applied correctly, but only after a failed first attempt.
+`Placement` has partial unique indexes, so it is an ordered table — yet with a row writer the whole batch went into ONE `SaveChanges`,
+and EF Core orders a table's updates by primary key. The claim ran first whenever its key sorted first; bisection then found the device
+order and the push succeeded, with an ERROR line and a rolled-back savepoint every time. `G9CRowWriteContext.Ordered` now tells a writer
+to keep the order, and the EF writer saves after each row of such a table. The test (`EfCoreRowWriterTests.An_ordered_table_…`) counts
+failed commands, because the data alone was already right. Lesson: "bisection makes it right" hides a wrong order — count the failures,
+not only the outcome. A CYCLE (two rows trading places) has no valid order at all; that is the writer of the rows' job (AgriPad writes a
+move as retire + insert), not the apply's.

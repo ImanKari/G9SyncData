@@ -104,6 +104,10 @@ public sealed class G9CEfCoreRowWriter<TContext> : IG9RowWriter
             {
                 Apply(plan, db.Entry(entity), row);
             }
+
+            // An ordered table is written row by row in device order: EF sorts one SaveChanges by its own rules, and a
+            // partial unique index (a release by a flag, a claim by an insert) is invisible to them (G9CRowWriteContext.Ordered).
+            if (context.Ordered) await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

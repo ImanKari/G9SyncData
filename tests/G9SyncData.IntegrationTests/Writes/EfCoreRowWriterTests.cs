@@ -1,3 +1,4 @@
+using System.Data.Common;
 using G9SyncData.Client.Runs;
 using G9SyncData.IntegrationTests.Infrastructure;
 using G9SyncData.IntegrationTests.Scopes;
@@ -114,6 +115,32 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
     }
 
     [PostgresFact]
+    public async Task An_ordered_table_is_written_in_device_order_so_a_release_and_its_claim_never_fail_first()
+    {
+        // farm."Pot" has a partial unique index beyond its key, so it is applied in device order (OrderedApply). Through EF the
+        // batch used to be ONE SaveChanges, and EF orders a table's updates by PRIMARY KEY, not by the order they were made: a
+        // claim whose key sorts first ran before the release it depended on - 23505, rescued only by bisection, and an error in
+        // the server log every time (AgriPad Placement, 2026-10-21). Here the claim's key is the lower one on purpose.
+        await using var harness = await CreateHarnessAsync();
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 2);
+        await using var client = await harness.CreateSubscribedClientAsync(site);
+        var pots = await harness.PotIdsAsync(site);
+        var claimer = pots.Min();
+        var releaser = pots.Max();
+        var code = await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", releaser);
+
+        await client.ExecAsync("UPDATE Pot SET Code = 'FREED' WHERE Id = $p0", Key(releaser));
+        await client.ExecAsync("UPDATE Pot SET Code = $p1 WHERE Id = $p0", Key(claimer), code);
+        await client.SyncOkAsync();
+
+        Assert.Equal("FREED", await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", releaser));
+        Assert.Equal(code, await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", claimer));
+        Assert.Equal(0, FailureCounter.Seen(harness));
+    }
+
+    [PostgresFact]
     public async Task Deletes_go_through_the_context()
     {
         await using var harness = await CreateHarnessAsync();
@@ -158,8 +185,25 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
     private static void RegisterContext(G9CSyncServerBuilder builder)
     {
         builder.Services.AddSingleton<AuditInterceptor>();
+        builder.Services.AddSingleton<FailureCounter>();
         builder.Services.AddDbContext<FarmDbContext>((services, options) =>
-            options.UseNpgsql(EfScopeFixture.NeverOpened).AddInterceptors(services.GetRequiredService<AuditInterceptor>()));
+            options.UseNpgsql(EfScopeFixture.NeverOpened).AddInterceptors(
+                services.GetRequiredService<AuditInterceptor>(),
+                services.GetRequiredService<FailureCounter>()));
+    }
+
+    /// <summary>Counts the statements the database refused, including the ones a later bisection made good.</summary>
+    private sealed class FailureCounter : DbCommandInterceptor
+    {
+        private int _failed;
+
+        public static int Seen(SyncHarness harness) => harness.Services.GetRequiredService<FailureCounter>()._failed;
+
+        public override Task CommandFailedAsync(DbCommand command, CommandErrorEventData eventData, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _failed);
+            return base.CommandFailedAsync(command, eventData, cancellationToken);
+        }
     }
 
     /// <summary>What an application's SaveChanges logic does: stamps rows, rejects some with its own code, sees deletes.</summary>

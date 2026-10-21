@@ -54,6 +54,15 @@ public sealed class G9CRowWriteContext
 
     /// <summary>Scoped services of this push request.</summary>
     public required IServiceProvider Services { get; init; }
+
+    /// <summary>
+    ///     True for a table applied in DEVICE order (<c>OrderedApply</c>: one with unique indexes beyond its key). The rows arrive
+    ///     in <c>g9_seq</c> order and a writer MUST write them one after another in that order — never as one unit of work an ORM
+    ///     may reorder. A partial unique index is invisible to an ORM's statement sorting: EF Core put a claim before the release
+    ///     it depended on, every such push failed once and was only rescued by bisection, and each failure was a 23505 in the
+    ///     server's error log (AgriPad QA, 2026-10-21).
+    /// </summary>
+    public bool Ordered { get; init; }
 }
 
 /// <summary>

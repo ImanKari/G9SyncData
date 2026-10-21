@@ -395,7 +395,7 @@ public sealed partial class G9CPostgresSyncStore
             state.WriteContext = new G9CRowWriteContext
             {
                 Table = model, ClientId = request.ClientId, BatchId = request.BatchId, Caller = request.Caller, Auth = request.Auth,
-                Connection = connection, Transaction = transaction, Services = request.Services
+                Connection = connection, Transaction = transaction, Services = request.Services, Ordered = table.Ordered
             };
         }
 
