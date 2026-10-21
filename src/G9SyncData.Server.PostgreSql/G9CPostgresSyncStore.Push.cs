@@ -1052,7 +1052,7 @@ public sealed partial class G9CPostgresSyncStore
     private static G9CSyncException TooManyRejections(int max) =>
         new(G9SyncErrorCodes.RejectTooMany, $"More than {max} rows of this push were rejected; the whole push was rolled back (this signals a systematic problem, not bad rows).");
 
-    [LoggerMessage(EventId = 22010, Level = LogLevel.Debug, Message = "Rejected upload row {Seq} of {Table}: {SqlState} {Constraint}")]
+    [LoggerMessage(EventId = 22010, Level = LogLevel.Warning, Message = "Rejected upload row {Seq} of {Table}: {SqlState} {Constraint}")]
     private static partial void LogRowRejected(ILogger logger, string table, long seq, string sqlState, string? constraint);
 
     private sealed class PushWork

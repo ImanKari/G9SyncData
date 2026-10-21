@@ -744,6 +744,10 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
     return query.retryRejected(this, localTable, key);
   }
 
+  revertRejected(localTable: string | null, key: string | null): Promise<number> {
+    return revocation.revertRejected(this, localTable, key);
+  }
+
   markDirty(localTable: string, keys: readonly string[]): Promise<number> {
     return query.markDirty(this, localTable, keys);
   }

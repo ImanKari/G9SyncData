@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.3
+
+- **A refused change can be given up for the server's copy** (LES-0070). `RevertRejectedAsync(localTable?, key?)` (TypeScript
+  `revertRejected`) drops the local change of every matching refused row: a row the server never had is removed, any other row
+  forgets its server version so the next reconcile (`ForceReconcile`) brings the server's copy back. Nothing is uploaded. With
+  `RetryRejectedAsync` this gives an app both ways out of a refusal, so none has to stay silent.
+- The server logs every refused upload row at **Warning** (event 22010, was Debug): a refusal is a change a user made that did not
+  land, and it belongs in the log a support person reads.
+
 ## What's new in 1.5.2
 
 - **An ordered table stays ordered through a row writer** (LES-0069). A table with unique indexes beyond its key is applied in device

@@ -23,7 +23,7 @@ export type G9SyncDataBridgeEnvelope = { ok: true; value: unknown } | { ok: fals
 
 /** The `g9syncdata` object a Lynxtron preload exposes (see the module comment). */
 export interface G9SyncDataBridge {
-  /** `{ version: '1.5.2', platform: 'lynxtron', brotli: true, snapshotFiles: true, cacheDirectory }`. */
+  /** `{ version: '1.5.3', platform: 'lynxtron', brotli: true, snapshotFiles: true, cacheDirectory }`. */
   capabilities(): Promise<G9SyncDataBridgeEnvelope>;
   /** `{ ok: true, value: ArrayBuffer of exactly expectedLength bytes }` or a `G9SYNC-BROTLI-*` error. */
   brotliDecompress(data: ArrayBuffer | ArrayBufferView, expectedLength: number): Promise<G9SyncDataBridgeEnvelope>;
@@ -48,7 +48,7 @@ export interface G9SyncDataBridge {
   snapshotFileList(directory: string): Promise<G9SyncDataBridgeEnvelope>;
 }
 
-const VERSION = '1.5.2';
+const VERSION = '1.5.3';
 const MAX_EXPECTED_LENGTH = 603979776;
 const ARG = 'G9SYNC-BROTLI-ARG';
 const INVALID = 'G9SYNC-BROTLI-INVALID';

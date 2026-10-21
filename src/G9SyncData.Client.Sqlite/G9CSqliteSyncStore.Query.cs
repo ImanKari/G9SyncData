@@ -546,6 +546,70 @@ public sealed partial class G9CSqliteSyncStore
         }
     }
 
+    public async Task<int> RevertRejectedAsync(string? localTable, string? key, CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        var where = "rejected = 1";
+        var parameters = new List<(string, object?)>();
+        if (localTable is not null)
+        {
+            where += " AND tid = $t";
+            parameters.Add(("$t", GetLocal(localTable).Tid));
+        }
+
+        if (key is not null)
+        {
+            where += " AND pk = $pk";
+            parameters.Add(("$pk", key));
+        }
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var transaction = connection.BeginTransaction(deferred: false);
+            var rows = new List<(long Tid, string Key, long ServerVersion)>();
+            using (var command = Command(connection, transaction, "SELECT tid, pk, server_ver FROM g9_rows WHERE " + where))
+            {
+                foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value);
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2)));
+            }
+
+            if (rows.Count == 0) return 0;
+
+            // A library write, not the app's: capture stays silent, so nothing of this is uploaded.
+            Exec(connection, transaction, "UPDATE g9_ctx SET applying = 1 WHERE id = 1");
+            var sequence = Convert.ToInt64(Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
+            foreach (var (tid, rowKey, serverVersion) in rows)
+            {
+                var table = _byLocal.Values.FirstOrDefault(t => t.Tid == tid);
+                if (table is null) continue;
+                if (serverVersion == 0)
+                {
+                    // The server never had it: there is no server copy to take, only a local row to give up.
+                    RemoveLocalRow(connection, transaction, table, rowKey, ++sequence);
+                    continue;
+                }
+
+                // The digest hashes (key, server_ver), not the values: version 0 makes the row differ from the server's, so the next
+                // forced reconciliation fetches it and overwrites the local values (nothing is dirty any more to keep them).
+                Exec(connection, transaction,
+                    "DELETE FROM g9_rejections WHERE tid = $t AND pk = $pk; " +
+                    "UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0, server_ver = 0 WHERE tid = $t AND pk = $pk",
+                    ("$t", tid), ("$pk", rowKey));
+            }
+
+            Exec(connection, transaction, "UPDATE g9_clock SET seq = $s WHERE id = 1; UPDATE g9_ctx SET applying = 0 WHERE id = 1", ("$s", sequence));
+            transaction.Commit();
+            return rows.Count;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
     public async Task<int> MarkDirtyAsync(string localTable, IReadOnlyCollection<string> keys, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(keys);

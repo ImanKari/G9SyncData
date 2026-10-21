@@ -699,6 +699,8 @@ export interface G9SyncClientStore {
   getChangeFeedFloor(signal?: AbortSignal): Promise<number>;
   getRejections(signal?: AbortSignal): Promise<G9SyncRejection[]>;
   retryRejected(localTable: string | null, key: string | null, signal?: AbortSignal): Promise<number>;
+  /** Gives up the local change of rejected rows and takes the server's copy (LES-0070); run a forced reconcile after it. */
+  revertRejected(localTable: string | null, key: string | null, signal?: AbortSignal): Promise<number>;
   markDirty(localTable: string, keys: readonly string[], signal?: AbortSignal): Promise<number>;
   adoptExistingRows(signal?: AbortSignal): Promise<number>;
   saveRunReport(report: G9SyncRunReport, keep: number, signal?: AbortSignal): Promise<void>;

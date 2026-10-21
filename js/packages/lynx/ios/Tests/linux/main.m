@@ -148,8 +148,8 @@ int main(void) {
                             [unavailable isEqual:@"G9SYNC-BROTLI-UNAVAILABLE"]);
 
     // capabilities
-    NSDictionary *caps = [[G9SyncDataBrotliCore capabilitiesWithVersion:@"1.5.2" platform:@"ios" brotli:NO snapshotFiles:YES] objectForKey:@"value"];
-    CHECK("capabilities version", [[caps objectForKey:@"version"] isEqual:@"1.5.2"]);
+    NSDictionary *caps = [[G9SyncDataBrotliCore capabilitiesWithVersion:@"1.5.3" platform:@"ios" brotli:NO snapshotFiles:YES] objectForKey:@"value"];
+    CHECK("capabilities version", [[caps objectForKey:@"version"] isEqual:@"1.5.3"]);
     CHECK("capabilities platform", [[caps objectForKey:@"platform"] isEqual:@"ios"]);
     CHECK("capabilities brotli", [[caps objectForKey:@"brotli"] isKindOfClass:[NSNumber class]] && ![[caps objectForKey:@"brotli"] boolValue]);
     CHECK("capabilities snapshotFiles", [[caps objectForKey:@"snapshotFiles"] boolValue]);

@@ -311,6 +311,17 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
         return await _store.RetryRejectedAsync(localTable, key, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     Gives up the local change of rejected rows and takes the server's copy (LES-0070): a row the server never had is removed
+    ///     locally, any other is fetched again by the next run with <see cref="G9CSyncRequest.ForceReconcile" /> - run one after this.
+    ///     Nothing is uploaded. Null arguments widen the scope.
+    /// </summary>
+    public async Task<int> RevertRejectedAsync(string? localTable = null, string? key = null, CancellationToken cancellationToken = default)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.RevertRejectedAsync(localTable, key, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Local change feed for one table (downloaded and local changes), ordered by local sequence.</summary>
     public async Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit = 1000,
         CancellationToken cancellationToken = default)

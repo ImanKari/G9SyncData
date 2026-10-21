@@ -72,6 +72,37 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
     }
 
     [PostgresFact]
+    public async Task Reverting_a_rejection_takes_the_servers_copy_and_uploads_nothing()
+    {
+        // LES-0070: a rejected row used to stay parked silently - the device kept values the server never accepted. Reverting gives
+        // up the local change: a row the server never had is removed locally, an edited one is fetched again by a forced reconcile.
+        await using var harness = await CreateHarnessAsync();
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 1);
+        await using var client = await harness.CreateSubscribedClientAsync(site);
+        var existing = (await harness.PotIdsAsync(site))[0];
+        var inserted = Guid.NewGuid();
+
+        await client.ExecAsync("UPDATE Pot SET Code = 'BAD-EDIT' WHERE Id = $p0", Key(existing));
+        await client.ExecAsync("INSERT INTO Pot (Id, SiteId, Code, Status, IsDeleted) VALUES ($p0, $p1, 'BAD-NEW', 0, 0)", Key(inserted), Key(site));
+        var result = await client.SyncAsync();
+        Assert.True(result.Outcome == G9ESyncOutcome.CompletedWithRejections, SyncClient.Describe(result));
+        Assert.Equal(2, (await client.Engine.GetRejectionsAsync()).Count);
+
+        Assert.Equal(2, await client.Engine.RevertRejectedAsync());
+        Assert.Empty(await client.Engine.GetRejectionsAsync());
+        Assert.Equal(0, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
+        Assert.Equal(0L, Convert.ToInt64(await client.ScalarAsync("SELECT COUNT(*) FROM Pot WHERE Id = $p0", Key(inserted)), System.Globalization.CultureInfo.InvariantCulture));
+
+        await client.SyncOkAsync(new G9CSyncRequest { ForceReconcile = true });
+        Assert.Equal("P00001", await client.ScalarAsync("SELECT Code FROM Pot WHERE Id = $p0", Key(existing)));
+        Assert.Equal(0, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
+        Assert.Equal("P00001", await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", existing));
+        Assert.Equal(0L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Pot" WHERE "Id" = $1""", inserted));
+    }
+
+    [PostgresFact]
     public async Task A_database_error_inside_SaveChanges_is_isolated_with_its_real_sqlstate()
     {
         await using var harness = await CreateHarnessAsync();

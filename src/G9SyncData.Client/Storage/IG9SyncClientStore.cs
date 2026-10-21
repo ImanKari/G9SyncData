@@ -214,6 +214,13 @@ public interface IG9SyncClientStore : IAsyncDisposable
     /// <summary>Clears rejection flags so the rows are pushed again. Null arguments widen the scope.</summary>
     Task<int> RetryRejectedAsync(string? localTable, string? key, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Gives up the local change of rejected rows and takes the server's copy instead (LES-0070). A row the server never had
+    ///     (<c>server_ver = 0</c>) is removed locally; any other drops its pending change and its version (<c>server_ver = 0</c>), so the
+    ///     next forced reconciliation fetches the server's copy. Nothing is uploaded either way. Null arguments widen the scope.
+    /// </summary>
+    Task<int> RevertRejectedAsync(string? localTable, string? key, CancellationToken cancellationToken);
+
     /// <summary>Flags existing local rows as changed (full column mask), e.g. to import pending edits from another sync system.</summary>
     Task<int> MarkDirtyAsync(string localTable, IReadOnlyCollection<string> keys, CancellationToken cancellationToken);
 

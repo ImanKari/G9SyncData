@@ -177,8 +177,14 @@ row-metadata statement per table are cached in the `ApplyContext`; the dirty-row
 - The first build of a batch stores `inflight_batch_id` / `inflight_max_seq`; rebuilding before the acknowledgement reuses
   the id and the sequence bound, so a retry is recognised server-side.
 - The acknowledgement clears `dirty` only for rows with `local_seq <= MaxSequence`; a row edited meanwhile stays dirty.
-  Rejections set `rejected = 1` (until the row is edited again or `RetryRejectedAsync`). Canonical rows from the server
-  are applied.
+  Rejections set `rejected = 1` (until the row is edited again, `RetryRejectedAsync` or `RevertRejectedAsync`). Canonical rows from
+  the server are applied.
+- ⛔ `GetPendingSummaryAsync().TotalRows` does NOT count refused rows (a push does not resend them). An app that shows only that
+  count makes a refusal invisible — read `GetRejectionsAsync()` too and show it.
+- `RevertRejectedAsync(localTable?, key?)` (LES-0070), one transaction with `g9_ctx.applying = 1` (nothing is captured): a refused row
+  with `server_ver = 0` (the server never had it) is removed locally like a server delete; any other row gets `dirty = 0`,
+  `dirty_mask = 0`, `rejected = 0`, `server_ver = 0` and loses its `g9_rejections` row. The reconcile digest hashes (key, server
+  version), not content, so only a forgotten version makes the next `ForceReconcile` resend the server's copy.
 
 ## Retiring Dotmim.Sync on a device (`G9CSqliteSyncStore.Dotmim.cs`, ADR-0038)
 

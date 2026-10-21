@@ -698,3 +698,13 @@ to keep the order, and the EF writer saves after each row of such a table. The t
 failed commands, because the data alone was already right. Lesson: "bisection makes it right" hides a wrong order — count the failures,
 not only the outcome. A CYCLE (two rows trading places) has no valid order at all; that is the writer of the rows' job (AgriPad writes a
 move as retire + insert), not the apply's.
+
+## LES-0070 — 2026-10-22 · A refused change had no way out but "send it again"
+
+AgriPad's pending count left refused rows out (a push does not resend them), so a change the server refused simply vanished from the
+operator's view: they believed it had synced. The app now shows refusals, and each needs two ways out - send it again (after the
+server-side cause is fixed), or give the change up and take the server's copy. The second was missing from the library. A plain
+"clear the flags" would not do it: the reconcile digest hashes (key, server version), so a row whose content differs but whose version
+matches is never re-sent. `RevertRejectedAsync` therefore forgets the version (or removes a row the server never had) and the caller
+runs `ForceReconcile`. The server's log line for a refused row moved from Debug to Warning for the same reason: a refusal is a user's
+change that did not land. Lesson: a status count that EXCLUDES a failure state must have a sibling that shows it, or the failure is silent.

@@ -333,6 +333,16 @@ export class G9SyncEngine {
     return this._store.retryRejected(localTable ?? null, key ?? null, signal);
   }
 
+  /**
+   * Gives up the local change of rejected rows and takes the server's copy (LES-0070, .NET `RevertRejectedAsync`): a row the server
+   * never had is removed locally, any other is fetched again by the next run with `forceReconcile` - run one after this. Nothing is
+   * uploaded. Omitted arguments widen the scope.
+   */
+  async revertRejected(localTable?: string | null, key?: string | null, signal?: AbortSignal): Promise<number> {
+    await this.initialize(signal);
+    return this._store.revertRejected(localTable ?? null, key ?? null, signal);
+  }
+
   async readChangeFeed(localTable: string, afterSequence: number, limit = 1000, signal?: AbortSignal): Promise<G9ChangeFeedEntry[]> {
     await this.initialize(signal);
     return this._store.readChangeFeed(localTable, afterSequence, limit, signal);

@@ -271,6 +271,50 @@ function removeLocalRowStatements(table: LocalTable, key: string, seq: string, s
   ];
 }
 
+/**
+ * `RevertRejectedAsync` (LES-0070): gives up the local change of rejected rows and takes the server's copy. A row the server never had
+ * (`server_ver = 0`) is removed locally; any other drops its pending change and its version, so the next forced reconciliation
+ * fetches the server's copy (the digest hashes key + server_ver, not the values). A library write: capture is silent, nothing uploads.
+ */
+export async function revertRejected(store: StoreInternals, localTable: string | null, key: string | null): Promise<number> {
+  store.ensureInitialized();
+  let where = 'rejected = 1';
+  const params: G9Params = {};
+  if (localTable !== null) {
+    where += ' AND tid = $t';
+    params.$t = getLocal(store, localTable).tid;
+  }
+  if (key !== null) {
+    where += ' AND pk = $pk';
+    params.$pk = key;
+  }
+  return store.writeLock.run(() =>
+    store.writer().transaction('immediate', async () => {
+      const connection = store.writer();
+      const rows = await connection.query('SELECT tid, pk, server_ver FROM g9_rows WHERE ' + where, params);
+      if (rows.length === 0) return 0;
+      await connection.exec('UPDATE g9_ctx SET applying = 1 WHERE id = 1');
+      for (const r of rows) {
+        const tid = asNumber(r[0]);
+        const pk = asString(r[1]);
+        const table = byTid(store, tid);
+        if (!table) continue;
+        if (asNumber(r[2]) === 0) {
+          for (const statement of removeLocalRowStatements(table, pk, NEXT_SEQ, {})) await connection.exec(statement.script, statement.params);
+          await connection.exec('UPDATE g9_clock SET seq = seq + 1 WHERE id = 1');
+          continue;
+        }
+        await connection.exec(
+          'DELETE FROM g9_rejections WHERE tid = $t AND pk = $pk; UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0, server_ver = 0 WHERE tid = $t AND pk = $pk',
+          { $t: tid, $pk: pk },
+        );
+      }
+      await connection.exec('UPDATE g9_ctx SET applying = 0 WHERE id = 1');
+      return rows.length;
+    }),
+  );
+}
+
 /** `RemoveLocalRow`: the row leaves the app's table; its metadata becomes a tombstone at the clock's next value. */
 export async function removeLocalRow(connection: G9SqliteConnection, table: LocalTable, key: string): Promise<void> {
   for (const statement of removeLocalRowStatements(table, key, NEXT_SEQ, {})) await connection.exec(statement.script, statement.params);
