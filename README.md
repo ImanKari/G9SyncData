@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.4
+
+- **A reverted change really gets the server's copy back** (LES-0070, second entry). 1.5.3 "forgot" a reverted row's version by
+  setting it to 0 — but a server reports version 0 for every row unchanged since its tracking began, so the reconcile hash stayed
+  equal and the device kept the refused values for good, while the app said the server's version was back. Now a reverted row
+  gets version -1 (no server issues it) and the subscriptions holding it become `NeedsReconcile`: their next sync of any kind
+  fetches the server's copy, so a revert made offline is not lost either. A row is removed locally only when the server never had
+  it (`server_ver = 0` AND held by no subscription — the store's own rule), not merely because its version is 0.
+
 ## What's new in 1.5.3
 
 - **A refused change can be given up for the server's copy** (LES-0070). `RevertRejectedAsync(localTable?, key?)` (TypeScript

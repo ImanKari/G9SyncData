@@ -15,7 +15,7 @@ an `IG9SyncClientStore` and an `IG9SyncTransport`, and publishes progress, event
 | `SuppressBackground()` | disposable scope during which background runs are skipped |
 | `StartAutomaticSync(interval)` / `StopAutomaticSync()` | periodic background runs |
 | `GetPendingSummaryAsync()`, `GetRejectionsAsync()`, `RetryRejectedAsync()` | instant status reads — never wait for a running sync (P-20) |
-| `RevertRejectedAsync(localTable?, key?)` | give a refused change up for the server's copy: a never-uploaded row is removed, any other row forgets its server version; the caller then runs a `ForceReconcile` sync to bring the copy back (LES-0070) |
+| `RevertRejectedAsync(localTable?, key?)` | give a refused change up for the server's copy: a row the server never had (version 0, no subscription) is removed; any other gets version -1 and its subscriptions `NeedsReconcile`, so their next sync brings the copy back (run one at once to show it; LES-0070) |
 | `ReadChangeFeedAsync(table, afterSequence)` | local change feed (downloaded and local edits) for UI/cache refresh |
 | `AdoptExistingRowsAsync()`, `MarkDirtyAsync(table, keys)` | migration helpers ([16](16-AgriPad-Integration.md)) |
 | `GetHealthAsync()` | connection, queue, epoch, pending, subscriptions, recent runs |

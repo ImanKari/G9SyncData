@@ -216,8 +216,10 @@ public interface IG9SyncClientStore : IAsyncDisposable
 
     /// <summary>
     ///     Gives up the local change of rejected rows and takes the server's copy instead (LES-0070). A row the server never had
-    ///     (<c>server_ver = 0</c>) is removed locally; any other drops its pending change and its version (<c>server_ver = 0</c>), so the
-    ///     next forced reconciliation fetches the server's copy. Nothing is uploaded either way. Null arguments widen the scope.
+    ///     (<c>server_ver = 0</c> and held by no subscription) is removed locally; any other drops its pending change and gets
+    ///     <c>server_ver = -1</c>, a version no server issues, and the subscriptions holding it become
+    ///     <see cref="G9ESubscriptionState.NeedsReconcile" />: their next sync fetches the server's copy. Nothing is uploaded either
+    ///     way. Null arguments widen the scope.
     /// </summary>
     Task<int> RevertRejectedAsync(string? localTable, string? key, CancellationToken cancellationToken);
 

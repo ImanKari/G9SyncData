@@ -1,5 +1,6 @@
 using System.Data.Common;
 using G9SyncData.Client.Runs;
+using G9SyncData.Client.Storage;
 using G9SyncData.IntegrationTests.Infrastructure;
 using G9SyncData.IntegrationTests.Scopes;
 using G9SyncData.Server;
@@ -75,13 +76,18 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
     public async Task Reverting_a_rejection_takes_the_servers_copy_and_uploads_nothing()
     {
         // LES-0070: a rejected row used to stay parked silently - the device kept values the server never accepted. Reverting gives
-        // up the local change: a row the server never had is removed locally, an edited one is fetched again by a forced reconcile.
+        // up the local change: a row the server never had is removed locally, an edited one is fetched again by the next sync.
+        // The pot has NO tracking row on the server, so the server reports it at version 0 - as for every row unchanged since a real
+        // server's tracking began. The first version of revert "forgot" the version (0): the hash stayed equal and the device kept
+        // BAD-EDIT for good (found on the emulator, 2026-10-22). Now it is -1 and the subscription is marked NeedsReconcile.
         await using var harness = await CreateHarnessAsync();
         var site = Guid.NewGuid();
         await harness.InsertSiteAsync(site, "North");
         await harness.InsertPotsAsync(site, 1);
-        await using var client = await harness.CreateSubscribedClientAsync(site);
         var existing = (await harness.PotIdsAsync(site))[0];
+        await harness.ExecServerAsync("DELETE FROM g9sync." + G9SyncData.Server.PostgreSql.Internal.PgNames.Quote(G9SyncData.Server.PostgreSql.Internal.PgNames.TrackingBare("farm", "Pot")) + " WHERE \"Id\" = $1", existing);
+        await using var client = await harness.CreateSubscribedClientAsync(site);
+        Assert.Equal(0L, Convert.ToInt64(await client.ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(existing)), System.Globalization.CultureInfo.InvariantCulture));
         var inserted = Guid.NewGuid();
 
         await client.ExecAsync("UPDATE Pot SET Code = 'BAD-EDIT' WHERE Id = $p0", Key(existing));
@@ -95,8 +101,14 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
         Assert.Equal(0, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
         Assert.Equal(0L, Convert.ToInt64(await client.ScalarAsync("SELECT COUNT(*) FROM Pot WHERE Id = $p0", Key(inserted)), System.Globalization.CultureInfo.InvariantCulture));
 
-        await client.SyncOkAsync(new G9CSyncRequest { ForceReconcile = true });
+        Assert.Equal(-1L, Convert.ToInt64(await client.ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(existing)), System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Contains(await client.Engine.GetSubscriptionsAsync(), s => s.State == G9ESubscriptionState.NeedsReconcile);
+
+        // An ordinary sync - not a forced one: the mark survives being offline until the next run of the subscription.
+        await client.SyncOkAsync();
         Assert.Equal("P00001", await client.ScalarAsync("SELECT Code FROM Pot WHERE Id = $p0", Key(existing)));
+        Assert.Equal(0L, Convert.ToInt64(await client.ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(existing)), System.Globalization.CultureInfo.InvariantCulture));
+        Assert.DoesNotContain(await client.Engine.GetSubscriptionsAsync(), s => s.State == G9ESubscriptionState.NeedsReconcile);
         Assert.Equal(0, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
         Assert.Equal("P00001", await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", existing));
         Assert.Equal(0L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Pot" WHERE "Id" = $1""", inserted));

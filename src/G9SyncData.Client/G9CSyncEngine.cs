@@ -313,7 +313,8 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
 
     /// <summary>
     ///     Gives up the local change of rejected rows and takes the server's copy (LES-0070): a row the server never had is removed
-    ///     locally, any other is fetched again by the next run with <see cref="G9CSyncRequest.ForceReconcile" /> - run one after this.
+    ///     locally; any other is fetched again by the next sync of the subscriptions holding it (they are marked
+    ///     <see cref="G9ESubscriptionState.NeedsReconcile" />, so it survives being offline) - run one after this to see it at once.
     ///     Nothing is uploaded. Null arguments widen the scope.
     /// </summary>
     public async Task<int> RevertRejectedAsync(string? localTable = null, string? key = null, CancellationToken cancellationToken = default)

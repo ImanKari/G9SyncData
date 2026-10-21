@@ -568,12 +568,12 @@ public sealed partial class G9CSqliteSyncStore
         {
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using var transaction = connection.BeginTransaction(deferred: false);
-            var rows = new List<(long Tid, string Key, long ServerVersion)>();
-            using (var command = Command(connection, transaction, "SELECT tid, pk, server_ver FROM g9_rows WHERE " + where))
+            var rows = new List<(long Tid, string Key, long ServerVersion, long Subs)>();
+            using (var command = Command(connection, transaction, "SELECT tid, pk, server_ver, subs FROM g9_rows WHERE " + where))
             {
                 foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value);
                 using var reader = command.ExecuteReader();
-                while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2)));
+                while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2), reader.GetInt64(3)));
             }
 
             if (rows.Count == 0) return 0;
@@ -581,23 +581,28 @@ public sealed partial class G9CSqliteSyncStore
             // A library write, not the app's: capture stays silent, so nothing of this is uploaded.
             Exec(connection, transaction, "UPDATE g9_ctx SET applying = 1 WHERE id = 1");
             var sequence = Convert.ToInt64(Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
-            foreach (var (tid, rowKey, serverVersion) in rows)
+            foreach (var (tid, rowKey, serverVersion, subs) in rows)
             {
                 var table = _byLocal.Values.FirstOrDefault(t => t.Tid == tid);
                 if (table is null) continue;
-                if (serverVersion == 0)
+                if (serverVersion == 0 && subs == 0)
                 {
-                    // The server never had it: there is no server copy to take, only a local row to give up.
+                    // Never downloaded and held by no subscription (the store's own "the server never had it" rule): there is no
+                    // server copy to take, only a local row to give up.
                     RemoveLocalRow(connection, transaction, table, rowKey, ++sequence);
                     continue;
                 }
 
-                // The digest hashes (key, server_ver), not the values: version 0 makes the row differ from the server's, so the next
-                // forced reconciliation fetches it and overwrites the local values (nothing is dirty any more to keep them).
+                // The digest hashes (key, server_ver), not the values, and a server reports version 0 for every row unchanged
+                // since its tracking began — so "forget the version" (0) would leave the hash EQUAL and the local values in place
+                // for good (LES-0070, found on the emulator). -1 is a version no server issues: the hash differs, the reconcile
+                // fetches the row, and the apply writes the server's values and its real version. The subscriptions holding the
+                // row are marked NeedsReconcile, so that happens on their next sync of any kind, not only a forced one.
                 Exec(connection, transaction,
                     "DELETE FROM g9_rejections WHERE tid = $t AND pk = $pk; " +
-                    "UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0, server_ver = 0 WHERE tid = $t AND pk = $pk",
-                    ("$t", tid), ("$pk", rowKey));
+                    "UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0, server_ver = -1 WHERE tid = $t AND pk = $pk; " +
+                    "UPDATE g9_subscriptions SET state = $needs WHERE ((($subs >> slot) & 1) = 1)",
+                    ("$t", tid), ("$pk", rowKey), ("$subs", subs), ("$needs", (int)G9ESubscriptionState.NeedsReconcile));
             }
 
             Exec(connection, transaction, "UPDATE g9_clock SET seq = $s WHERE id = 1; UPDATE g9_ctx SET applying = 0 WHERE id = 1", ("$s", sequence));

@@ -708,3 +708,12 @@ server-side cause is fixed), or give the change up and take the server's copy. T
 matches is never re-sent. `RevertRejectedAsync` therefore forgets the version (or removes a row the server never had) and the caller
 runs `ForceReconcile`. The server's log line for a refused row moved from Debug to Warning for the same reason: a refusal is a user's
 change that did not land. Lesson: a status count that EXCLUDES a failure state must have a sibling that shows it, or the failure is silent.
+
+**1.5.4, the same day — the first revert did not revert.** On the emulator against a real database copy, every downloaded row had
+`server_ver = 0`: the server's version is `coalesce(k.ver, 0)`, and a row unchanged since tracking was installed has no tracking row.
+"Forget the version" = 0 therefore changed nothing, the digest stayed equal, and the device would have kept the refused values while
+the app said "the server's version is back" — a silent failure inside the feature built against silent failures. The integration
+test had passed because its server rows were all tracked (version > 0). Now: version -1 (never issued) plus `NeedsReconcile` on the
+subscriptions holding the row (a revert made offline heals on the next sync, forced or not); a row is removed only when it is also
+held by no subscription. The test deletes the pot's tracking row to reproduce version 0 and syncs WITHOUT `ForceReconcile`.
+Lesson: a sentinel must be a value the other side can never produce — 0 was the server's most common version, not an absent one.

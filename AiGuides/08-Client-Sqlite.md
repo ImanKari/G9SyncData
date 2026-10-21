@@ -182,9 +182,12 @@ row-metadata statement per table are cached in the `ApplyContext`; the dirty-row
 - ⛔ `GetPendingSummaryAsync().TotalRows` does NOT count refused rows (a push does not resend them). An app that shows only that
   count makes a refusal invisible — read `GetRejectionsAsync()` too and show it.
 - `RevertRejectedAsync(localTable?, key?)` (LES-0070), one transaction with `g9_ctx.applying = 1` (nothing is captured): a refused row
-  with `server_ver = 0` (the server never had it) is removed locally like a server delete; any other row gets `dirty = 0`,
-  `dirty_mask = 0`, `rejected = 0`, `server_ver = 0` and loses its `g9_rejections` row. The reconcile digest hashes (key, server
-  version), not content, so only a forgotten version makes the next `ForceReconcile` resend the server's copy.
+  the server never had (`server_ver = 0 AND subs = 0`, the same rule as a key change) is removed locally like a server delete; any
+  other row gets `dirty = 0`, `dirty_mask = 0`, `rejected = 0`, `server_ver = -1`, loses its `g9_rejections` row, and every
+  subscription whose slot bit is in its `subs` becomes `NeedsReconcile`. The reconcile digest hashes (key, server version), not
+  content. ⛔ Not `server_ver = 0`: a server reports 0 for every row unchanged since its tracking began (`coalesce(k.ver, 0)`), so
+  0 would leave the hash equal and the refused values on the device for good (1.5.3, found on the emulator). -1 is never issued;
+  the apply of the fetched row writes the real version back.
 
 ## Retiring Dotmim.Sync on a device (`G9CSqliteSyncStore.Dotmim.cs`, ADR-0038)
 

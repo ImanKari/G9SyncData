@@ -12,7 +12,8 @@ import { G9SqliteSyncStore } from '../src/sqlite/store.js';
 
 // LES-0070, the twin of .NET RevertRejectedAsync: a rejected row used to stay parked silently, the device keeping values the server
 // never accepted. Reverting gives up the local change without uploading anything: a row the server never had is removed locally; an
-// edited one keeps its values only until the next forced reconcile, because its version drops to 0 (the digest hashes key + version).
+// edited one keeps its values only until the next reconcile, because its version becomes -1 (the digest hashes key + version, and a
+// server reports 0 for every row unchanged since its tracking began — "forget the version" = 0 changed nothing on the emulator).
 
 const model = new G9SyncClientModelBuilder().table('farm.Note', 'Note', (t) => t.key('Id').column('Text', G9ESyncColumnType.String)).build();
 const N = (n: number): string => `6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a5${n}`;
@@ -41,27 +42,32 @@ describe('revertRejected', () => {
     const bit = 2 ** sub.slot;
 
     await run('UPDATE g9_ctx SET applying = 1 WHERE id = 1');
-    // [key, text, server_ver, dirty, rejected]
-    const rows: [string, string, number, number, number][] = [
-      [N(1), 'edited here', 7, 1, 1], // an edit the server refused
-      [N(2), 'new here', 0, 1, 1], // an insert the server never accepted
-      [N(3), 'still pending', 7, 1, 0], // an ordinary pending change
+    // [key, text, server_ver, dirty, rejected, subs]
+    const rows: [string, string, number, number, number, number][] = [
+      [N(1), 'edited here', 7, 1, 1, bit], // an edit the server refused
+      [N(2), 'new here', 0, 1, 1, 0], // an insert the server never accepted (never downloaded)
+      [N(3), 'still pending', 7, 1, 0, bit], // an ordinary pending change
+      [N(4), 'edited, version 0', 0, 1, 1, bit], // a downloaded row the server reports at version 0, edited and refused
     ];
-    for (const [key, text, ver, dirty, rejected] of rows) {
+    for (const [key, text, ver, dirty, rejected, subs] of rows) {
       await run('INSERT INTO Note (Id, Text) VALUES (?1, ?2)', [key, text]);
-      await run('INSERT INTO g9_rows (tid, pk, server_ver, local_seq, dirty, dirty_mask, subs, rejected) VALUES (1, ?1, ?2, 3, ?3, 1, ?4, ?5)', [key, ver, dirty, bit, rejected]);
+      await run('INSERT INTO g9_rows (tid, pk, server_ver, local_seq, dirty, dirty_mask, subs, rejected) VALUES (1, ?1, ?2, 3, ?3, 1, ?4, ?5)', [key, ver, dirty, subs, rejected]);
       if (rejected) await run("INSERT INTO g9_rejections (tid, pk, code, message, at_utc) VALUES (1, ?1, 'G9S-REJ-CONSTRAINT', 'unique', 0)", [key]);
     }
     await run('UPDATE g9_clock SET seq = 100 WHERE id = 1');
     await run('UPDATE g9_ctx SET applying = 0 WHERE id = 1');
 
-    expect((await store.getRejections()).length).toBe(2);
-    expect(await store.revertRejected(null, null)).toBe(2);
+    expect((await store.getRejections()).length).toBe(3);
+    expect(await store.revertRejected(null, null)).toBe(3);
 
     expect(await store.getRejections()).toEqual([]);
-    // The edited row: nothing pending, version 0 → the next forced reconcile fetches the server's copy over these values.
-    expect(await one('SELECT dirty, dirty_mask, rejected, server_ver, deleted FROM g9_rows WHERE pk = ?1', [N(1)])).toEqual([0, 0, 0, 0, 0]);
+    // The edited rows: nothing pending, version -1 (whatever it was, 7 or 0) → the reconcile hash differs and the server's copy is fetched
+    // over these values; the subscription holding them must reconcile on its next sync, forced or not.
+    expect(await one('SELECT dirty, dirty_mask, rejected, server_ver, deleted FROM g9_rows WHERE pk = ?1', [N(1)])).toEqual([0, 0, 0, -1, 0]);
+    expect(await one('SELECT dirty, dirty_mask, rejected, server_ver, deleted FROM g9_rows WHERE pk = ?1', [N(4)])).toEqual([0, 0, 0, -1, 0]);
     expect(await one('SELECT Text FROM Note WHERE Id = ?1', [N(1)])).toEqual(['edited here']);
+    expect(await one('SELECT COUNT(*) FROM Note WHERE Id = ?1', [N(4)])).toEqual([1]);
+    expect(await one('SELECT state FROM g9_subscriptions WHERE key = ?1', [sub.key])).toEqual([1]);
     // The never-uploaded row: gone locally, a tombstone that is NOT a pending delete.
     expect(await one('SELECT COUNT(*) FROM Note WHERE Id = ?1', [N(2)])).toEqual([0]);
     expect(await one('SELECT deleted, dirty, rejected FROM g9_rows WHERE pk = ?1', [N(2)])).toEqual([1, 0, 0]);

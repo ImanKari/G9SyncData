@@ -10,6 +10,7 @@ import {
   G9ApplyReport,
   G9ERevocationDisposition,
   G9ERevocationReason,
+  G9ESubscriptionState,
   type G9QuarantinedRow,
   type G9RetainedRow,
   type G9RevokedRow,
@@ -273,8 +274,11 @@ function removeLocalRowStatements(table: LocalTable, key: string, seq: string, s
 
 /**
  * `RevertRejectedAsync` (LES-0070): gives up the local change of rejected rows and takes the server's copy. A row the server never had
- * (`server_ver = 0`) is removed locally; any other drops its pending change and its version, so the next forced reconciliation
- * fetches the server's copy (the digest hashes key + server_ver, not the values). A library write: capture is silent, nothing uploads.
+ * (`server_ver = 0` and held by no subscription) is removed locally. Any other drops its pending change and gets `server_ver = -1`: the
+ * digest hashes key + server_ver, not the values, and a server reports version 0 for every row unchanged since its tracking began, so
+ * "forget the version" (0) would leave the hash equal and the local values in place for good. -1 is a version no server issues: the
+ * reconcile fetches the row and the apply writes the server's values and real version. The subscriptions holding the row become
+ * NeedsReconcile, so their next sync of any kind does it (offline now is fine). A library write: capture is silent, nothing uploads.
  */
 export async function revertRejected(store: StoreInternals, localTable: string | null, key: string | null): Promise<number> {
   store.ensureInitialized();
@@ -291,7 +295,7 @@ export async function revertRejected(store: StoreInternals, localTable: string |
   return store.writeLock.run(() =>
     store.writer().transaction('immediate', async () => {
       const connection = store.writer();
-      const rows = await connection.query('SELECT tid, pk, server_ver FROM g9_rows WHERE ' + where, params);
+      const rows = await connection.query('SELECT tid, pk, (server_ver = 0 AND subs = 0) FROM g9_rows WHERE ' + where, params);
       if (rows.length === 0) return 0;
       await connection.exec('UPDATE g9_ctx SET applying = 1 WHERE id = 1');
       for (const r of rows) {
@@ -299,14 +303,16 @@ export async function revertRejected(store: StoreInternals, localTable: string |
         const pk = asString(r[1]);
         const table = byTid(store, tid);
         if (!table) continue;
-        if (asNumber(r[2]) === 0) {
+        if (asNumber(r[2]) === 1) {
           for (const statement of removeLocalRowStatements(table, pk, NEXT_SEQ, {})) await connection.exec(statement.script, statement.params);
           await connection.exec('UPDATE g9_clock SET seq = seq + 1 WHERE id = 1');
           continue;
         }
         await connection.exec(
-          'DELETE FROM g9_rejections WHERE tid = $t AND pk = $pk; UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0, server_ver = 0 WHERE tid = $t AND pk = $pk',
-          { $t: tid, $pk: pk },
+          'DELETE FROM g9_rejections WHERE tid = $t AND pk = $pk; ' +
+            'UPDATE g9_subscriptions SET state = $needs WHERE (((SELECT subs FROM g9_rows WHERE tid = $t AND pk = $pk) >> slot) & 1) = 1; ' +
+            'UPDATE g9_rows SET dirty = 0, dirty_mask = 0, rejected = 0, server_ver = -1 WHERE tid = $t AND pk = $pk',
+          { $t: tid, $pk: pk, $needs: G9ESubscriptionState.NeedsReconcile },
         );
       }
       await connection.exec('UPDATE g9_ctx SET applying = 0 WHERE id = 1');
