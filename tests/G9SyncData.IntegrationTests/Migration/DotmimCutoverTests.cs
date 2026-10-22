@@ -109,6 +109,54 @@ public sealed class DotmimCutoverTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    ///     An offline edit from the Dotmim era meets an office edit of ANOTHER column of the same row (LES-0080). Dotmim tracked rows,
+    ///     not columns, so the import sends every column: the server applies the device's edit and keeps the office's column, and
+    ///     the column the office changed comes back to the device as a kept conflict — the device cannot tell its stale value from a
+    ///     real edit, so the operator decides (AgriPad's sheet asks before «send again» would overwrite the office's value).
+    /// </summary>
+    [PostgresFact]
+    public async Task A_Dotmim_era_edit_merges_with_an_office_edit_and_the_office_column_is_kept_as_a_conflict()
+    {
+        var site = Guid.NewGuid();
+        var pots = Enumerable.Range(0, 3).Select(_ => Guid.NewGuid()).ToArray();
+        await using var harness = await SyncHarness.CreateAsync(output, model: m => ConfigureServer(m, new ServerModelOptions(G9EConflictPolicy.ColumnMerge)),
+            seedBeforeCapture: async dataSource =>
+        {
+            await using var seed = dataSource.CreateCommand("""INSERT INTO farm."Site" ("Id", "Name") VALUES ($1, 'North')""");
+            seed.Parameters.Add(new NpgsqlParameter { Value = site });
+            await seed.ExecuteNonQueryAsync();
+            await using var insertPots = dataSource.CreateCommand("""
+                INSERT INTO farm."Pot" ("Id", "SiteId", "Code", "Status", "Note")
+                SELECT u.id, $2, 'P' || u.ord, 0, 'server' FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, ord)
+                """);
+            insertPots.Parameters.Add(new NpgsqlParameter { Value = pots });
+            insertPots.Parameters.Add(new NpgsqlParameter { Value = site });
+            await insertPots.ExecuteNonQueryAsync();
+        });
+        await using var client = await harness.CreateClientAsync(prepareDatabase: path => PrepareDotmimDeviceAsync(path, site, pots, created: null),
+            store: s => s.KeepLostConflicts = true);
+
+        // The office edits ANOTHER column of the row the device edited offline, after the device's last Dotmim sync.
+        await harness.ExecServerAsync("""UPDATE farm."Pot" SET "Weight" = 7 WHERE "Id" = $1""", pots[0]);
+
+        await client.Store.RetireDotmimCaptureAsync();
+        var adopt = new G9CSubscriptionOptions { AdoptExistingRows = true };
+        await client.Engine.SubscribeAsync("sites", options: adopt);
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site), adopt);
+        var first = await client.SyncAsync();
+
+        Assert.True(first.Outcome == G9ESyncOutcome.CompletedWithRejections, SyncClient.Describe(first));
+        // The server: the device's edit applied, the office's column kept.
+        Assert.Equal("edited offline", await harness.ScalarServerAsync<string>("""SELECT "Note" FROM farm."Pot" WHERE "Id" = $1""", pots[0]));
+        Assert.Equal(7m, await harness.ScalarServerAsync<decimal>("""SELECT "Weight" FROM farm."Pot" WHERE "Id" = $1""", pots[0]));
+        // The device: its (stale) value of the office's column is held as a conflict naming exactly that column, never sent silently.
+        var conflict = Assert.Single(await client.Engine.GetRejectionsAsync());
+        Assert.Equal("G9S-CON-COLUMNS", conflict.Code);
+        Assert.Equal("Weight", conflict.Column);
+        Assert.Contains("7", conflict.Details, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     What Dotmim leaves on a device: Site and Pot as Dotmim created them, its capture and scope tables, the server rows marked as
     ///     downloaded before the last sync - then offline work: an edit of pots[0], a delete of pots[1] and, optionally, a new pot.
     /// </summary>

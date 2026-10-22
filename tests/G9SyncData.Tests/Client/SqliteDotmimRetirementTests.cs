@@ -222,6 +222,58 @@ public sealed class SqliteDotmimRetirementTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Asked_to_retire_tables_outside_the_model_it_drops_their_capture_and_downloads_skip_triggers_again()
+    {
+        // AgriPad 6.2 (upgrade test 2026-10-22): Dotmim's INITIAL scope carried Region and Village, the G9 model leaves them out, and
+        // their leftover triggers kept every later download on the slow path on every upgraded device.
+        await PrepareDotmimDeviceAsync(withForeignTable: true, withAppTriggers: false);
+        var store = await OpenStoreAsync();
+
+        var result = await store.RetireDotmimCaptureAsync(new G9CDotmimRetirementOptions { RetireTablesOutsideModel = true });
+
+        Assert.Equal(new[] { "Weather" }, result.RetiredOutsideModel);
+        Assert.Empty(result.KeptOutsideModel);
+        Assert.Contains("Weather__insert_trigger", result.DroppedTriggers);
+        Assert.Contains("Weather_tracking", result.DroppedTrackingTables);
+        Assert.Equal(new[] { "scope_info", "scope_info_client" }, result.DroppedScopeTables);
+        Assert.Empty(result.RemainingForeignTriggers);
+        Assert.Empty(await store.GetForeignTriggersAsync());
+        // The table itself and its rows stay: only the capture goes.
+        Assert.Equal(1L, await ScalarAsync("SELECT count(*) FROM Weather WHERE Id = 'w1'"));
+        // The model's own retirement is unchanged.
+        Assert.Equal(2, result.ImportedUpserts["Pot"]);
+    }
+
+    [Fact]
+    public async Task A_table_outside_the_model_with_unsent_Dotmim_work_keeps_its_capture_and_is_reported()
+    {
+        await PrepareDotmimDeviceAsync(withForeignTable: true, withAppTriggers: false);
+        // Offline work on the table outside the model: the library cannot import it, so dropping its capture would lose it in silence.
+        await ExecAsync("INSERT INTO Weather (Id, Summary) VALUES ('w2', 'rain')");
+        var store = await OpenStoreAsync();
+
+        var result = await store.RetireDotmimCaptureAsync(new G9CDotmimRetirementOptions { RetireTablesOutsideModel = true });
+
+        Assert.Empty(result.RetiredOutsideModel);
+        Assert.Equal(1, result.KeptOutsideModel["Weather"]);
+        Assert.Equal(1L, await ScalarAsync("SELECT count(*) FROM sqlite_master WHERE name = 'Weather_tracking'"));
+        Assert.Empty(result.DroppedScopeTables);   // a Dotmim tracking table is left
+        Assert.Contains("Weather__insert_trigger", result.RemainingForeignTriggers);
+    }
+
+    [Fact]
+    public async Task Retiring_a_named_table_never_touches_tables_outside_the_model_even_when_asked()
+    {
+        await PrepareDotmimDeviceAsync(withForeignTable: true, withAppTriggers: false);
+        var store = await OpenStoreAsync();
+
+        var result = await store.RetireDotmimCaptureAsync(new G9CDotmimRetirementOptions { Tables = ["Pot"], RetireTablesOutsideModel = true });
+
+        Assert.Empty(result.RetiredOutsideModel);
+        Assert.Equal(1L, await ScalarAsync("SELECT count(*) FROM sqlite_master WHERE name = 'Weather_tracking'"));
+    }
+
+    [Fact]
     public async Task Tables_outside_the_model_are_refused()
     {
         var store = await OpenStoreAsync();

@@ -1,3 +1,4 @@
+using System.Globalization;
 using G9SyncData.Client.Sqlite.Internal;
 using G9SyncData.Client.Sqlite.Native;
 using Microsoft.Extensions.Logging;
@@ -64,6 +65,11 @@ public sealed partial class G9CSqliteSyncStore
                     }
                 }
 
+                if (options.RetireTablesOutsideModel && options.Tables is null)
+                {
+                    RetireOutsideModel(connection, transaction, options, lastSync, result);
+                }
+
                 if (options.DropScopeTablesWhenUnused && !AnyDotmimTrackingTable(connection, transaction))
                 {
                     foreach (var scopeTable in new[] { options.ScopeInfoTableName, options.ScopeInfoTableName + "_client" })
@@ -91,6 +97,64 @@ public sealed partial class G9CSqliteSyncStore
         }
 
         return result;
+    }
+
+    /// <summary>
+    ///     Dotmim's capture on tables outside the model (<see cref="G9CDotmimRetirementOptions.RetireTablesOutsideModel" />): each tracking
+    ///     table of Dotmim's shape whose base table the model does not hold goes, with that table's Dotmim triggers - unless it still holds
+    ///     local changes Dotmim had not uploaded (they cannot be imported, so the capture is kept and reported).
+    /// </summary>
+    private void RetireOutsideModel(SqliteConnection connection, SqliteTransaction transaction, G9CDotmimRetirementOptions options, long? lastSync,
+        G9CDotmimRetirementResult result)
+    {
+        var candidates = new List<string>();
+        using (var command = Command(connection, transaction, @"SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%\_tracking' ESCAPE '\'"))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read()) candidates.Add(reader.GetString(0));
+        }
+
+        foreach (var tracking in candidates)
+        {
+            var baseName = tracking[..^"_tracking".Length];
+            if (options.TrackingTablesSuffix.Length > 0)
+            {
+                if (!baseName.EndsWith(options.TrackingTablesSuffix, StringComparison.OrdinalIgnoreCase)) continue;
+                baseName = baseName[..^options.TrackingTablesSuffix.Length];
+            }
+
+            if (options.TrackingTablesPrefix.Length > 0)
+            {
+                if (!baseName.StartsWith(options.TrackingTablesPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                baseName = baseName[options.TrackingTablesPrefix.Length..];
+            }
+
+            if (_byLocal.ContainsKey(baseName) || !IsDotmimTrackingTable(connection, transaction, tracking, keyColumn: null)) continue;
+
+            object? last = lastSync;
+            var pending = Convert.ToInt32(Scalar(connection, transaction,
+                $"SELECT count(*) FROM {SqliteSql.Quote(tracking)} WHERE update_scope_id IS NULL AND ($last IS NULL OR [timestamp] > $last)", ("$last", last)),
+                CultureInfo.InvariantCulture);
+            if (pending > 0)
+            {
+                result.KeptOutsideModel[baseName] = pending;
+                continue;
+            }
+
+            foreach (var trigger in DotmimTriggers(connection, transaction, baseName, tracking, options.TriggersPrefix))
+            {
+                Exec(connection, transaction, "DROP TRIGGER " + SqliteSql.Quote(trigger));
+                result.DroppedTriggers.Add(trigger);
+            }
+
+            if (options.DropTrackingTables)
+            {
+                Exec(connection, transaction, "DROP TABLE " + SqliteSql.Quote(tracking));
+                result.DroppedTrackingTables.Add(tracking);
+            }
+
+            result.RetiredOutsideModel.Add(baseName);
+        }
     }
 
     /// <summary>

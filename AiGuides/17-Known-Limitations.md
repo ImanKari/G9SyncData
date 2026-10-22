@@ -27,7 +27,7 @@ Read before promising a feature. Remove an entry only in the change that lifts i
 | The change feed coalesces per row | it reads tracking rows, which keep only the latest change | consumers needing every intermediate state need an audit table |
 | net10.0 only | ADR-0004 | — |
 | GUIDs are stored as 36-character TEXT on the device | the app's tables belong to sqlite-net / EF Core, which map `Guid` to TEXT; BLOB(16) measured 12% faster and 23% smaller (ADR-0034) | none today; a BLOB-GUID column mapping would have to exist in the app's ORM first |
-| One app trigger anywhere in the device database turns off the trigger fast path for every apply | the app's triggers must fire for synced rows (ADR-0034) | retire Dotmim's capture with `RetireDotmimCaptureAsync` (ADR-0038); `GetForeignTriggersAsync` lists what else is left |
+| One app trigger anywhere in the device database turns off the trigger fast path for every apply | the app's triggers must fire for synced rows (ADR-0034) | retire Dotmim's capture with `RetireDotmimCaptureAsync` (ADR-0038) — with `RetireTablesOutsideModel` for tables Dotmim captured and the model does not sync (LES-0079); `GetForeignTriggersAsync` lists what else is left |
 | A MessagePack client cannot talk to a server that offers only JSON | the protocol is chosen in the SignalR handshake (ADR-0039) | `Protocol = Json` on the client; every G9SyncData server offers both |
 
 ## Performance and transport

@@ -31,6 +31,16 @@ public sealed class G9CDotmimRetirementOptions
 
     /// <summary>Drop Dotmim's scope tables once no Dotmim tracking table remains in the database. Default true.</summary>
     public bool DropScopeTablesWhenUnused { get; init; } = true;
+
+    /// <summary>
+    ///     Also retire Dotmim's capture from tables OUTSIDE this store's model - for an app that no longer syncs anything through Dotmim
+    ///     (a Dotmim scope may have carried reference tables the new model leaves out). Off by default: a table outside the model may
+    ///     still sync through a Dotmim scope running side by side. Only whole-model retirements (<see cref="Tables" /> null) do it, and a
+    ///     table whose tracking still holds local changes Dotmim had not uploaded is KEPT (reported in
+    ///     <see cref="G9CDotmimRetirementResult.KeptOutsideModel" />): those changes cannot be imported, so dropping the capture would
+    ///     lose them in silence. Without this, the leftover triggers keep every later download on the slow path (ADR-0034).
+    /// </summary>
+    public bool RetireTablesOutsideModel { get; init; }
 }
 
 /// <summary>What a retirement did. Running it again on the same database does nothing and reports nothing.</summary>
@@ -53,6 +63,15 @@ public sealed class G9CDotmimRetirementResult
     ///     on (ADR-0034); an app trigger is a legitimate reason, a forgotten sync engine's is not.
     /// </summary>
     public List<string> RemainingForeignTriggers { get; } = [];
+
+    /// <summary>Tables outside the model whose Dotmim capture was retired (<see cref="G9CDotmimRetirementOptions.RetireTablesOutsideModel" />).</summary>
+    public List<string> RetiredOutsideModel { get; } = [];
+
+    /// <summary>
+    ///     Tables outside the model whose Dotmim capture was KEPT because their tracking holds local changes Dotmim had not uploaded
+    ///     (table, how many). The app decides what those changes mean; the library cannot import them.
+    /// </summary>
+    public Dictionary<string, int> KeptOutsideModel { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public bool ChangedAnything => DroppedTriggers.Count + DroppedTrackingTables.Count + DroppedScopeTables.Count > 0;
 }

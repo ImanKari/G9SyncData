@@ -801,6 +801,42 @@ The subscription resolver's server parameters come from the host's auth provider
 parameter X", so the request failed naming nothing. Both now return "unsupported", like every other wrong shape. Found by the first
 unit tests of the resolver, which until then was 36 % covered - the part of the server that judges what a device ASKS for.
 
+## LES-0079 — 2026-10-22 · Retiring Dotmim left the capture of tables the model does not sync
+
+AgriPad's upgrade test (dev 5.9.8 on Dotmim → 6.2.10, an emulator against a local database copy) retired Dotmim on the device. The
+tables the store syncs came out clean, but `Region` and `Village` did not. Dotmim had captured them, G9SyncData does not sync them, and
+the retirement only looks at model tables. Their six triggers stayed, so `GetForeignTriggersAsync` was never empty and every later apply
+ran without the trigger fast path (ADR-0034). Their tracking tables also kept `scope_info*` alive. Nothing failed; downloads were simply
+slower for ever.
+
+`G9CDotmimRetirementOptions.RetireTablesOutsideModel` (opt-in) now drops their capture too. A table with unsent Dotmim work keeps its
+capture and is reported (`KeptOutsideModel`), because only a model table can import that work. Three tests pin it: a clean drop that
+lets downloads skip triggers again, a table with unsent work that is kept and reported, and a named `Tables` list that never touches
+anything outside the model. With the drop removed, the first test fails. Rerun on the device: 87 triggers, 29 tracking tables and 2
+scope tables dropped, 4 pending kept, `foreignTriggers: []`.
+
+Lesson: a retirement that cleans only what the new owner knows leaves behind what the old owner knew. Ask what the OLD system put
+there, not what the new one needs.
+
+## LES-0080 — 2026-10-22 · An imported change has no base, so every column the server changed is "the office's"
+
+AgriPad's third upgrade round set up a Dotmim-era offline edit of a tree's `Status` while the office changed its
+`VigorStatus`. The server did the right thing: it kept the office's column and took the device's edit where nothing
+collided. But the device held a kept conflict on `UpdatedTime`, `Status` AND `VigorStatus`. An imported row has no base
+version, so every column the server changed since capture began counts as changed meanwhile, and the import sends every
+column, because Dotmim tracked rows, not columns. Nothing is overwritten silently; the operator decides.
+
+`DotmimCutoverTests.A_Dotmim_era_edit_merges_with_an_office_edit_and_the_office_column_is_kept_as_a_conflict` pins it.
+What changed is the consumer: AgriPad remembers which rows came from the import and asks before «send again» would
+overwrite the office's value with the device's old one.
+
+The same round found that `RevertRejectedAsync` gives a row the server has (version != 0) but no subscription holds the
+version -1 and marks nothing, so no sync is due to bring the server's copy until a subscription that covers the row
+pulls. The library still returns the count; the app checks for such rows before it claims the copy is back.
+
+Lesson: "no base version" is not "no conflict". It means the policy decides with less information, so the consumer has
+to say so.
+
 ## 1.5.7 review — what was measured (2026-10-22)
 
 The question was whether the library holds under heavy, concurrent use. Coverage was measured first (coverlet, both suites): 87.9 %

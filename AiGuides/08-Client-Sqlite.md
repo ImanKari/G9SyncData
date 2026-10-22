@@ -208,6 +208,12 @@ row-metadata statement per table are cached in the `ApplyContext`; the dirty-row
    the table's tracking table (`update_scope_id`, `sync_row_is_tombstone`). An app trigger with a similar name survives.
 3. **Tracking tables** with Dotmim's column shape are dropped (`DropTrackingTables`), and **`scope_info` / `scope_info_client`** once no
    tracking table is left (`DropScopeTablesWhenUnused`).
+4. **Tables outside the model** (`RetireTablesOutsideModel`, opt-in, only when `Tables` is null; LES-0079). A Dotmim device also
+   captured tables this store does not sync (AgriPad: `Region`, `Village`). Their triggers kept the trigger fast path off for good
+   (ADR-0034), and their tracking tables kept `scope_info*` alive. With the option, the triggers and tracking table of every such
+   table (honouring `TrackingTablePrefix`/`Suffix`) are dropped too, unless the table has unsent Dotmim work: nothing outside the
+   model can import it, so that table keeps its capture and is reported in `KeptOutsideModel` (rows per table).
+   `RetiredOutsideModel` lists the rest. A named `Tables` list never touches anything outside the model, even with the option.
 
 The result lists what was dropped and imported, and `RemainingForeignTriggers` — anything left there keeps the apply fast path off
 (ADR-0034). Running it again is a no-op. `GetForeignTriggersAsync()` answers the same question without changing anything.

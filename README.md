@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.8
+
+- **Retiring Dotmim cleans the whole device, not only the model's tables** (LES-0079). `G9CDotmimRetirementOptions.RetireTablesOutsideModel`
+  (opt-in) drops the capture Dotmim left on tables this store does not sync. Those triggers kept the trigger fast path off for good
+  (ADR-0034), and their tracking tables kept `scope_info*` alive. A table that still has unsent Dotmim work keeps its capture and is
+  reported (`KeptOutsideModel`), because nothing outside the model can import it.
+- **A Dotmim-era edit meeting an office edit is pinned by a test** (LES-0080): the server keeps the office's column and takes the device's
+  edit; the office's column comes back as a kept conflict, never overwritten in silence.
+
 ## What's new in 1.5.7
 
 A review for heavy, concurrent use - load and concurrency tests up to 1000 devices at once, coverage measured (LES-0073 – 0078):

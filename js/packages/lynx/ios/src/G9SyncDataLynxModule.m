@@ -5,7 +5,7 @@
 
 typedef void (^G9SyncDataReply)(id envelope);
 
-static NSString *const G9SyncDataLynxVersion = @"1.5.7";
+static NSString *const G9SyncDataLynxVersion = @"1.5.8";
 
 /** The platform's decoder, or NULL before iOS 15 (no Brotli in the Compression framework). */
 static G9SyncDataBrotliDecoder G9SyncDataPlatformDecoder(void) {
