@@ -85,7 +85,17 @@ public sealed class G9CSyncRunResult
     public required Guid RunId { get; init; }
     public required G9ESyncOutcome Outcome { get; init; }
     public G9CSyncException? Error { get; init; }
+    /// <summary>Rows and commands SENT to the server, refused ones included (a row the device refused before sending is not).</summary>
     public int Pushed { get; init; }
+
+    /// <summary>
+    ///     Rows and commands the server TOOK (its acknowledgement: accepted rows + completed commands). This - not
+    ///     <c>Pushed - Rejected</c> - is what an app may call "sent": <see cref="Rejected" /> also counts rows refused on the device
+    ///     before sending (<c>G9S-REJ-TOO-LARGE</c>), which <see cref="Pushed" /> never counted (LES-0071).
+    /// </summary>
+    public int Accepted { get; init; }
+
+    /// <summary>Rows refused - by the server, or on the device before sending (too large). Each has a rejection record.</summary>
     public int Rejected { get; init; }
     public int Conflicts { get; init; }
     public long Downloaded { get; init; }

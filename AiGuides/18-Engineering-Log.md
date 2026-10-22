@@ -717,3 +717,11 @@ test had passed because its server rows were all tracked (version > 0). Now: ver
 subscriptions holding the row (a revert made offline heals on the next sync, forced or not); a row is removed only when it is also
 held by no subscription. The test deletes the pot's tracking row to reproduce version 0 and syncs WITHOUT `ForceReconcile`.
 Lesson: a sentinel must be a value the other side can never produce — 0 was the server's most common version, not an absent one.
+
+## LES-0071 — 2026-10-22 · "Sent" was computed, and a computation hid accepted rows
+
+AgriPad 6.2.7 stopped counting refused rows as sent by subtracting: `Pushed - Rejected`. The review caught that the two counters do
+not cover the same rows: `Rejected` also counts rows refused ON THE DEVICE before sending (`G9S-REJ-TOO-LARGE`, `RejectedLocally`),
+which `Pushed` never counted — three accepted rows next to three oversized ones read "0 sent". The store already knew the true number
+(the acknowledgement's accepted keys, `G9CApplyReport.Accepted`); the engine just did not pass it on. 1.5.5 does: `Accepted` (rows +
+completed commands). Lesson: when two counters are about different sets, do not derive a third by arithmetic — expose the measured one.

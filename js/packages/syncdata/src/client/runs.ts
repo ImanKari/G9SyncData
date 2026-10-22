@@ -138,7 +138,11 @@ export interface G9SyncRunResult {
   runId: string;
   outcome: G9ESyncOutcome;
   error: G9SyncException | null;
+  /** Rows and commands SENT, refused ones included (a row refused on the device before sending is not). */
   pushed: number;
+  /** Rows and commands the server TOOK - what an app may call "sent"; never `pushed - rejected` (LES-0071). */
+  accepted: number;
+  /** Rows refused by the server, or on the device before sending (too large). */
   rejected: number;
   conflicts: number;
   downloaded: number;
@@ -159,6 +163,7 @@ export function makeRunResult(fields: Partial<G9SyncRunResult> & { runId: string
   return {
     error: null,
     pushed: 0,
+    accepted: 0,
     rejected: 0,
     conflicts: 0,
     downloaded: 0,

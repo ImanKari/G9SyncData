@@ -29,7 +29,7 @@ public sealed partial class G9CSyncEngine
         var problems = new List<G9DtSubscriptionState>();
         List<G9CSyncModelProblem> modelProblems = [];
         var synced = new List<string>();
-        int pushed = 0, rejected = 0, conflicts = 0;
+        int pushed = 0, accepted = 0, rejected = 0, conflicts = 0;
         long downloaded = 0, downloadedBytes = 0, reconciled = 0;
         G9CSyncException? error = null;
         var outcome = G9ESyncOutcome.Succeeded;
@@ -121,7 +121,7 @@ public sealed partial class G9CSyncEngine
                 tracker.Enter(G9ESyncPhase.Pushing, pending.TotalRows + pending.PendingCommands);
                 try
                 {
-                    (pushed, rejected, conflicts) = await PushAllAsync(negotiated, subscriptions, hello.MaxPushRows, hello.MaxPushBytes, tracker, changes, ct)
+                    (pushed, accepted, rejected, conflicts) = await PushAllAsync(negotiated, subscriptions, hello.MaxPushRows, hello.MaxPushBytes, tracker, changes, ct)
                         .ConfigureAwait(false);
                 }
                 catch (Exception exception) when (!ct.IsCancellationRequested)
@@ -355,6 +355,7 @@ public sealed partial class G9CSyncEngine
             Outcome = outcome,
             Error = error,
             Pushed = pushed,
+            Accepted = accepted,
             Rejected = rejected,
             Conflicts = conflicts,
             Downloaded = downloaded,
@@ -527,11 +528,11 @@ public sealed partial class G9CSyncEngine
         return ordered;
     }
 
-    private async Task<(int Pushed, int Rejected, int Conflicts)> PushAllAsync(IReadOnlyList<G9DtNegotiatedTable> negotiated,
+    private async Task<(int Pushed, int Accepted, int Rejected, int Conflicts)> PushAllAsync(IReadOnlyList<G9DtNegotiatedTable> negotiated,
         IReadOnlyList<G9CSyncSubscriptionRecord> subscriptions, int serverMaxRows, long serverMaxBytes, G9CSyncProgressTracker tracker, G9CApplyReport changes,
         CancellationToken ct)
     {
-        int pushed = 0, rejected = 0, conflicts = 0;
+        int pushed = 0, accepted = 0, rejected = 0, conflicts = 0;
         var references = subscriptions.Select(s => s.ToReference()).ToList();
 
         // The server's limits win over the device's preference: a batch the server refuses would be refused on every retry. Bytes keep a
@@ -581,6 +582,9 @@ public sealed partial class G9CSyncEngine
             if (report.Upserts + report.Deletes > 0) RaiseRowsApplied(report, G9ESyncPhase.Pushing);
 
             pushed += batch.RowCount + batch.Commands.Count;
+            // What the server TOOK, from its acknowledgement as applied here - not "sent minus refused": a row refused on the device
+            // (too large) is in `rejected` but was never sent, so a subtraction would hide rows the server did accept.
+            accepted += (int)(report.Accepted + report.CommandsCompleted);
             rejected += result.Rejections.Count;
             conflicts += result.Conflicts.Count;
             tracker.Report(pushed);
@@ -599,7 +603,7 @@ public sealed partial class G9CSyncEngine
             if (batchRows < targetRows) batchRows = Math.Min(targetRows, batchRows * 2);
         }
 
-        return (pushed, rejected, conflicts);
+        return (pushed, accepted, rejected, conflicts);
     }
 
     private static async IAsyncEnumerable<G9DtSyncChunk> ToChunks(G9CPushBatch batch, [EnumeratorCancellation] CancellationToken cancellationToken = default)

@@ -95,6 +95,7 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
         var result = await client.SyncAsync();
         Assert.True(result.Outcome == G9ESyncOutcome.CompletedWithRejections, SyncClient.Describe(result));
         Assert.Equal(2, (await client.Engine.GetRejectionsAsync()).Count);
+        Assert.Equal((2, 0, 2), (result.Pushed, result.Accepted, result.Rejected));   // sent, but nothing taken
 
         Assert.Equal(2, await client.Engine.RevertRejectedAsync());
         Assert.Empty(await client.Engine.GetRejectionsAsync());
@@ -132,6 +133,7 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
         var result = await client.SyncAsync();
         Assert.True(result.Outcome == G9ESyncOutcome.CompletedWithRejections, SyncClient.Describe(result));
         var rejection = Assert.Single(await client.Engine.GetRejectionsAsync());
+        Assert.Equal((2, 1, 1), (result.Pushed, result.Accepted, result.Rejected));
         Assert.Equal(Key(duplicate), rejection.Key);
         Assert.Equal("23505", rejection.SqlState);
         Assert.Equal("UX_Pot_SiteId_Code", rejection.Constraint);

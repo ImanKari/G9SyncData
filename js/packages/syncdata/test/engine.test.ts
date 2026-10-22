@@ -212,4 +212,23 @@ describe('G9SyncEngine (scripted transport)', () => {
     expect(reports.recentRuns[0]!.outcome).toBe('Succeeded');
     expect(reports.recentRuns[0]!.pushed).toBe(1);
   });
+
+  it('accepted is what the server took, not "sent minus refused" (LES-0071)', async () => {
+    const { engine, transport, exec } = await setup();
+    await exec("INSERT INTO Note (Id, Text) VALUES ('6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a51', 'taken')");
+    await exec("INSERT INTO Note (Id, Text) VALUES ('6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a52', 'refused')");
+    transport.pushScript = async () => ({
+      batchId: 1,
+      alreadyApplied: false,
+      accepted: [{ tableId: 1, keys: ['6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a51'], versions: [5], deleted: [false] }],
+      rejections: [{ tableId: 1, key: '6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a52', code: 'G9S-REJ-CONSTRAINT', sqlState: '23505' }],
+      conflicts: [],
+      canonicalFrames: [],
+      commandResults: [],
+      error: null,
+    });
+    const result = await engine.run().completion;
+    expect(result.outcome).toBe(G9ESyncOutcome.CompletedWithRejections);
+    expect([result.pushed, result.accepted, result.rejected]).toEqual([2, 1, 1]);
+  });
 });

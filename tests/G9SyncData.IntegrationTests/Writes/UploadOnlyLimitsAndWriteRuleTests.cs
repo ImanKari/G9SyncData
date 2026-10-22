@@ -125,6 +125,8 @@ public sealed class UploadOnlyLimitsAndWriteRuleTests(ITestOutputHelper output)
         Assert.Equal(G9ESyncOutcome.CompletedWithRejections, result.Outcome);
         var rejection = Assert.Single(await client.Engine.GetRejectionsAsync());
         Assert.Equal((Key(pots[30]), G9SyncErrorCodes.RejectTooLarge), (rejection.Key, rejection.Code));
+        // LES-0071: the row refused on the device was never sent - "sent minus refused" (59 - 1) would hide one accepted row.
+        Assert.Equal((59, 59, 1), (result.Pushed, result.Accepted, result.Rejected));
         Assert.Equal(59L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Pot" WHERE "SiteId" = $1 AND length("Note") = 400""", site));
         Assert.True(client.InMemory.CallCount(G9ETransportOperation.Push) >= 4, "59 rows of ~450 bytes under a 5,400-byte budget need several pushes.");
 

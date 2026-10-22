@@ -10,7 +10,7 @@ an `IG9SyncClientStore` and an `IG9SyncTransport`, and publishes progress, event
 | `InitializeAsync()` | provision local tables, capture and metadata; start the worker. Idempotent |
 | `SubscribeAsync(name, parameters?, options?)` | ensure a local subscription; returns its record (key = `name?param=value&…`) |
 | `UnsubscribeAsync(name, parameters?)` | remove it; rows no other subscription holds follow the move-out policy |
-| `Run(request)` → `G9CSyncRun` | queue a run; `ReadProgressAsync()` streams progress, `Completion` gives the result, `Cancel()` |
+| `Run(request)` → `G9CSyncRun` | queue a run; `ReadProgressAsync()` streams progress, `Completion` gives the result, `Cancel()`. The result's `Pushed` = sent (refused included), `Accepted` = what the server took, `Rejected` = refused by the server or on the device (too large) — an app says "sent" with `Accepted`, never `Pushed - Rejected` (LES-0071) |
 | `SyncAsync(request)` | `Run(request).Completion` |
 | `SuppressBackground()` | disposable scope during which background runs are skipped |
 | `StartAutomaticSync(interval)` / `StopAutomaticSync()` | periodic background runs |

@@ -533,6 +533,7 @@ export class G9SyncEngine {
     let modelProblems: G9SyncModelProblem[] = [];
     const synced: string[] = [];
     let pushed = 0;
+    let accepted = 0;
     let rejected = 0;
     let conflicts = 0;
     let downloaded = 0;
@@ -622,6 +623,7 @@ export class G9SyncEngine {
           try {
             const totals = await this._pushAll(negotiated, subscriptions, hello.maxPushRows, hello.maxPushBytes, tracker, changes, ct);
             pushed = totals.pushed;
+            accepted = totals.accepted;
             rejected = totals.rejected;
             conflicts = totals.conflicts;
           } catch (exception) {
@@ -840,6 +842,7 @@ export class G9SyncEngine {
         outcome,
         error,
         pushed,
+        accepted,
         rejected,
         conflicts,
         downloaded,
@@ -965,8 +968,9 @@ export class G9SyncEngine {
     tracker: G9SyncProgressTracker,
     changes: G9ApplyReport,
     ct: AbortSignal,
-  ): Promise<{ pushed: number; rejected: number; conflicts: number }> {
+  ): Promise<{ pushed: number; accepted: number; rejected: number; conflicts: number }> {
     let pushed = 0;
+    let accepted = 0;
     let rejected = 0;
     let conflicts = 0;
     const references = subscriptions.map(toSubscriptionRef);
@@ -1015,6 +1019,9 @@ export class G9SyncEngine {
       changes.merge(report);
       if (report.upserts + report.deletes > 0) this._raiseRowsApplied(report, G9ESyncPhase.Pushing);
       pushed += batch.rowCount + batch.commands.length;
+      // What the server TOOK (its acknowledgement), not "sent minus refused": a row refused on the device (too large) is in
+      // `rejected` but was never sent (LES-0071).
+      accepted += report.accepted + report.commandsCompleted;
       rejected += result.rejections.length;
       conflicts += result.conflicts.length;
       tracker.report(pushed);
@@ -1032,7 +1039,7 @@ export class G9SyncEngine {
       // After a split: grow back towards the normal size.
       if (batchRows < targetRows) batchRows = Math.min(targetRows, batchRows * 2);
     }
-    return { pushed, rejected, conflicts };
+    return { pushed, accepted, rejected, conflicts };
   }
 
   private async _download(runId: string, plan: G9DtPullPlan, tracker: G9SyncProgressTracker, ct: AbortSignal): Promise<{ rows: number; bytes: number }> {

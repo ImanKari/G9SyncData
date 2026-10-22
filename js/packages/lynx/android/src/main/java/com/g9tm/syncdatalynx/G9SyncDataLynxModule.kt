@@ -26,7 +26,7 @@ class G9SyncDataLynxModule(context: LynxContext) : G9SyncDataLynxModuleSpec(cont
   private val cacheDirectory: String? by lazy { runCatching { context.cacheDir?.absolutePath }.getOrNull() }
 
   companion object {
-    const val VERSION = "1.5.4"
+    const val VERSION = "1.5.5"
 
     private val decoders: ExecutorService by lazy {
       val count = AtomicInteger()

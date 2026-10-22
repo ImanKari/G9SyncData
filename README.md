@@ -23,6 +23,13 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.5
+
+- **`Accepted` on every run result** (LES-0071): the rows and commands the server TOOK, from its acknowledgement. `Pushed` counts
+  everything sent, refused rows included, and `Rejected` also counts rows refused on the device before sending (too large) — so
+  `Pushed - Rejected`, the obvious way to say "sent", undercounts whenever a row was refused locally. Say "sent" with `Accepted`.
+  TypeScript: `result.accepted`.
+
 ## What's new in 1.5.4
 
 - **A reverted change really gets the server's copy back** (LES-0070, second entry). 1.5.3 "forgot" a reverted row's version by
