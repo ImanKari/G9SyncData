@@ -121,13 +121,48 @@ Two traps: Windows reserves port ranges (check `netsh interface ipv4 show exclud
 one), and `pg_ctl -w start` from a tool that waits for the child's output pipe hangs even though the server started —
 launch it detached with a log file.
 
+## Coverage
+
+Both test projects reference `coverlet.collector`. Measure, then summarise with ReportGenerator (`dotnet tool install -g
+dotnet-reportgenerator-globaltool`):
+
+```powershell
+dotnet test tests/G9SyncData.Tests --collect:"XPlat Code Coverage" --results-directory artifacts/coverage/unit
+dotnet test tests/G9SyncData.IntegrationTests --collect:"XPlat Code Coverage" --results-directory artifacts/coverage/int
+reportgenerator "-reports:artifacts/coverage/**/coverage.cobertura.xml" "-targetdir:artifacts/coverage/report" "-reporttypes:TextSummary;Html"
+```
+
+Before the 1.5.7 review (2026-10-22): 87.9 % lines, 71 % branches. The gaps it closed: the subscription resolver (36 %), the SignalR
+transport's error paths (client 53.8 %, hub 67.5 %), the change listener's recovery. A covered line is not a proven behaviour: every
+1.5.7 fix was checked by removing it and watching its test fail.
+
+## Load and concurrency (`Load/`, 1.5.7)
+
+| Test | Proves |
+|---|---|
+| `FleetLoadTests` (in memory and over real SignalR) | a whole fleet's first syncs, pushes and pulls at once - own edits, inserts, one row everybody edits, an office writer meanwhile - converge exactly: no edit lost, exactly one winner on the shared row, every loser KEPT as a refusal. Size `G9SYNC_LOAD_DEVICES` (default 40; acceptance 1000, half of it over SignalR) |
+| `ConcurrencyTests` | a push waits for an uncommitted office edit and reports the conflict (LES-0073); office writers committing out of order never hide a change from devices syncing meanwhile; one batch sent twice at once is applied once; opposite-order pushes do not deadlock (LES-0077) |
+| `AdmissionTests` | a storm past a tiny pool is refused as busy, never fails waiting for a connection (LES-0074); the startup warning |
+| `Resilience/ChangeListenerTests` | pokes resume after the listener's connection is killed, and after it goes half-open (`FreezingTcpProxy`, LES-0076) |
+| `Resilience/SignalRErrorPathTests` | a missing server is a retryable network failure, a refused credential is unauthorized and asked once, an internal failure is retryable and carries none of its internals, a throwing change handler does not break the connection |
+| `Conflicts/ClockTests` | Hello reports the store's (database's) clock; the device's offset matches it (LES-0075) |
+| `Conflicts/KeptConflictTests` | `KeepLostConflicts` (LES-0072) |
+| `G9SyncData.Tests/Server/SubscriptionResolverTests` | every way a device's subscription reference can be wrong, and server parameters of every shape (LES-0078) |
+
+```powershell
+$env:G9SYNC_LOAD_DEVICES = 1000; dotnet test tests/G9SyncData.IntegrationTests --filter "FullyQualifiedName~Load"; $env:G9SYNC_LOAD_DEVICES = $null
+```
+
 ## Running the suite in both capture modes
 
 The integration suite is run **twice**: once as is (trigger capture) and once with the WAL consumer:
 
 ```powershell
-$env:G9SYNC_TEST_CAPTURE = "wal"; dotnet test tests/G9SyncData.IntegrationTests; $env:G9SYNC_TEST_CAPTURE = $null
+$env:G9SYNC_TEST_CAPTURE = "wal"; dotnet test tests/G9SyncData.IntegrationTests -- xUnit.MaxParallelThreads=3; $env:G9SYNC_TEST_CAPTURE = $null
 ```
+
+⛔ **Limit the parallelism in WAL mode.** Every test database needs a replication slot, and a server with `max_replication_slots = 10`
+runs out when the whole suite starts at once: ~120 tests then fail on timeouts that have nothing to do with what they test.
 
 In WAL mode every test database gets its own publication and slot (named after the database), the harness starts the
 consumer, and **every harness server write waits until it has been captured** (`SyncHarness.WaitForCaptureAsync`), so tests

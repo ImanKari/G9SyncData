@@ -36,6 +36,13 @@ public interface IG9SyncServerStore
 
     Task TouchClientAsync(Guid clientId, string? userId, string? appVersion, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     The time on the clock the store stamps changes with - the database's, not this process's (LES-0075). Hello reports it, and a
+    ///     device maps its edit times onto it, so last-writer-wins compares a device edit and a server change on ONE clock. The default is
+    ///     this process's clock, for a store whose change times come from it.
+    /// </summary>
+    Task<DateTime> GetClockAsync(CancellationToken cancellationToken) => Task.FromResult(DateTime.UtcNow);
+
     Task<G9CStorePartEstimate> EstimatePartAsync(G9CStorePartRequest request, CancellationToken cancellationToken);
 
     /// <summary>Reads one pull part in key order, one frame per page. Pages with no rows are never yielded.</summary>

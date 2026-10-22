@@ -319,7 +319,7 @@ building, built), `g9sync.server.snapshot_files.bytes`.
 |---|---|---|
 | `PreviousTokenSigningKeys` | empty | accepted for verification, never used to sign - rotate without discarding pulls in flight (ADR-0064) |
 | `RequireTokenSigningKey` | false | refuse to start without a key. Set it in production |
-| `MaxConcurrentPulls` / `MaxConcurrentPushes` | 64 / 32 | admission control; pull, reconcile and row fetch share the pull slots (ADR-0062) |
+| `MaxConcurrentPulls` / `MaxConcurrentPushes` / `MaxConcurrentPlans` | 48 / 32 / 16 | admission control; pull, reconcile and row fetch share the pull slots, Hello and PlanPull the plan slots (ADR-0062, LES-0074). Keep their sum + 4 below the pool size - the store warns at startup otherwise |
 | `AdmissionWait` | 5 s | how long a request waits for a slot before `G9S-SRV-BUSY` |
 
 - A push authorises the caller and takes its slot BEFORE it buffers the upload.

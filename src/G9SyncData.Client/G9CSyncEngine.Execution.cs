@@ -64,15 +64,24 @@ public sealed partial class G9CSyncEngine
             await EnsureConnectedAsync(ct).ConfigureAwait(false);
             await _store.CollectExpiredEphemeralAsync(DateTime.UtcNow, ct).ConfigureAwait(false);
             var subscriptions = await _store.GetSubscriptionsAsync(ct).ConfigureAwait(false);
-            var hello = await WithRetryAsync(token => _transport.HelloAsync(new G9DtHelloRequest
+            var helloMidpoint = DateTime.UtcNow;
+            var hello = await WithRetryAsync(async token =>
             {
-                ClientId = _clientId,
-                AppVersion = _options.AppVersion,
-                Tables = _model.Tables.Select(t => t.ToWire()).ToList(),
-                Subscriptions = subscriptions.Select(s => s.ToReference()).ToList()
-            }, token), ct).ConfigureAwait(false);
+                // The round trip of the attempt that answered: its midpoint is the local time of the server's clock reading (LES-0075).
+                var sent = DateTime.UtcNow;
+                var answer = await _transport.HelloAsync(new G9DtHelloRequest
+                {
+                    ClientId = _clientId,
+                    AppVersion = _options.AppVersion,
+                    Tables = _model.Tables.Select(t => t.ToWire()).ToList(),
+                    Subscriptions = subscriptions.Select(s => s.ToReference()).ToList()
+                }, token).ConfigureAwait(false);
+                var received = DateTime.UtcNow;
+                helloMidpoint = sent + ((received - sent) / 2);
+                return answer;
+            }, ct).ConfigureAwait(false);
             if (hello.Error is not null) throw hello.Error.ToException();
-            await _store.SaveHelloAsync(hello, ct).ConfigureAwait(false);
+            await _store.SaveHelloAsync(hello, helloMidpoint, ct).ConfigureAwait(false);
             if (hello.UnknownTables.Count > 0) LogUnknownTables(_logger, string.Join(", ", hello.UnknownTables));
 
             // A column declared with the wrong type is dropped from the negotiation and syncs in NEITHER direction (ADR-0061). That used

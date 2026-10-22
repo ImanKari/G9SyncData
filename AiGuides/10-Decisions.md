@@ -1491,6 +1491,10 @@ pull slots. A push resolves its auth context and takes its slot BEFORE reading t
 **Consequences.** Overload degrades to waiting instead of failing unpredictably. Hosts on a shared database should set both limits
 well below their share of `max_connections`.
 
+**Amendment (1.5.7, LES-0074).** Hello and PlanPull take slots too - `MaxConcurrentPlans` (16); a plan does real database work and was
+the one unbounded door. Defaults now fit Npgsql's default pool: 48 pulls + 32 pushes + 16 plans + 4 for the host = 100 (pulls were
+64). The PostgreSQL store warns at startup (event 22030) when the limits can hold more connections than the pool has.
+
 ## ADR-0063 — A push that is refused for too many rejections is split, not repeated
 
 **Status:** accepted (2026-09-21).
@@ -1838,3 +1842,34 @@ the 60 s `CallTimeout`. A site's first plan estimates every part, builds the par
 emulator run measured 16 s for a 450,000-row farm against a desktop server with a local database, and a busy server on a shared one
 can take several times that. Under the Hello limit such a plan was abandoned and the connection dropped, so the retry could ask for
 the same plan again and never finish (LES-0068). Test: `A_slow_plan_is_not_cut_by_the_hello_limit`.
+
+## ADR-0075 — A push locks every row it will touch before it checks or applies anything, in one global order
+
+**Status:** accepted (2026-10-22, 1.5.7). LES-0073, LES-0077.
+
+**Context.** Two defects of one shape. (1) In trigger mode the conflict check read tracking before the push held the row; a writer
+still running was invisible, so two pushes of one row both passed and the second overwrote the first in silence. (2) Locks were
+taken as rows were applied - deletes child-first, upserts parent-first - so two pushes deleting a child and editing its parent each
+other's way round deadlocked (24 rounds of 25).
+
+**Decision.** Right after every table is staged and write-authorised, the push locks the existing rows of every staged table - tables
+in model order, each table's deletes and upserts together in key order - with `SELECT … ORDER BY key FOR NO KEY UPDATE`. The conflict
+check runs afterwards, as a new statement under READ COMMITTED, so it sees every writer that held those rows. `FOR NO KEY UPDATE`
+excludes every other writer of the row (an update holds it, a delete a stronger lock) but not a foreign-key check (`FOR KEY SHARE`),
+so pushes inserting rows that merely reference a locked row are not blocked. WAL mode still records the current state after locking
+(ADR-0028).
+
+**Consequences.** Pushes of overlapping rows queue instead of overwriting or deadlocking each other; non-overlapping pushes are
+untouched. A writer outside the library still takes locks in its own order and can deadlock with a push (the push fails, retryably).
+The lock is one statement per staged table per push.
+
+## ADR-0076 — Hello reports the database's clock, and a device takes the midpoint of its round trip
+
+**Status:** accepted (2026-10-22, 1.5.7). LES-0075.
+
+**Decision.** `G9DtHelloResult.ServerTimeUtc` is `IG9SyncServerStore.GetClockAsync` (PostgreSQL: `clock_timestamp()`), read at the end
+of Hello. A store whose change times come from the process keeps the default (`DateTime.UtcNow`). Both clients measure the Hello round
+trip and store `serverTime - midpoint` as the offset.
+
+**Consequences.** Last-writer-wins compares a device edit and a server change on one clock - the one that stamped the change - whatever
+the app server's clock says. One extra trivial query per Hello.

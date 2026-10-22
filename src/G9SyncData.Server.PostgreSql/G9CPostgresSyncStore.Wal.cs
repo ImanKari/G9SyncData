@@ -353,15 +353,28 @@ public sealed partial class G9CPostgresSyncStore
     private async Task LockAndRecordCurrentStateAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, string stage,
         CancellationToken ct)
     {
-        var key = table.Key.Quoted;
-
-        // Sorted lock order in both the push and the consumer: the two can then never deadlock on tracking rows.
-        await ExecuteAsync(connection, transaction,
-            $"SELECT 1 FROM {table.BaseName} AS t WHERE EXISTS (SELECT 1 FROM {stage} AS s WHERE s.g9_key = t.{key} AND s.g9_action = 1) " +
-            $"ORDER BY t.{key} FOR UPDATE OF t", ct).ConfigureAwait(false);
-
+        await LockStagedRowsAsync(connection, transaction, table, stage, ct).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, PgCaptureSql.WalRecordStaged(table, _schema, stage), ct,
             P("g9_changed_at", NpgsqlDbType.TimestampTz, DateTime.UtcNow)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Locks the existing rows a push is about to check, in key order (LES-0073). Sorted, so two pushes - and a push and the WAL
+    ///     consumer - never deadlock on the rows of one table. <c>FOR NO KEY UPDATE</c>: it waits for, and then excludes, every other
+    ///     writer of these rows (an update holds the same lock, a delete a stronger one), but not a push inserting rows that merely
+    ///     reference them - a foreign-key check takes only <c>FOR KEY SHARE</c>, which this lock does not block.
+    /// </summary>
+    private Task LockStagedRowsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, string stage, CancellationToken ct) =>
+        LockRowsAsync(connection, transaction, table, [stage], ct);
+
+    /// <summary>Locks the existing rows of <paramref name="table" /> named by any of <paramref name="stages" />, in ONE key order.</summary>
+    private async Task LockRowsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, IReadOnlyList<string> stages, CancellationToken ct)
+    {
+        if (stages.Count == 0) return;
+        var key = table.Key.Quoted;
+        var keys = string.Join(" UNION ALL ", stages.Select(stage => $"SELECT s.g9_key FROM {stage} AS s WHERE s.g9_action = 1"));
+        await ExecuteAsync(connection, transaction,
+            $"SELECT 1 FROM {table.BaseName} AS t WHERE t.{key} IN ({keys}) ORDER BY t.{key} FOR NO KEY UPDATE OF t", ct).ConfigureAwait(false);
     }
 
     // ================================================================ waiting for capture (applications and tests)

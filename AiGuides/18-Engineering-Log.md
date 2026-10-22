@@ -741,3 +741,70 @@ the conflict's code, the lost column names (`column_name`) and the server's valu
 rejected (`G9CApplyReport.ConflictsKept`). `RetryRejectedAsync` then sends it on top of the server's version — no longer a conflict, so
 the device wins only because a person chose it; `RevertRejectedAsync` takes the server's copy as for any refusal. `KeptConflictTests`.
 Lesson: "the server wins" is a decision about the server; on the device the losing change still needs a visible end.
+
+## LES-0073 — 2026-10-22 · Two pushes of the same row both found "no conflict", and the second overwrote the first
+
+The first fleet test (40 devices, one row everybody edits) reported most pushes "accepted, 0 conflicts": a lost update, and the losing
+device was never told. In trigger mode the push read tracking for its conflict check BEFORE it held the row. Trigger capture records a
+change inside the writer's own transaction, so a writer that had not committed yet was invisible: push A checked and wrote (holding
+the row lock), push B checked at the same time and saw nothing, waited for A's lock and wrote over A once A committed. The same for an
+office edit committing between a push's check and its write. WAL mode already locked first (ADR-0028); trigger mode assumed
+"committed means tracked" was enough - it is only enough for writers that have committed. Now every push locks the rows it will touch
+before the check, in both modes (ADR-0075). `A_push_waits_for_an_uncommitted_office_edit…` holds an office edit open and proves the push
+waits and reports the conflict; removing the lock fails it and both fleet tests. Lesson: a check-then-act under READ COMMITTED needs the
+lock BEFORE the check; "the trigger records it in the same transaction" says nothing about transactions still running.
+
+## LES-0074 — 2026-10-22 · Hello and pull planning were the one unbounded door to the connection pool
+
+ADR-0062 bounded pulls and pushes, not Hello and PlanPull - and a plan is real database work (exact counts per part, key-set builds,
+snapshot-file planning). `A_storm_beyond_the_connection_pool…` (120 devices, a pool of 10 that waits 1 s, a scope whose counts cost
+0.2 s) failed 8 runs with `G9S-SRV-ERROR` - requests that waited inside Npgsql's pool until it gave up - instead of the fast, retryable
+"busy" admission exists to give. Now Hello and PlanPull take `MaxConcurrentPlans` slots (16), the defaults fit Npgsql's default pool
+(48 + 32 + 16 + 4 for the host = 100; pulls were 64), and the PostgreSQL store warns at startup when the limits can exceed the pool
+(event 22030). Two traps on the way to a test that can fail: plans are fast, so 120 of them drain through 10 connections within the
+pool's 1 s unless each holds its connection; and a plan's counts are cached per scope (digest cache), so devices sharing one site plan
+from the cache after the first. Lesson: an admission scheme is only as good as its least-bounded door.
+
+## LES-0075 — 2026-10-22 · Last-writer-wins compared two clocks
+
+A device maps its edit times onto the server's clock with the offset it measures at Hello; the server's change time is `changed_at`,
+stamped by the DATABASE (`now()`). Hello reported the APP SERVER's clock. On two machines whatever the clocks disagree by was added to
+every device edit, and decided which side won. The device's side was loose too: it read its own clock after the store's write lock,
+so the offset was off by the return trip and any wait. Now Hello reports `IG9SyncServerStore.GetClockAsync` (the database's
+`clock_timestamp()`, read last), and both clients take the midpoint of the Hello round trip (`SaveHelloAsync(hello, midpoint)`,
+`saveHello(hello, signal, midpointMs)`). `Hello_takes_its_time_from_the_stores_clock…` shifts the store's clock by two hours through a
+proxy; without the change it fails.
+
+## LES-0076 — 2026-10-22 · A half-open listener connection would have stopped every poke for good
+
+The change listener waits on one connection for as long as the server runs. A connection killed by the database fails and is replaced
+(the loop already did that). A connection left HALF-OPEN - a network partition, a dropped NAT entry, a failover that never sent a reset
+- never fails: Npgsql only notices when something is written, and a listener writes nothing. Pokes stopped with no error until the
+process restarted. Now the listener proves its connection with `SELECT 1` after `ListenerHeartbeat` (30 s) of silence, bounded by
+`ListenerHeartbeatTimeout` (15 s). `Pokes_resume_after_the_listeners_connection_goes_half_open` puts a TCP relay in front of
+PostgreSQL that freezes every open connection without closing it: with the heartbeat off, no poke in 30 s; on, pokes resume in ~6 s.
+
+## LES-0077 — 2026-10-22 · Pushes deadlocked each other 24 times out of 25
+
+A push applies deletes child-first and upserts parent-first. A device deleting a pot and renaming its site, against another renaming
+the site and editing the pot, took the two rows' locks in opposite orders: PostgreSQL killed one push as a deadlock in 24 rounds of 25
+(`Pushes_touching_the_same_rows_in_opposite_orders…`). It converged on retry, but a fleet editing shared parents burns round trips, and
+with retries exhausted the user sees a failed sync. Now a push locks every existing row it will touch right after staging - tables in
+model order, each table's deletes and upserts together in key order - before anything is applied (ADR-0075): 0 deadlocks, and the test
+runs in 9 s instead of 37. Office writers outside the library still lock in their own order; a deadlock with one fails that push
+(retryable), as before.
+
+## LES-0078 — 2026-10-22 · A server parameter of the wrong shape failed as a bare "server error"
+
+The subscription resolver's server parameters come from the host's auth provider. A list of texts that were not GUIDs went through
+`Guid.Parse` and a list of longs beyond Int32 through `checked()`: both threw past the resolver's own "unsupported value for server
+parameter X", so the request failed naming nothing. Both now return "unsupported", like every other wrong shape. Found by the first
+unit tests of the resolver, which until then was 36 % covered - the part of the server that judges what a device ASKS for.
+
+## 1.5.7 review — what was measured (2026-10-22)
+
+The question was whether the library holds under heavy, concurrent use. Coverage was measured first (coverlet, both suites): 87.9 %
+lines and 71 % branches overall; the SignalR transport (53 % client, 66 % hub) and the subscription resolver (36 %) were the gaps.
+New load and concurrency tests then found LES-0073, LES-0074, LES-0076 and LES-0077, and the resolver tests LES-0078; each fix is
+pinned by a test that fails without it (checked by removing the fix). The fleet test passes at 1000 devices in memory and 500 over
+real SignalR on one machine; numbers in [19](19-Performance.md).

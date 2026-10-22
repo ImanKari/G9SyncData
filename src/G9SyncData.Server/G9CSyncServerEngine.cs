@@ -31,6 +31,7 @@ public sealed partial class G9CSyncServerEngine
     private readonly G9CSyncTokenService _tokens;
     private readonly SemaphoreSlim? _pullSlots;
     private readonly SemaphoreSlim? _pushSlots;
+    private readonly SemaphoreSlim? _planSlots;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly IG9SnapshotFileService? _files;
     private volatile bool _initialized;
@@ -57,6 +58,7 @@ public sealed partial class G9CSyncServerEngine
         _tokens = new G9CSyncTokenService(_options.TokenSigningKey, _options.TokenLifetime, [.. _options.PreviousTokenSigningKeys], _options.RequireTokenSigningKey);
         _pullSlots = _options.MaxConcurrentPulls > 0 ? new SemaphoreSlim(_options.MaxConcurrentPulls, _options.MaxConcurrentPulls) : null;
         _pushSlots = _options.MaxConcurrentPushes > 0 ? new SemaphoreSlim(_options.MaxConcurrentPushes, _options.MaxConcurrentPushes) : null;
+        _planSlots = _options.MaxConcurrentPlans > 0 ? new SemaphoreSlim(_options.MaxConcurrentPlans, _options.MaxConcurrentPlans) : null;
     }
 
     /// <summary>
@@ -141,6 +143,7 @@ public sealed partial class G9CSyncServerEngine
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(request);
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        using var slot = await AdmitAsync(_planSlots, "hello", cancellationToken).ConfigureAwait(false);
         G9CSyncServerTelemetry.Hellos.Add(1);
 
         var result = new G9DtHelloResult
@@ -192,6 +195,10 @@ public sealed partial class G9CSyncServerEngine
             result.Subscriptions.Add(await DecideAsync(reference, auth, cancellationToken).ConfigureAwait(false));
         }
 
+        // Last, and from the database (LES-0075): the device takes the midpoint of its round trip as the moment of this stamp, and
+        // last-writer-wins compares its edit times with change times the DATABASE stamped. The app server's clock used to be sent:
+        // with the two on different machines, whatever they disagree by was added to every device edit.
+        result.ServerTimeUtc = await _store.GetClockAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }
 
@@ -202,6 +209,7 @@ public sealed partial class G9CSyncServerEngine
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(request);
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+        using var slot = await AdmitAsync(_planSlots, "plan", cancellationToken).ConfigureAwait(false);
         using var activity = G9CSyncServerTelemetry.ActivitySource.StartActivity("G9Sync.PlanPull");
         activity?.SetTag("g9sync.client_id", request.ClientId.ToString());
         var auth = await _authProvider.ResolveAsync(caller, cancellationToken).ConfigureAwait(false);

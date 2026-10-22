@@ -235,7 +235,9 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
         };
     }
 
-    public async Task SaveHelloAsync(G9DtHelloResult hello, CancellationToken cancellationToken)
+    public Task SaveHelloAsync(G9DtHelloResult hello, CancellationToken cancellationToken) => SaveHelloAsync(hello, DateTime.UtcNow, cancellationToken);
+
+    public async Task SaveHelloAsync(G9DtHelloResult hello, DateTime localMidpointUtc, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(hello);
         var model = EnsureInitialized();
@@ -246,7 +248,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             using var transaction = connection.BeginTransaction(deferred: false);
             SetMeta(connection, transaction, "epoch", hello.Epoch.ToString("D"));
             SetMeta(connection, transaction, "last_hello_utc", NowMs().ToString(CultureInfo.InvariantCulture));
-            SetMeta(connection, transaction, "server_offset_ms", ((long)(hello.ServerTimeUtc - DateTime.UtcNow).TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
+            SetMeta(connection, transaction, "server_offset_ms", ((long)(hello.ServerTimeUtc - localMidpointUtc).TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
             SetMeta(connection, transaction, "definitions_json", JsonSerializer.Serialize(hello.Definitions, G9SyncJsonContext.Default.ListG9DtSubscriptionDefinition));
             SetMeta(connection, transaction, "tables_json", JsonSerializer.Serialize(hello.Tables, G9SyncJsonContext.Default.ListG9DtNegotiatedTable));
 

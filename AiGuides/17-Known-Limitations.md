@@ -70,6 +70,13 @@ Read before promising a feature. Remove an entry only in the change that lifts i
 - `ExportPendingChangesAsync` needs an initialised store. A file too damaged to open never gets that far; the application then
   has only the file itself to hand to support.
 
+## Concurrency (1.5.7)
+
+- A push locks the rows it touches in one global order, so pushes cannot deadlock each other (ADR-0075). A writer OUTSIDE the library
+  (the office application) still locks in its own order and can deadlock with a push; the push then fails retryably and is sent again.
+- The fleet test runs every device in one process against one server on one machine (1000 in memory, 500 over loopback SignalR). A
+  fleet across real networks, several server instances under load and a database on another machine are not measured.
+
 ## Not yet covered by tests
 
 - The AgriPad pilot on a device and through the Mobile server's real hub (auth provider inside SignalR, `?access_token=`); verified only

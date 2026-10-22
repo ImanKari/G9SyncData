@@ -23,6 +23,20 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.7
+
+A review for heavy, concurrent use - load and concurrency tests up to 1000 devices at once, coverage measured (LES-0073 – 0078):
+
+- **No lost updates under concurrency** (ADR-0075). In trigger mode two pushes of the same row could both pass the conflict check
+  and the second silently overwrote the first (an office edit too). A push now locks every row it will touch before it checks or
+  applies anything, in one global order - which also ends deadlocks between pushes (24 of 25 rounds of one pattern deadlocked).
+- **Hello and pull planning are admitted too** (`MaxConcurrentPlans`, 16). Defaults now fit the default pool (48 + 32 + 16); the
+  PostgreSQL store warns at startup when the limits can exceed the pool.
+- **Last-writer-wins on one clock** (ADR-0076): Hello reports the database's clock, and both clients take the midpoint of the round trip.
+- **The change listener survives a half-open connection** (`ListenerHeartbeat`): pokes no longer stop for good after a network blip.
+- **The subscription resolver** fails cleanly on server parameters of the wrong shape.
+- **TypeScript:** `keepLostConflicts` (the 1.5.6 behaviour) and the round-trip midpoint.
+
 ## What's new in 1.5.6
 
 - **A conflict the device loses is no longer overwritten in silence** (LES-0072). `G9CSqliteSyncStoreOptions.KeepLostConflicts`
@@ -30,8 +44,7 @@ the .NET client byte for byte.
   overlapping columns of a column merge — the device keeps its values for exactly that, takes the server's for everything else, and
   lists the row as a rejection with the conflict's code, the lost columns and the server's values for them. `RetryRejectedAsync` sends
   it on top of the server's version (the device wins, by a person's choice); `RevertRejectedAsync` takes the server's. The run counts
-  it as rejected. Off, a conflict applies the canonical row as before. TypeScript: not yet — the TS store still applies the
-  canonical row (follows with the AgriPad Lynx port).
+  it as rejected. Off, a conflict applies the canonical row as before. TypeScript: from 1.5.7 (`keepLostConflicts`).
 
 ## What's new in 1.5.5
 

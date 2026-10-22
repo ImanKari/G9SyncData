@@ -211,11 +211,14 @@ internal static class G9CSubscriptionResolver
             {
                 case G9ESyncColumnType.Guid:
                 {
+                    // A text that is not a GUID, or a number out of range below, is an unsupported value like any other: the caller
+                    // reports which parameter it was. Guid.Parse / checked() threw instead, and the request failed as a bare
+                    // "server error" naming nothing.
                     Guid[]? list = raw switch
                     {
                         Guid[] a => a,
                         IEnumerable<Guid> e => e.ToArray(),
-                        IEnumerable<string> s => s.Select(Guid.Parse).ToArray(),
+                        IEnumerable<string> s => TryParseGuids(s),
                         _ => null
                     };
                     if (list is null) return false;
@@ -229,7 +232,7 @@ internal static class G9CSubscriptionResolver
                     {
                         int[] a => a,
                         IEnumerable<int> e => e.ToArray(),
-                        IEnumerable<long> l => l.Select(v => checked((int)v)).ToArray(),
+                        IEnumerable<long> l => l.All(v => v is >= int.MinValue and <= int.MaxValue) ? l.Select(v => (int)v).ToArray() : null,
                         _ => null
                     };
                     if (list is null) return false;
@@ -309,5 +312,17 @@ internal static class G9CSubscriptionResolver
             default:
                 return false;
         }
+    }
+
+    private static Guid[]? TryParseGuids(IEnumerable<string> texts)
+    {
+        var list = new List<Guid>();
+        foreach (var text in texts)
+        {
+            if (!Guid.TryParse(text, out var guid)) return null;
+            list.Add(guid);
+        }
+
+        return [.. list];
     }
 }

@@ -85,9 +85,17 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
         await harness.InsertSiteAsync(site, "North");
         await harness.InsertPotsAsync(site, 1);
         var existing = (await harness.PotIdsAsync(site))[0];
-        await harness.ExecServerAsync("DELETE FROM g9sync." + G9SyncData.Server.PostgreSql.Internal.PgNames.Quote(G9SyncData.Server.PostgreSql.Internal.PgNames.TrackingBare("farm", "Pot")) + " WHERE \"Id\" = $1", existing);
+
+        // Version 0 exists only in trigger mode. WAL mode seeds every row into tracking at install (ADR-0028), and a tracking row
+        // deleted by hand is re-recorded by the push's pre-check as a server change - a conflict, not the rejection under test.
+        if (!harness.UsesWal)
+        {
+            await harness.ExecServerAsync("DELETE FROM g9sync." + G9SyncData.Server.PostgreSql.Internal.PgNames.Quote(G9SyncData.Server.PostgreSql.Internal.PgNames.TrackingBare("farm", "Pot")) + " WHERE \"Id\" = $1", existing);
+        }
+
         await using var client = await harness.CreateSubscribedClientAsync(site);
-        Assert.Equal(0L, Convert.ToInt64(await client.ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(existing)), System.Globalization.CultureInfo.InvariantCulture));
+        var serverVersion = Convert.ToInt64(await client.ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(existing)), System.Globalization.CultureInfo.InvariantCulture);
+        if (!harness.UsesWal) Assert.Equal(0L, serverVersion);
         var inserted = Guid.NewGuid();
 
         await client.ExecAsync("UPDATE Pot SET Code = 'BAD-EDIT' WHERE Id = $p0", Key(existing));
@@ -108,7 +116,7 @@ public sealed class EfCoreRowWriterTests(ITestOutputHelper output)
         // An ordinary sync - not a forced one: the mark survives being offline until the next run of the subscription.
         await client.SyncOkAsync();
         Assert.Equal("P00001", await client.ScalarAsync("SELECT Code FROM Pot WHERE Id = $p0", Key(existing)));
-        Assert.Equal(0L, Convert.ToInt64(await client.ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(existing)), System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(serverVersion, Convert.ToInt64(await client.ScalarAsync("SELECT server_ver FROM g9_rows WHERE pk = $p0", Key(existing)), System.Globalization.CultureInfo.InvariantCulture));
         Assert.DoesNotContain(await client.Engine.GetSubscriptionsAsync(), s => s.State == G9ESubscriptionState.NeedsReconcile);
         Assert.Equal(0, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
         Assert.Equal("P00001", await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", existing));

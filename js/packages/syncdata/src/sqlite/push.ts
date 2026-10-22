@@ -13,7 +13,7 @@ import { applyFrame, beginApply, endApply } from './apply.js';
 import { completeCommands, readPendingCommands } from './commands.js';
 import { asLong, asNumber, asString } from './connection.js';
 import type { G9SqlValue } from './driver.js';
-import { findByServerName, getLocal, keyValue, meta, nowMs, setMeta, type LocalTable, type StoreInternals } from './internals.js';
+import { findByServerName, getLocal, keyValue, meta, nowMs, readLocalValues, serializeValues, setMeta, type LocalTable, type StoreInternals } from './internals.js';
 import { quote } from './sql.js';
 import { estimateEncodedBytes, pushSelectExpression, writeLocalValue } from './values.js';
 
@@ -259,6 +259,8 @@ export async function applyPushResult(store: StoreInternals, batch: G9PushBatch,
       const connection = store.writer();
       // Before BeginApply: finished commands release their rows, so the canonical rows below replace the optimistic ones.
       const completed = await completeCommands(connection, result.commandResults);
+      // Read BEFORE anything below touches the rows: what the device sent for each conflict it may have lost (LES-0072).
+      const lost = await readLostConflicts(store, batch, result);
       const context = await beginApply(store, connection, { dirtyAfterSequence: batch.maxSequence, backfills: [], signal });
       context.report.commandsCompleted = completed;
 
@@ -304,10 +306,123 @@ export async function applyPushResult(store: StoreInternals, batch: G9PushBatch,
       context.report.conflicts = result.conflicts.length;
       await context.flush();
       for (const frame of result.canonicalFrames) await applyFrame(store, context, frame, null);
+      await context.flush();
+      await keepLostConflicts(store, context, lost);
 
       await endApply(context);
       await connection.exec("DELETE FROM g9_meta WHERE key IN ('inflight_batch_id', 'inflight_max_seq')");
       return context.report;
     }),
   );
+}
+
+/** A conflict the device lost, with its row as it was sent. */
+interface LostConflict {
+  table: LocalTable;
+  key: string;
+  code: string;
+  dirty: number;
+  lostMask: G9Long;
+  subs: G9Long;
+  version: G9Long;
+  values: { [column: string]: G9SqlValue };
+}
+
+/**
+ * Twin of .NET ReadLostConflicts (LES-0072): the conflicts of this push in which the server kept its own values for something the
+ * device changed - the whole change, or the overlapping columns of a column merge - each with the device's row as it was sent.
+ */
+async function readLostConflicts(store: StoreInternals, batch: G9PushBatch, result: G9DtPushResult): Promise<LostConflict[]> {
+  const lost: LostConflict[] = [];
+  if (!store.options.keepLostConflicts || result.conflicts.length === 0) return lost;
+  const connection = store.writer();
+  const pushOrder = new Map(batch.tables.map((t) => [t.tableId, t.columns]));
+  for (const conflict of result.conflicts) {
+    const table = store.byServerId.get(conflict.tableId);
+    if (!table) continue;
+    const row = (await connection.query('SELECT dirty, dirty_mask, subs, server_ver, local_seq FROM g9_rows WHERE tid = $t AND pk = $pk', { $t: table.tid, $pk: conflict.key }))[0];
+    if (!row) continue;
+    const dirty = asNumber(row[0]);
+    const mask = asLong(row[1]);
+    if (dirty === 0 || asNumber(row[4]) > batch.maxSequence) continue;
+    const serverDeleted = conflict.code === G9SyncErrorCodes.ConflictDeleted;
+    if (dirty === 2 && serverDeleted) continue; // both sides deleted it: nothing was lost
+
+    let lostMask = mask;
+    const names = pushOrder.get(conflict.tableId);
+    if (dirty === 1 && conflict.partiallyApplied && !conflict.serverChangedMask.isNegative() && conflict.code === G9SyncErrorCodes.ConflictColumns && names) {
+      // The server's bits are in push column order; the device's are model columns.
+      lostMask = G9Long.ZERO;
+      for (let j = 0; j < names.length && j < 63; j++) {
+        if (!conflict.serverChangedMask.testBit(j)) continue;
+        const local = table.model.indexOf(names[j] as string);
+        if (local >= 0 && mask.testBit(local)) lostMask = lostMask.or(G9Long.ONE.shiftLeft(local));
+      }
+      if (lostMask.isZero()) continue;
+    }
+
+    lost.push({ table, key: conflict.key, code: conflict.code, dirty, lostMask, subs: asLong(row[2]), version: asLong(row[3]), values: await readLocalValues(connection, table, conflict.key) });
+  }
+  return lost;
+}
+
+/** Twin of .NET KeepLostConflicts: the device's lost values back over the canonical rows, parked as rejections (LES-0072). */
+async function keepLostConflicts(store: StoreInternals, context: Awaited<ReturnType<typeof beginApply>>, lost: LostConflict[]): Promise<void> {
+  const connection = context.connection;
+  for (const item of lost) {
+    const table = item.table;
+    const key = keyValue(table, item.key);
+    const now = await readLocalValues(connection, table, item.key);
+    let columnNames: string | null = null;
+    let serverValues: string | null = null;
+    if (item.dirty === 2) {
+      if (Object.keys(now).length > 0) await connection.exec(`DELETE FROM ${table.quoted} WHERE ${table.keyQuoted} = $k`, { $k: key });
+    } else if (Object.keys(now).length === 0) {
+      // The server deleted it: the device's row comes back as it was sent.
+      const all = Object.keys(item.values);
+      if (all.length === 0) continue;
+      const params: { [name: string]: G9SqlValue } = {};
+      all.forEach((column, i) => (params['$v' + i] = item.values[column] as G9SqlValue));
+      await connection.exec(`INSERT INTO ${table.quoted} (${all.map(quote).join(', ')}) VALUES (${all.map((_, i) => '$v' + i).join(', ')})`, params);
+    } else {
+      const columns = table.model.columns.map((c, i) => ({ name: c.name, i })).filter((c) => item.lostMask.testBit(c.i) && c.name in item.values).map((c) => c.name);
+      if (columns.length > 0) {
+        columnNames = columns.join(',');
+        const server: { [column: string]: unknown } = {};
+        for (const column of columns) server[column] = now[column] ?? null;
+        serverValues = serializeValues(server);
+        const params: { [name: string]: G9SqlValue } = { $k: key };
+        columns.forEach((column, i) => (params['$v' + i] = item.values[column] as G9SqlValue));
+        await connection.exec(`UPDATE ${table.quoted} SET ${columns.map((c, i) => quote(c) + ' = $v' + i).join(', ')} WHERE ${table.keyQuoted} = $k`, params);
+      }
+    }
+
+    const mask = item.dirty === 2 ? G9Long.ZERO : item.lostMask;
+    await connection.exec(
+      'INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) ' +
+        'VALUES ($t, $pk, $v, (SELECT seq FROM g9_clock WHERE id = 1) + 1, $subs, $d, $m, 1, 0) ' +
+        'ON CONFLICT(tid, pk) DO UPDATE SET dirty = excluded.dirty, dirty_mask = excluded.dirty_mask, rejected = 1, deleted = 0, ' +
+        'subs = CASE WHEN g9_rows.subs = 0 THEN excluded.subs ELSE g9_rows.subs END, local_seq = excluded.local_seq; ' +
+        'UPDATE g9_clock SET seq = seq + 1 WHERE id = 1',
+      { $t: table.tid, $pk: item.key, $v: item.version.toSqlValue(), $subs: item.subs.toSqlValue(), $d: item.dirty, $m: mask.toSqlValue() },
+    );
+    await connection.exec(
+      'INSERT OR REPLACE INTO g9_rejections (tid, pk, code, message, sql_state, constraint_name, column_name, details, at_utc) ' +
+        'VALUES ($t, $pk, $code, $message, NULL, NULL, $column, $details, $now)',
+      {
+        $t: table.tid,
+        $pk: item.key,
+        $code: item.code,
+        $message:
+          item.dirty === 2
+            ? "The server changed this row after the device last saw it; the device's delete was kept here, not applied."
+            : `The server changed ${columnNames ?? 'this row'} after the device last saw it; the device's values were kept here, not applied.`,
+        $column: columnNames,
+        $details: serverValues,
+        $now: nowMs(),
+      },
+    );
+    context.report.conflictsKept++;
+    if (context.wantsChangedKey(table.model.localName)) context.addChanged(table.model.localName, item.key);
+  }
 }

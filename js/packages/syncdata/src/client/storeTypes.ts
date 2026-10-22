@@ -260,6 +260,8 @@ export class G9ApplyReport {
   accepted = 0;
   rejected = 0;
   conflicts = 0;
+  /** Conflicts the device lost that were kept on it as rejections (LES-0072). */
+  conflictsKept = 0;
   commandsCompleted = 0;
   revokedDeleted = 0;
   revokedQuarantined = 0;
@@ -285,6 +287,7 @@ export class G9ApplyReport {
     this.accepted += other.accepted;
     this.rejected += other.rejected;
     this.conflicts += other.conflicts;
+    this.conflictsKept += other.conflictsKept;
     this.commandsCompleted += other.commandsCompleted;
     this.revokedDeleted += other.revokedDeleted;
     this.revokedQuarantined += other.revokedQuarantined;
@@ -620,7 +623,11 @@ export interface G9SyncClientStore {
   initialize(model: G9SyncClientModel, signal?: AbortSignal): Promise<void>;
   getClientId(signal?: AbortSignal): Promise<string>;
   getServerState(signal?: AbortSignal): Promise<G9ClientServerState>;
-  saveHello(hello: G9DtHelloResult, signal?: AbortSignal): Promise<void>;
+  /**
+   * Stores the Hello answer. `localMidpointMs`: the local time the server's clock reading corresponds to - the midpoint of the round
+   * trip (LES-0075); the offset is then exact up to the asymmetry of the two legs. Omitted: the time of this call.
+   */
+  saveHello(hello: G9DtHelloResult, signal?: AbortSignal, localMidpointMs?: number): Promise<void>;
   getPendingBackfills(signal?: AbortSignal): Promise<G9DtBackfillRequest[]>;
 
   getSubscriptions(signal?: AbortSignal): Promise<G9SyncSubscriptionRecord[]>;

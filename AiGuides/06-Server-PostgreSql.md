@@ -199,6 +199,15 @@ One `READ COMMITTED` transaction per push:
 
 More than `MaxRejectionsPerPush` rejections fail the whole push with `G9S-REJ-TOO-MANY`.
 
+**Row locks before the conflict check (ADR-0075, 1.5.7).** After every table is staged and write-authorised, the push locks the
+existing rows of all of them - tables in model order, each table's deletes and upserts together in key order - with
+`FOR NO KEY UPDATE`, in BOTH capture modes, and only then checks conflicts and applies. Until 1.5.7 trigger mode read tracking first
+(lost updates, LES-0073) and rows were locked as they were applied (deadlocks between pushes, LES-0077).
+
+**The change listener** (`ListenForChangesAsync`) holds one connection for `LISTEN`; after `ListenerHeartbeat` (30 s) without a
+notification it runs `SELECT 1` with `ListenerHeartbeatTimeout` (15 s), so a half-open connection fails and is replaced instead of
+silencing every poke (LES-0076). `TimeSpan.Zero` turns the check off. `GetClockAsync` is the database's `clock_timestamp()` (ADR-0076).
+
 **Conflict rules** (ADR-0031, `G9CPostgresSyncStore.ConflictRules.cs`): when the table has rules, step 3's policy is replaced by
 `EvaluateConflictRulesAsync` — conflicting staged rows (`g9_conflict_mask IS NOT NULL`) are read with their masks, clock values and the
 server's current values (`ReadExpression`, so geometry arrives as text), rules are evaluated in C#, and the decisions are written back

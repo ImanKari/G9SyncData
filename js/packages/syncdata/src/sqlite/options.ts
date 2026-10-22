@@ -76,6 +76,12 @@ export interface G9SqliteSyncStoreOptions {
    * re-creates them from their stored SQL before commit (PARITY.md). Never while the database holds a foreign trigger.
    */
   skipTriggersDuringApply?: boolean;
+  /**
+   * A push conflict the device LOST is kept on it instead of being overwritten by the canonical row (LES-0072, twin of .NET
+   * `KeepLostConflicts`): the device's values for exactly what was lost go back over the server's row, the row stays pending with its
+   * base at the server's version and is parked as a rejection (conflict code, lost columns, the server's values for them). Default false.
+   */
+  keepLostConflicts?: boolean;
   /** The smallest staged pull (rows) for which triggers are skipped; smaller applies are not worth the schema change. */
   skipTriggersMinRows?: number;
   rebuildIndexesAfterRows?: number;
@@ -137,6 +143,7 @@ export function resolveStoreOptions(options: G9SqliteSyncStoreOptions): G9Resolv
     maxDecodedFrameBytes: options.maxDecodedFrameBytes ?? 64 * 1024 * 1024,
     maxChangedKeysPerTable: options.maxChangedKeysPerTable ?? 5000,
     skipTriggersDuringApply: options.skipTriggersDuringApply ?? true,
+    keepLostConflicts: options.keepLostConflicts ?? false,
     skipTriggersMinRows: options.skipTriggersMinRows ?? 5000,
     rebuildIndexesAfterRows: options.rebuildIndexesAfterRows ?? 20000,
     rebuildIndexesMinimumGrowth: options.rebuildIndexesMinimumGrowth ?? 1,

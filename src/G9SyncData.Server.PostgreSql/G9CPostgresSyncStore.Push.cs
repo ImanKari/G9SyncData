@@ -107,6 +107,16 @@ public sealed partial class G9CPostgresSyncStore
                 }
             }
 
+            // Every existing row this push will touch is locked NOW, before anything is applied, in one global order: tables in model
+            // order, each table's rows - its deletes and its upserts together - in key order (LES-0077). Applied in their own order
+            // (deletes child-first, upserts parent-first) the locks were taken in opposite orders by two pushes that delete a child and
+            // edit its parent each other's way round: PostgreSQL killed one of them as a deadlock in 24 rounds of 25. Locked in one
+            // order, two pushes can only queue behind each other. It also takes the conflict check's lock (LES-0073) for every table.
+            foreach (var group in staged.GroupBy(t => t.Work.Table).OrderBy(g => g.Key.Model.Order))
+            {
+                await LockRowsAsync(connection, transaction, group.Key, group.Select(t => t.Stage).ToList(), cancellationToken).ConfigureAwait(false);
+            }
+
             var checks = new List<WriteCheck>();
             foreach (var table in staged.Where(t => t.Deletes).Reverse().Concat(staged.Where(t => !t.Deletes)))
             {
@@ -345,9 +355,14 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         // 4. conflicts
-        // WAL mode: changes by other writers reach tracking asynchronously, so lock the rows and record their current state
-        // before reading tracking - otherwise a just-committed server edit could be overwritten unseen (ADR-0028). This does
+        // The rows are locked BEFORE tracking is read, in both capture modes (LES-0073). Trigger mode records a change inside the
+        // writer's own transaction, but a writer that has not committed yet is invisible to the check: two pushes of the same row
+        // both found "no conflict", the second waited for the first's row lock and then overwrote it - a lost update, and the losing
+        // device was never told (FleetLoadTests: 40 devices, one shared row, most pushes "accepted"). Once the lock is held every
+        // earlier writer of these rows has committed, and the check below is a new statement under READ COMMITTED, so it sees them.
+        // WAL mode also records the rows' current state, because other writers reach tracking asynchronously (ADR-0028); that does
         // not wait for the consumer, so push availability never depends on it.
+        // The rows are already locked (ApplyPushAsync, LES-0077); WAL mode re-takes the lock of this stage - a no-op - and records.
         if (IsWalMode) await LockAndRecordCurrentStateAsync(connection, transaction, table, stage, ct).ConfigureAwait(false);
 
         await ExecuteAsync(connection, transaction, $"""

@@ -134,7 +134,39 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
             _initialized = false;
             throw ModelMismatch("SQL expressions", errors);
         }
+
+        CheckConnectionBudget();
     }
+
+    /// <summary>
+    ///     Warns when the engine's admission limits let more requests hold a connection at once than the data source's pool has
+    ///     (LES-0074). Over the pool, a burst does not get the quick, retryable "busy" that admission exists to give: requests queue
+    ///     inside Npgsql and fail after its timeout - pushes included. A few connections are kept for the host's own work (change
+    ///     listener, WAL consumer, maintenance, effects).
+    /// </summary>
+    private void CheckConnectionBudget()
+    {
+        if (_services.GetService(typeof(Microsoft.Extensions.Options.IOptions<G9CSyncServerOptions>)) is not Microsoft.Extensions.Options.IOptions<G9CSyncServerOptions> server)
+        {
+            return;
+        }
+
+        var limits = server.Value;
+        var pool = new NpgsqlConnectionStringBuilder(_dataSource.ConnectionString).MaxPoolSize;
+        const int Reserved = 4;
+        var unlimited = limits.MaxConcurrentPulls <= 0 || limits.MaxConcurrentPushes <= 0 || limits.MaxConcurrentPlans <= 0;
+        var demand = limits.MaxConcurrentPulls + limits.MaxConcurrentPushes + limits.MaxConcurrentPlans + Reserved;
+        if (unlimited || demand > pool)
+        {
+            LogConnectionBudget(_logger, limits.MaxConcurrentPulls, limits.MaxConcurrentPushes, limits.MaxConcurrentPlans, Reserved, pool);
+        }
+    }
+
+    [LoggerMessage(EventId = 22030, Level = LogLevel.Warning,
+        Message = "G9SyncData admission allows {Pulls} pulls + {Pushes} pushes + {Plans} plans (+{Reserved} for the host) to hold a database connection at " +
+                  "once, but the pool holds {Pool} (0 = unlimited). A burst will then wait inside Npgsql and fail after its timeout instead of being " +
+                  "refused as busy: lower MaxConcurrentPulls/Pushes/Plans or raise Maximum Pool Size.")]
+    private static partial void LogConnectionBudget(ILogger logger, int pulls, int pushes, int plans, int reserved, int pool);
 
     private async Task RegisterTableAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, CancellationToken cancellationToken)
     {
@@ -629,6 +661,18 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
         {
             throw new G9CSyncException(G9SyncErrorCodes.Unauthorized, "This device belongs to a different user.");
         }
+    }
+
+    /// <summary>
+    ///     The database's own clock (LES-0075): tracking stamps <c>changed_at</c> with <c>now()</c>, so this - not the app server's
+    ///     clock - is what a device's edit times must be compared with. <c>clock_timestamp()</c>, not <c>now()</c>: the time of the
+    ///     answer, not of a transaction's start.
+    /// </summary>
+    public async Task<DateTime> GetClockAsync(CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await ScalarAsync<DateTime>(connection, null, "SELECT clock_timestamp()", cancellationToken).ConfigureAwait(false);
     }
 
     // ================================================================ shared helpers

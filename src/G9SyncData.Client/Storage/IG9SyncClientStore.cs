@@ -20,6 +20,13 @@ public interface IG9SyncClientStore : IAsyncDisposable
     /// <summary>Stores the Hello answer and works out which newly negotiated columns need a backfill.</summary>
     Task SaveHelloAsync(G9DtHelloResult hello, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Stores the Hello answer with the local time the server's clock reading corresponds to: the midpoint of the round trip
+    ///     (LES-0075). The server's clock offset is then exact up to the asymmetry of the two legs, instead of being off by the
+    ///     whole return trip and whatever the store did before it read its own clock.
+    /// </summary>
+    Task SaveHelloAsync(G9DtHelloResult hello, DateTime localMidpointUtc, CancellationToken cancellationToken) => SaveHelloAsync(hello, cancellationToken);
+
     Task<IReadOnlyList<G9DtBackfillRequest>> GetPendingBackfillsAsync(CancellationToken cancellationToken);
 
     // ------------------------------------------------ subscriptions

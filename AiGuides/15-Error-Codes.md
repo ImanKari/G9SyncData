@@ -55,7 +55,7 @@ classify failures by code, never by message (plan P-19).
 | `G9S-LOCAL-CORRUPT` | SQLite reported the device database as damaged (`SQLITE_CORRUPT`, `SQLITE_NOTADB`) (ADR-0068) | final. Call `CheckIntegrityAsync`, then `ExportPendingChangesAsync` BEFORE anything else touches the file |
 | `G9S-LOCAL-DISK-FULL` | `SQLITE_FULL`: the device ran out of storage mid-apply; the slice rolled back (ADR-0068) | final. Tell the user to free space |
 | `G9S-LOCAL-BUSY` | `SQLITE_BUSY` / `SQLITE_LOCKED` past the busy timeout (ADR-0068) | engine retries |
-| `G9S-SRV-BUSY` | the server is at `MaxConcurrentPulls` / `MaxConcurrentPushes` and the wait ran out (ADR-0062) | engine retries with backoff |
+| `G9S-SRV-BUSY` | the server is at `MaxConcurrentPulls` / `MaxConcurrentPushes` / `MaxConcurrentPlans` and the wait ran out (ADR-0062) | engine retries with backoff |
 | `G9S-MODEL-TYPE-MISMATCH` | a client column's type differs from the server's and `FailOnTypeMismatch` is on (ADR-0061) | developer error: fix the mirror entity |
 | `G9S-FILE-UNAVAILABLE` | the server planned a snapshot file (ADR-0072) it can no longer produce: the build failed, the cache entry was evicted, or the instance serving a resume has another build | the engine discards the staged file and replans the same pull as rows, once per run; nothing for the app to do |
 | `G9S-FILE-CORRUPT` | a staged snapshot file failed a check on the device: a segment's SHA-256 or length, the manifest, the SQLite header or "G9SF" application id, a missing table, or the sink refused a write | the same fallback: discard, replan as rows, once per run. Repeated → look at the device's storage (event 20026) |

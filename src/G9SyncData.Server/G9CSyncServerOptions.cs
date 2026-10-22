@@ -27,17 +27,29 @@ public sealed class G9CSyncServerOptions
 
     /// <summary>
     ///     Pull, reconcile and fetch streams served at the same time; further ones are refused with the retryable
-    ///     <c>G9S-SRV-BUSY</c> after <see cref="AdmissionWait" /> (ADR-0062). 0 = unlimited. Default 64.
+    ///     <c>G9S-SRV-BUSY</c> after <see cref="AdmissionWait" /> (ADR-0062). 0 = unlimited. Default 48 (64 until 1.5.7: with the plans bounded too, 48 + 32 + 16 + 4 for the host fit the default pool of 100, LES-0074).
     /// </summary>
     /// <remarks>
     ///     Every stream holds a database connection and a page of rows in memory. Without a limit a fleet that all opens the same large
     ///     site after a deploy is bounded only by the connection pool, and the first thing to fail is somebody's push. A refused device
     ///     retries with its ordinary backoff and jitter, which is exactly the spreading-out that is wanted.
     /// </remarks>
-    public int MaxConcurrentPulls { get; set; } = 64;
+    public int MaxConcurrentPulls { get; set; } = 48;
 
     /// <summary>Pushes applied at the same time; see <see cref="MaxConcurrentPulls" />. 0 = unlimited. Default 32.</summary>
     public int MaxConcurrentPushes { get; set; } = 32;
+
+    /// <summary>
+    ///     Hellos and pull plans served at the same time; see <see cref="MaxConcurrentPulls" />. 0 = unlimited. Default 16.
+    /// </summary>
+    /// <remarks>
+    ///     Every run starts with both, and a plan is real database work - exact counts per part, key-set builds, snapshot-file planning
+    ///     (~130 ms on a small sync). Until 1.5.7 they were the one unbounded door: a fleet starting at once after a deploy opened a
+    ///     connection per plan, beyond the pool, and the pulls and pushes that ARE bounded then failed waiting for one (LES-0074).
+    ///     Keep <c>MaxConcurrentPulls + MaxConcurrentPushes + MaxConcurrentPlans</c> plus a few connections for the host's own work
+    ///     below the database pool's size; the PostgreSQL store warns at startup when it is not.
+    /// </remarks>
+    public int MaxConcurrentPlans { get; set; } = 16;
 
     /// <summary>How long a request waits for a free slot before it is refused as busy.</summary>
     public TimeSpan AdmissionWait { get; set; } = TimeSpan.FromSeconds(5);

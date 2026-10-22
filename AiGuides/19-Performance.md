@@ -15,8 +15,23 @@ performance-relevant change lands; keep old numbers only when the comparison mat
 | S4 | What travels on the wire? | frame bytes, base64 overhead, decode speed |
 | S5 | What does a reconciliation cost? | forced reconcile of a fully matching subscription |
 
-It does **not** measure a device (the DOOGEE S99 baseline, plan §12.1), real networks (latency, WebSocket framing), or
-concurrency with other writers. Those remain open ([17](17-Known-Limitations.md)).
+It does **not** measure a device (the DOOGEE S99 baseline, plan §12.1) or real networks (latency, WebSocket framing); those remain open
+([17](17-Known-Limitations.md)). Concurrency - a whole fleet and office writers at once - is measured by the fleet test below.
+
+## Fleet load — 2026-10-22 (1.5.7)
+
+`Load/FleetLoadTests` with `G9SYNC_LOAD_DEVICES=1000`, same machine as below, PostgreSQL 18.6 in Docker, server with its production
+admission limits (48 / 32 / 16). Every device is a real engine with its own SQLite file; each first-syncs a 1,001-pot site, edits its
+own pot, inserts one, and edits the one pot EVERYBODY edits, while an office writer updates other pots without pause; all push at
+once, then all pull. Checked: exact convergence, no lost edit, one winner on the shared pot, every loser kept as a refusal.
+
+| Run | Devices | First syncs (all at once) | Pushes (all at once) | Final pulls | End to end |
+|---|---|---|---|---|---|
+| in memory (JSON round trips) | 1000 | 3.7 s | 23.7 s, 2,490 office writes meanwhile | 6.1 s | 78 s (16 s of it creating 1000 SQLite files) |
+| real SignalR, MessagePack, loopback | 500 | 2.5 s | 10.6 s | 2.2 s | 35 s |
+
+The pushes are the long phase because every one of them edits the same pot: they serialize on that row's lock (ADR-0075), ~24 ms
+each. Pushes of disjoint rows do not wait for each other. Before 1.5.7 the same test found lost updates on that row (LES-0073).
 
 ## How to run
 

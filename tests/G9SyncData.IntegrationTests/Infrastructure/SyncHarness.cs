@@ -87,10 +87,13 @@ internal sealed class SyncHarness : IAsyncDisposable
     /// <param name="walCapture">Forces a capture mode for this test; null follows <c>G9SYNC_TEST_CAPTURE</c>.</param>
     /// <param name="postgres">PostgreSQL store options, applied after the harness's own.</param>
     /// <param name="signalR">Hub options (<see cref="SyncTransportKind.SignalR" /> only), applied after the harness's own.</param>
+    /// <param name="connection">The server's connection settings (e.g. a small pool for an admission test).</param>
+    /// <param name="pipeline">HTTP middleware in front of the hub (<see cref="SyncTransportKind.SignalR" /> only), e.g. an auth check.</param>
     public static async Task<SyncHarness> CreateAsync(ITestOutputHelper output, Action<G9CSyncServerOptions>? configure = null,
         SyncTransportKind transport = SyncTransportKind.InMemory, Action<G9CSyncModelBuilder>? model = null, Action<G9CSyncServerBuilder>? server = null,
         Func<NpgsqlDataSource, Task>? seedBeforeCapture = null, bool? walCapture = null, Action<G9CPostgresSyncOptions>? postgres = null,
-        Action<G9SyncData.Server.SignalR.G9CSyncSignalROptions>? signalR = null)
+        Action<G9SyncData.Server.SignalR.G9CSyncSignalROptions>? signalR = null, Action<NpgsqlConnectionStringBuilder>? connection = null,
+        Action<WebApplication>? pipeline = null)
     {
         var useWal = walCapture ?? PgTestServer.UseWal;
         var database = "g9t_" + Guid.NewGuid().ToString("N")[..20];
@@ -101,7 +104,9 @@ internal sealed class SyncHarness : IAsyncDisposable
             await create.ExecuteNonQueryAsync();
         }
 
-        var dataSource = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(PgTestServer.AdminConnectionString) { Database = database }.ConnectionString);
+        var settings = new NpgsqlConnectionStringBuilder(PgTestServer.AdminConnectionString) { Database = database };
+        connection?.Invoke(settings);
+        var dataSource = NpgsqlDataSource.Create(settings.ConnectionString);
         SyncHarness? harness = null;
         try
         {
@@ -142,6 +147,7 @@ internal sealed class SyncHarness : IAsyncDisposable
 
                 var app = builder.Build();
                 app.UseWebSockets();
+                pipeline?.Invoke(app);
                 app.MapG9SyncHub();
                 await app.StartAsync();
                 var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();

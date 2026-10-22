@@ -344,7 +344,8 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
    * tables (LES-0055), so the writes go in ONE batch, in the same order, after one read for the only per-table
    * question (does a table with newly negotiated columns hold rows?). Same database.
    */
-  async saveHello(hello: G9DtHelloResult): Promise<void> {
+  async saveHello(hello: G9DtHelloResult, _signal?: AbortSignal, localMidpointMs?: number): Promise<void> {
+    const midpoint = localMidpointMs ?? Date.now();
     const model = this.ensureInitialized();
     await this.writeLock.run(async () => {
       const connection = this.writer();
@@ -354,7 +355,7 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
         const metaUpsert = 'INSERT INTO g9_meta (key, value) VALUES ($k, $v) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
         batch.add(metaUpsert, { $k: 'epoch', $v: hello.epoch });
         batch.add(metaUpsert, { $k: 'last_hello_utc', $v: String(nowMs()) });
-        batch.add(metaUpsert, { $k: 'server_offset_ms', $v: String(Math.trunc(hello.serverTimeUtcMs - Date.now())) });
+        batch.add(metaUpsert, { $k: 'server_offset_ms', $v: String(Math.trunc(hello.serverTimeUtcMs - midpoint)) });
         batch.add(metaUpsert, { $k: 'definitions_json', $v: persistedJson(hello.definitions) });
         batch.add(metaUpsert, { $k: 'tables_json', $v: persistedJson(hello.tables) });
         // Kept per subscription: a caller who loses access stops being told the definition (ADR-0048).

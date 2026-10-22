@@ -19,7 +19,7 @@ public sealed partial class G9CPostgresSyncStore
         await ExecuteAsync(connection, null, "LISTEN " + PgNames.Quote(_options.NotificationChannel), cancellationToken).ConfigureAwait(false);
 
         using var pumpCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var pump = PumpNotificationsAsync(connection, channel.Writer, pumpCancellation.Token);
+        var pump = PumpNotificationsAsync(connection, channel.Writer, _options.ListenerHeartbeat, _options.ListenerHeartbeatTimeout, pumpCancellation.Token);
         try
         {
             while (await channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
@@ -49,11 +49,26 @@ public sealed partial class G9CPostgresSyncStore
         }
     }
 
-    private static async Task PumpNotificationsAsync(NpgsqlConnection connection, ChannelWriter<string> writer, CancellationToken cancellationToken)
+    private static async Task PumpNotificationsAsync(NpgsqlConnection connection, ChannelWriter<string> writer, TimeSpan heartbeat, TimeSpan heartbeatTimeout,
+        CancellationToken cancellationToken)
     {
         try
         {
-            while (!cancellationToken.IsCancellationRequested) await connection.WaitAsync(cancellationToken).ConfigureAwait(false);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (heartbeat <= TimeSpan.Zero)
+                {
+                    await connection.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                // Quiet for a whole interval: prove the connection is still there (LES-0076). A dead one fails this and the listener
+                // reconnects; a half-open one would otherwise wait here for ever and the server would never poke anyone again.
+                if (await connection.WaitAsync(heartbeat, cancellationToken).ConfigureAwait(false)) continue;
+                await using var probe = new NpgsqlCommand("SELECT 1", connection) { CommandTimeout = Math.Max(1, (int)Math.Ceiling(heartbeatTimeout.TotalSeconds)) };
+                await probe.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             writer.TryComplete();
         }
         catch (OperationCanceledException)

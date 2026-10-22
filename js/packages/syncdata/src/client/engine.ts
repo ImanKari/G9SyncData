@@ -566,22 +566,25 @@ export class G9SyncEngine {
         await this._ensureConnected(ct);
         await this._store.collectExpiredEphemeral(Date.now(), ct);
         const subscriptions = await this._store.getSubscriptions(ct);
-        const hello = await this._withRetry(
-          (token) =>
-            this._transport.hello(
-              {
-                clientId: this._clientId,
-                appVersion: this._options.appVersion,
-                protocolVersion: 1,
-                tables: this.model.tables.map((t) => t.toWire()),
-                subscriptions: subscriptions.map(toSubscriptionRef),
-              },
-              token,
-            ),
-          ct,
-        );
+        let helloMidpointMs = Date.now();
+        const hello = await this._withRetry(async (token) => {
+          // The round trip of the attempt that answered: its midpoint is the local time of the server's clock reading (LES-0075).
+          const sent = Date.now();
+          const answer = await this._transport.hello(
+            {
+              clientId: this._clientId,
+              appVersion: this._options.appVersion,
+              protocolVersion: 1,
+              tables: this.model.tables.map((t) => t.toWire()),
+              subscriptions: subscriptions.map(toSubscriptionRef),
+            },
+            token,
+          );
+          helloMidpointMs = sent + (Date.now() - sent) / 2;
+          return answer;
+        }, ct);
         if (hello.error) throw syncErrorToException(hello.error);
-        await this._store.saveHello(hello, ct);
+        await this._store.saveHello(hello, ct, helloMidpointMs);
         if (hello.unknownTables.length > 0) {
           this._log('warning', 20016, 'The server does not know these client tables (they will not sync): ' + hello.unknownTables.join(', '));
         }
@@ -1022,7 +1025,8 @@ export class G9SyncEngine {
       // What the server TOOK (its acknowledgement), not "sent minus refused": a row refused on the device (too large) is in
       // `rejected` but was never sent (LES-0071).
       accepted += report.accepted + report.commandsCompleted;
-      rejected += result.rejections.length;
+      // A conflict the device lost is kept on it as a rejection (LES-0072): refused work the operator must decide on.
+      rejected += result.rejections.length + report.conflictsKept;
       conflicts += result.conflicts.length;
       tracker.report(pushed);
       this._log(

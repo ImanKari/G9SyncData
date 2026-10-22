@@ -22,6 +22,16 @@ public sealed class G9CPostgresSyncOptions
     /// <summary>LISTEN/NOTIFY channel used to announce committed changes (by the triggers, and by the WAL consumer).</summary>
     public string NotificationChannel { get; set; } = "g9sync";
 
+    /// <summary>
+    ///     How long the change listener waits without a notification before it proves its connection is alive with <c>SELECT 1</c>
+    ///     (LES-0076). A connection left half-open - a network blip or a failover that never sent the reset - otherwise waits for
+    ///     ever: no error, no pokes, until the process restarts. <see cref="TimeSpan.Zero" /> turns the check off. Default 30 s.
+    /// </summary>
+    public TimeSpan ListenerHeartbeat { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>How long the listener's <c>SELECT 1</c> may take before its connection counts as dead. Default 15 s.</summary>
+    public TimeSpan ListenerHeartbeatTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
     /// <summary>Command timeout for sync statements.</summary>
     public int CommandTimeoutSeconds { get; set; } = 300;
 

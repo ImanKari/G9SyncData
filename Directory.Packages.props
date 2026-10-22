@@ -65,6 +65,8 @@
          (table names, store types, indexes) without ever opening a connection. -->
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
+    <!-- Code coverage for both test projects (12-Testing.md, "Coverage"). -->
+    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
     <!-- Benchmarks and device tests only: the Zstandard side of the frame-compression comparison (AiGuides/19). -->
     <PackageVersion Include="ZstdSharp.Port" Version="0.8.8" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />

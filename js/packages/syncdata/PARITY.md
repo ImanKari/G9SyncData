@@ -44,6 +44,8 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
 | `IncarnationMarkerPath` | `incarnationMarker` (`fileIncarnationMarker(fileSystem, path)`) | any `G9FileSystem` (Lynx: the SignalR native module's) |
 | `ExportPendingChangesAsync(path)` | `exportPendingChanges(writeLine)` | the caller writes the lines where it wants |
 | `CheckIntegrityAsync` | `checkIntegrity()` | |
+| `KeepLostConflicts` (LES-0072) | `keepLostConflicts` | same SQL, same rejection row (code, lost columns, server values as JSON); `G9ApplyReport.conflictsKept`; `test/keepLostConflicts.test.ts` |
+| `SaveHelloAsync(hello, localMidpointUtc, ct)` (LES-0075) | `saveHello(hello, signal, localMidpointMs)` | the engine measures the Hello round trip in both clients and stores `serverTime - midpoint` |
 | `G9CSqliteException` (`IG9SyncLocalStoreFailure`) | `G9SqliteStoreError` (`localStoreFailure`) | classified from the driver's code |
 | `G9CSignalRSyncTransport`, options | `G9SignalRSyncTransport` (`@g9tm/syncdata/signalr`) | over `G9Client` of `@g9tm/signalr-supernetcore-client`; Lynx: `createLynxSyncTransport`. Limits (ADR-0074): `CallTimeout` / `PlanTimeout` / `PushTimeout` / `StreamIdleTimeout` = `callTimeoutMs` / `planTimeoutMs` / `pushTimeoutMs` / `streamIdleTimeoutMs`, same defaults, same retryable `G9S-NET-FAILURE`, same connection drop (`SignalRTimeoutTests` / `test/transportTimeouts.test.ts`) |
 | `G9CInMemorySyncTransport`, `G9CTransportFaults` | `G9FaultInjectingTransport`, `G9TransportFaults` (`@g9tm/syncdata/testing`) | wraps a real transport (no in-process server engine in JavaScript) |
