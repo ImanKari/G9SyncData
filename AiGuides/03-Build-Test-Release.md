@@ -122,7 +122,10 @@ Used for 1.5.2 – 1.5.8 (2026-10-22): the Azure DevOps free minutes were used u
    `dotnet pack <each csproj of the pipeline's libraries list> -c Release --no-build -o <out>` (12 `.nupkg`, 11 `.snupkg`).
    Check one nuspec: `<repository url="https://github.com/…" commit="<the tag's commit>">`.
 4. **Mirror BEFORE publishing**: push `main` and the tag to GitHub (a token through `http.extraheader`; the credential
-   manager prompt hangs a non-interactive shell).
+   manager prompt hangs a non-interactive shell). ⛔ The header is `basic base64("ImanKari:<token>")` — the account's
+   real name. With `x-access-token:` (the GitHub-App form) the stored classic PAT is refused, git falls back to the
+   credential prompt and the push hangs silently for as long as you let it (1.5.8). Set `GIT_TERMINAL_PROMPT=0` and an
+   empty `credential.helper` so a refusal fails at once; prove the header with `git ls-remote github` first.
 5. `dotnet nuget push <each .nupkg> --source https://api.nuget.org/v3/index.json --skip-duplicate` (symbols go with it).
 6. `npm run pack:all` in `js/`, then `npm publish artifacts/npm/<tgz> --access public` with a temporary `--userconfig`.
 7. Consumers pin only once the Nexus group lists the version (or through the app's temporary `nuget-local`, AgriPad guide 19).
