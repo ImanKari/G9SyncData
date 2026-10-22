@@ -23,6 +23,16 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.6
+
+- **A conflict the device loses is no longer overwritten in silence** (LES-0072). `G9CSqliteSyncStoreOptions.KeepLostConflicts`
+  (default off): when the server's conflict policy keeps its own values for something the device changed — the whole change, or the
+  overlapping columns of a column merge — the device keeps its values for exactly that, takes the server's for everything else, and
+  lists the row as a rejection with the conflict's code, the lost columns and the server's values for them. `RetryRejectedAsync` sends
+  it on top of the server's version (the device wins, by a person's choice); `RevertRejectedAsync` takes the server's. The run counts
+  it as rejected. Off, a conflict applies the canonical row as before. TypeScript: not yet — the TS store still applies the
+  canonical row (follows with the AgriPad Lynx port).
+
 ## What's new in 1.5.5
 
 - **`Accepted` on every run result** (LES-0071): the rows and commands the server TOOK, from its acknowledgement. `Pushed` counts

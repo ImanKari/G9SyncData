@@ -60,6 +60,7 @@ await db.RunInTransactionAsync(conn =>
 | `UseWriteAheadLog` | true | |
 | `MaxChangedKeysPerTable` | 5 000 | cap of keys reported in `RowsApplied` per table |
 | `SkipTriggersDuringApply` | true | trigger execution off on the store's connection during applies, unless the database has app triggers (ADR-0034) |
+| `KeepLostConflicts` | false | a push conflict the device lost is kept on it as a rejection (its values for exactly what was lost, the rest the server's) instead of being overwritten by the canonical row (LES-0072) |
 | `RebuildIndexesAfterRows` | 20 000 | a download filling an empty table with at least this many rows rebuilds its plain indexes after the load; 0 = never |
 | `SynchronousNormalForDownloads` | true | WAL mode: staging and applying commit with `synchronous=NORMAL` (server data only) |
 | `WalSizeLimitBytes` | 64 MiB | `journal_size_limit` of the store's connections; negative = unlimited |
@@ -179,6 +180,13 @@ row-metadata statement per table are cached in the `ApplyContext`; the dirty-row
 - The acknowledgement clears `dirty` only for rows with `local_seq <= MaxSequence`; a row edited meanwhile stays dirty.
   Rejections set `rejected = 1` (until the row is edited again, `RetryRejectedAsync` or `RevertRejectedAsync`). Canonical rows from
   the server are applied.
+- `KeepLostConflicts` (1.5.6, LES-0072): a conflict the device LOST is kept, not overwritten. Before the apply the store reads each
+  conflicted row as it was sent (`ReadLostConflicts`; a row edited again after the batch is skipped — the apply leaves it alone
+  anyway; both sides deleting is not a loss; a column merge whose overlap is empty is not either). After the canonical rows:
+  `KeepLostConflicts` writes the device's values back for the lost columns only (a delete is re-applied, a row the server deleted is
+  re-inserted whole), sets `dirty` (1, or 2 for a delete), `dirty_mask` = the lost columns, `rejected = 1`, `local_seq` = a new tick, and
+  writes `g9_rejections` with the conflict code, `column_name` = the lost columns (comma-separated) and `details` = the server's values
+  for them (JSON, the quarantine format). `server_ver` stays the canonical version, so a retry is no longer a conflict.
 - ⛔ `GetPendingSummaryAsync().TotalRows` does NOT count refused rows (a push does not resend them). An app that shows only that
   count makes a refusal invisible — read `GetRejectionsAsync()` too and show it.
 - `RevertRejectedAsync(localTable?, key?)` (LES-0070), one transaction with `g9_ctx.applying = 1` (nothing is captured): a refused row

@@ -294,6 +294,13 @@ a leaked slot retains WAL on the machine indefinitely.
 | `A_conflict_no_rule_matches_falls_back_to_the_table_policy` | fallback |
 | `Rules_and_the_Custom_policy_cannot_be_combined` | model validation |
 
+| **Conflicts/KeptConflictTests** (LES-0072, `KeepLostConflicts`) | |
+| `A_column_merge_keeps_the_overlapping_column_on_the_device_and_applies_the_rest` | only the lost column kept, the server's other change applied; code, column and server value on the rejection; retry wins |
+| `Server_wins_keeps_the_whole_change_and_taking_the_server_copy_brings_it_back` | `G9S-CON-SERVER-WINS` kept; revert → `NeedsReconcile` → the server's value |
+| `An_edit_of_a_row_the_server_deleted_stays_on_the_device` | `G9S-CON-DELETED`: the row is re-inserted; revert removes it |
+| `A_delete_of_a_row_the_server_changed_stays_deleted_on_the_device_until_the_operator_decides` | a device delete is kept; retry deletes on the server |
+| `Disjoint_edits_are_not_a_kept_conflict` | no loss, no rejection |
+
 | **Revocation/RevocationPolicyTests** (ADR-0026) | |
 | `Revoked_rows_without_pending_changes_are_deleted_and_counted` | default strict removal |
 | `A_revoked_row_with_an_unsynchronised_edit_is_quarantined_and_can_be_restored_when_access_returns` | offline edit + revocation; quarantine; restore uploads only the user's columns |

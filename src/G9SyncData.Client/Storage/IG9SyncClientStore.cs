@@ -394,6 +394,12 @@ public sealed class G9CApplyReport
     public long Rejected { get; set; }
     public long Conflicts { get; set; }
 
+    /// <summary>
+    ///     Conflicts the device LOST that were kept on it as rejections (LES-0072): the server kept its own values for some of the device's
+    ///     changed columns (or the whole row), so the device's values were put back over the canonical row and flagged, never silently replaced.
+    /// </summary>
+    public long ConflictsKept { get; set; }
+
     /// <summary>Commands whose server result was applied.</summary>
     public long CommandsCompleted { get; set; }
 
@@ -434,6 +440,7 @@ public sealed class G9CApplyReport
         Accepted += other.Accepted;
         Rejected += other.Rejected;
         Conflicts += other.Conflicts;
+        ConflictsKept += other.ConflictsKept;
         CommandsCompleted += other.CommandsCompleted;
         RevokedDeleted += other.RevokedDeleted;
         RevokedQuarantined += other.RevokedQuarantined;

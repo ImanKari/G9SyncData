@@ -272,6 +272,135 @@ public sealed partial class G9CSqliteSyncStore
         }
     }
 
+    // ================================================================ conflicts the device lost (LES-0072)
+
+    /// <summary>
+    ///     The conflicts of this push in which the server kept its own values for something the device changed: the whole change
+    ///     (<c>G9S-CON-SERVER-WINS</c>, <c>G9S-CON-DELETED</c>, a resolver), or the overlapping columns of a column merge
+    ///     (<c>G9S-CON-COLUMNS</c>: the device's changed columns the server also changed since the device's base version). Each with the
+    ///     device's row as it was sent. A row edited again after the batch is left out: the apply does not touch it anyway.
+    /// </summary>
+    private List<LostConflict> ReadLostConflicts(SqliteConnection connection, SqliteTransaction transaction, G9CPushBatch batch, G9DtPushResult result)
+    {
+        var lost = new List<LostConflict>();
+        if (!_options.KeepLostConflicts || result.Conflicts.Count == 0) return lost;
+        var pushOrder = batch.Tables.ToDictionary(t => t.TableId, t => t.Columns);
+        foreach (var conflict in result.Conflicts)
+        {
+            if (!_byServerId.TryGetValue(conflict.TableId, out var table)) continue;
+            long dirty, mask, subs, version, sequence;
+            using (var command = Command(connection, transaction, "SELECT dirty, dirty_mask, subs, server_ver, local_seq FROM g9_rows WHERE tid = $t AND pk = $pk"))
+            {
+                command.Parameters.AddWithValue("$t", table.Tid);
+                command.Parameters.AddWithValue("$pk", conflict.Key);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read()) continue;
+                (dirty, mask, subs, version, sequence) = (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4));
+            }
+
+            if (dirty == 0 || sequence > batch.MaxSequence) continue;
+            var serverDeleted = string.Equals(conflict.Code, G9SyncErrorCodes.ConflictDeleted, StringComparison.Ordinal);
+            if (dirty == 2 && serverDeleted) continue;   // both sides deleted it: nothing was lost
+
+            var lostMask = mask;
+            if (dirty == 1 && conflict.PartiallyApplied && conflict.ServerChangedMask >= 0 &&
+                string.Equals(conflict.Code, G9SyncErrorCodes.ConflictColumns, StringComparison.Ordinal) &&
+                pushOrder.TryGetValue(conflict.TableId, out var names))
+            {
+                // The server's bits are in push column order; the device's are model columns.
+                lostMask = 0;
+                for (var j = 0; j < names.Count && j < 63; j++)
+                {
+                    if ((conflict.ServerChangedMask & (1L << j)) == 0) continue;
+                    var local = table.Model.IndexOf(names[j]);
+                    if (local >= 0 && (mask & (1L << local)) != 0) lostMask |= 1L << local;
+                }
+
+                if (lostMask == 0) continue;
+            }
+
+            lost.Add(new LostConflict(table, conflict.Key, conflict.Code, dirty, lostMask, subs, version, ReadLocalValues(connection, transaction, table, conflict.Key)));
+        }
+
+        return lost;
+    }
+
+    /// <summary>
+    ///     Puts the device's lost values back over the canonical rows just applied and parks them as rejections (LES-0072). Until 1.5.6
+    ///     the canonical row simply replaced the device's change and nothing recorded it: a move made on a tablet while the office moved
+    ///     the same tree was gone without a word (AgriPad emulator, 2026-10-22). Now the row keeps the device's values for exactly what was
+    ///     lost (everything else is the server's), stays pending with its base at the server's version, and is listed with the conflict's
+    ///     code, the lost columns and the server's values for them. The operator decides: <c>RetryRejectedAsync</c> sends it again on top
+    ///     of the server's version (no longer a conflict, so the device's values win), <c>RevertRejectedAsync</c> takes the server's.
+    /// </summary>
+    private static void KeepLostConflicts(ApplyContext context, List<LostConflict> lost)
+    {
+        var (connection, transaction) = (context.Connection, context.Transaction);
+        foreach (var item in lost)
+        {
+            var table = item.Table;
+            var key = KeyValue(table, item.Key);
+            var now = ReadLocalValues(connection, transaction, table, item.Key);
+            string? columnNames = null;
+            string? serverValues = null;
+            if (item.Dirty == 2)
+            {
+                if (now.Count > 0) Exec(connection, transaction, $"DELETE FROM {table.Quoted} WHERE {table.KeyQuoted} = $k", ("$k", key));
+            }
+            else if (now.Count == 0)
+            {
+                // The server deleted it: the device's row comes back as it was sent.
+                if (item.Values.Count == 0) continue;
+                var all = item.Values.Keys.ToArray();
+                Exec(connection, transaction,
+                    $"INSERT INTO {table.Quoted} ({string.Join(", ", all.Select(SqliteSql.Quote))}) " +
+                    $"VALUES ({string.Join(", ", all.Select((_, i) => "$v" + i.ToString(CultureInfo.InvariantCulture)))})",
+                    all.Select((c, i) => ("$v" + i.ToString(CultureInfo.InvariantCulture), item.Values[c])).ToArray());
+            }
+            else
+            {
+                var columns = table.Model.Columns.Select((c, i) => (c.Name, Index: i))
+                    .Where(c => (item.LostMask & (1L << c.Index)) != 0 && item.Values.ContainsKey(c.Name)).Select(c => c.Name).ToArray();
+                if (columns.Length > 0)
+                {
+                    columnNames = string.Join(',', columns);
+                    serverValues = SerializeValues(columns.ToDictionary(c => c, c => now.GetValueOrDefault(c), StringComparer.OrdinalIgnoreCase));
+                    Exec(connection, transaction,
+                        $"UPDATE {table.Quoted} SET {string.Join(", ", columns.Select((c, i) => SqliteSql.Quote(c) + " = $v" + i.ToString(CultureInfo.InvariantCulture)))} " +
+                        $"WHERE {table.KeyQuoted} = $k",
+                        columns.Select((c, i) => ("$v" + i.ToString(CultureInfo.InvariantCulture), item.Values[c])).Append(("$k", key)).ToArray());
+                }
+            }
+
+            context.Clock++;
+            var mask = item.Dirty == 2 ? 0L : item.LostMask;
+            var kept = Exec(connection, transaction,
+                "UPDATE g9_rows SET dirty = $d, dirty_mask = $m, rejected = 1, deleted = 0, subs = CASE WHEN subs = 0 THEN $subs ELSE subs END, local_seq = $s " +
+                "WHERE tid = $t AND pk = $pk",
+                ("$d", item.Dirty), ("$m", mask), ("$subs", item.Subs), ("$s", context.Clock), ("$t", table.Tid), ("$pk", item.Key));
+            if (kept == 0)
+            {
+                Exec(connection, transaction,
+                    "INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) VALUES ($t, $pk, $v, $s, $subs, $d, $m, 1, 0)",
+                    ("$t", table.Tid), ("$pk", item.Key), ("$v", item.Version), ("$s", context.Clock), ("$subs", item.Subs), ("$d", item.Dirty), ("$m", mask));
+            }
+
+            Exec(connection, transaction,
+                "INSERT OR REPLACE INTO g9_rejections (tid, pk, code, message, sql_state, constraint_name, column_name, details, at_utc) " +
+                "VALUES ($t, $pk, $code, $message, NULL, NULL, $column, $details, $now)",
+                ("$t", table.Tid), ("$pk", item.Key), ("$code", item.Code),
+                ("$message", item.Dirty == 2
+                    ? "The server changed this row after the device last saw it; the device's delete was kept here, not applied."
+                    : $"The server changed {columnNames ?? "this row"} after the device last saw it; the device's values were kept here, not applied."),
+                ("$column", columnNames), ("$details", serverValues), ("$now", NowMs()));
+            context.Report.ConflictsKept++;
+            if (context.WantsChangedKey(table.Model.LocalName)) context.AddChanged(table.Model.LocalName, item.Key);
+        }
+    }
+
+    /// <summary>A conflict the device lost, with its row as it was sent.</summary>
+    private sealed record LostConflict(LocalTable Table, string Key, string Code, long Dirty, long LostMask, long Subs, long Version, Dictionary<string, object?> Values);
+
     /// <summary>A conservative upper bound of one value's encoded size in a push frame (before compression).</summary>
     private static long EstimateEncodedBytes(SqliteDataReader reader, int ordinal, G9ESyncColumnType type)
     {
@@ -316,6 +445,8 @@ public sealed partial class G9CSqliteSyncStore
 
             // Before BeginApply: finished commands release their rows, so the canonical rows below replace the optimistic ones.
             var completed = CompleteCommands(connection, transaction, result.CommandResults);
+            // Read BEFORE anything below touches the rows: what the device sent for each conflict it may have lost (LES-0072).
+            var lost = ReadLostConflicts(connection, transaction, batch, result);
             using var context = BeginApply(connection, transaction, dirtyAfterSequence: batch.MaxSequence, progress: null, backfills: []);
             context.Report.CommandsCompleted = completed;
 
@@ -373,6 +504,7 @@ public sealed partial class G9CSqliteSyncStore
 
             context.Report.Conflicts = result.Conflicts.Count;
             foreach (var frame in result.CanonicalFrames) ApplyFrame(context, frame, subscriptionKey: null);
+            KeepLostConflicts(context, lost);
 
             EndApply(context);
             Exec(connection, transaction, "DELETE FROM g9_meta WHERE key IN ('inflight_batch_id', 'inflight_max_seq')");

@@ -725,3 +725,19 @@ not cover the same rows: `Rejected` also counts rows refused ON THE DEVICE befor
 which `Pushed` never counted — three accepted rows next to three oversized ones read "0 sent". The store already knew the true number
 (the acknowledgement's accepted keys, `G9CApplyReport.Accepted`); the engine just did not pass it on. 1.5.5 does: `Accepted` (rows +
 completed commands). Lesson: when two counters are about different sets, do not derive a third by arithmetic — expose the measured one.
+
+## LES-0072 — 2026-10-22 · A conflict the device lost vanished without a word
+
+Rebuilding an AgriPad test scene on the emulator, a tree move made on the tablet disappeared: the office had moved the same tree
+meanwhile, the server's `ColumnMerge` kept its own value for the overlapping column and reported `G9S-CON-COLUMNS` ("1 conflicts" in
+its log), and the device applied the canonical row over its change. `ApplyPushResultAsync` only COUNTED conflicts — nothing reached
+`g9_rejections`, so the app's refused-changes list never showed it and the operator believed the move had synced. The policies were
+doing their job (the server must decide what the server keeps); the device side was missing: what the policy did not take was simply
+overwritten. `G9CSqliteSyncStoreOptions.KeepLostConflicts` (1.5.6, off by default so every policy test keeps its meaning): before the
+apply the store reads each conflicted row as it was sent; after the canonical rows land it puts the device's values back for EXACTLY
+what was lost (the whole change for server-wins / deleted / resolver; for a column merge, the device's changed columns ∩ the server's
+changed mask, mapped from push order to model order), keeps the row pending with its base at the server's version, and parks it with
+the conflict's code, the lost column names (`column_name`) and the server's values for them (`details`, JSON). The run counts it as
+rejected (`G9CApplyReport.ConflictsKept`). `RetryRejectedAsync` then sends it on top of the server's version — no longer a conflict, so
+the device wins only because a person chose it; `RevertRejectedAsync` takes the server's copy as for any refusal. `KeptConflictTests`.
+Lesson: "the server wins" is a decision about the server; on the device the losing change still needs a visible end.

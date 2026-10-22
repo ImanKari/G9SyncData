@@ -72,6 +72,18 @@ public sealed class G9CSqliteSyncStoreOptions
     public bool SkipTriggersDuringApply { get; set; } = true;
 
     /// <summary>
+    ///     A conflict the device LOSES is kept on it instead of being overwritten (LES-0072). Off (the default), a push conflict applies the
+    ///     server's canonical row and only counts it: whatever the server's policy kept from the device's change is gone from the device.
+    ///     On, the device's values for exactly what it lost (the whole change, or the overlapping columns of a column merge) are put back
+    ///     over the canonical row, the row stays pending with its base at the server's version and is parked as a rejection with the
+    ///     conflict's code, the lost columns (<c>column_name</c>) and the server's values for them (<c>details</c>, JSON). The run counts it
+    ///     as rejected. <c>RetryRejectedAsync</c> then sends it on top of the server's version (the device's values win);
+    ///     <c>RevertRejectedAsync</c> takes the server's. For an app whose rule is that no field work disappears without the operator
+    ///     deciding (AgriPad).
+    /// </summary>
+    public bool KeepLostConflicts { get; set; }
+
+    /// <summary>
     ///     A download that fills an EMPTY table with at least this many rows drops the table's plain (non-unique) indexes first and builds
     ///     each once after the rows are in, inside the same transaction (ADR-0034): one sorted build instead of a random insert per row,
     ///     1.8x faster at 500 k rows. A crash rolls the indexes back with everything else. 0 turns it off.

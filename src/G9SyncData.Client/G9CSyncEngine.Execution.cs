@@ -585,7 +585,8 @@ public sealed partial class G9CSyncEngine
             // What the server TOOK, from its acknowledgement as applied here - not "sent minus refused": a row refused on the device
             // (too large) is in `rejected` but was never sent, so a subtraction would hide rows the server did accept.
             accepted += (int)(report.Accepted + report.CommandsCompleted);
-            rejected += result.Rejections.Count;
+            // A conflict the device lost is kept on it as a rejection (LES-0072): refused work the operator must decide on.
+            rejected += result.Rejections.Count + (int)report.ConflictsKept;
             conflicts += result.Conflicts.Count;
             tracker.Report(pushed);
             LogPushed(_logger, batch.BatchId, batch.RowCount, result.Rejections.Count, result.Conflicts.Count, result.AlreadyApplied);
