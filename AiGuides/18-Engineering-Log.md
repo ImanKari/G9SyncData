@@ -837,6 +837,21 @@ pulls. The library still returns the count; the app checks for such rows before 
 Lesson: "no base version" is not "no conflict". It means the policy decides with less information, so the consumer has
 to say so.
 
+## LES-0081 — 2026-10-25 · One code for three refusals made a consumer loop
+
+The push refused a row for lack of permission in three different situations and called all three `G9S-REJ-PERMISSION`:
+no subscription of the caller authorises uploads to the table; the row as it is on the server is outside every writable
+scope; the row would end outside every writable scope after the push. Only the first can pass without anyone deciding
+anything (the device takes out the subscription it was missing). AgriPad re-sent every `G9S-REJ-PERMISSION` after each run,
+so rows of the other two kinds went up, were refused, and were re-armed again on every sync: the dashboard said "sending"
+for ever and the operator was never asked (Sentry AGRIPAD-5402, a state-transition history row on a dev S96Pro).
+
+Now the second is `G9S-REJ-OUTSIDE-SCOPE` and the third `G9S-REJ-LEAVES-SCOPE` (the messages were already distinct). The
+three tests that asserted the old code now assert which case each row is.
+
+Lesson: a code is how a consumer decides what to do. Two situations that need different actions need two codes, even
+when the server treats them the same.
+
 ## 1.5.7 review — what was measured (2026-10-22)
 
 The question was whether the library holds under heavy, concurrent use. Coverage was measured first (coverlet, both suites): 87.9 %

@@ -160,7 +160,7 @@ public sealed class EfCoreScopeTests(ITestOutputHelper output)
 
         var rejections = await client.Engine.GetRejectionsAsync();
         Assert.Equal(2, rejections.Count);
-        Assert.All(rejections, r => Assert.Equal(G9SyncErrorCodes.RejectPermission, r.Code));
+        Assert.All(rejections, r => Assert.Equal(G9SyncErrorCodes.RejectLeavesScope, r.Code));   // an insert outside, a move out
         Assert.Equal(new[] { Key(outside), Key(pots[0]) }.Order(StringComparer.Ordinal), rejections.Select(r => r.Key).Order(StringComparer.Ordinal));
     }
 

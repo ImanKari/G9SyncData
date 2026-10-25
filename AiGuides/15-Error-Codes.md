@@ -40,7 +40,9 @@ classify failures by code, never by message (plan P-19).
 | `G9S-TOKEN-EXPIRED` | pull token past its lifetime | re-plan |
 | `G9S-REJ-VALIDATION` | a validator rejected the row | show `G9CSyncRejection`, let the user fix |
 | `G9S-REJ-CONSTRAINT` | database constraint (SQLSTATE and constraint name attached) | show, fix, row re-uploads on edit |
-| `G9S-REJ-PERMISSION` | row outside the client's writable scope | discard or re-scope |
+| `G9S-REJ-PERMISSION` | no subscription the caller holds authorises uploads to the table ("not yet") | send again once the missing subscription is held - only then, never after every run |
+| `G9S-REJ-OUTSIDE-SCOPE` | the row AS IT IS ON THE SERVER is outside every writable scope: an update/delete of a row that is no longer the caller's (moved away, protected by a write rule) - since 1.5.9 | show it; the user keeps their copy (send again) or takes the server's - sending it again by itself changes nothing |
+| `G9S-REJ-LEAVES-SCOPE` | after the push the row would be outside every writable scope: an insert or a move into something the caller cannot write (a parent they do not hold, a value the write rule refuses) - since 1.5.9 | show it; it can pass only if the caller's subscriptions change |
 | `G9S-REJ-DIRECTION` | upload to a DownloadOnly table / include | developer error |
 | `G9S-CMD-UNKNOWN` | no server handler for the command's name and version | ship the handler before the app version that records the command |
 | `G9S-CMD-REJECTED` | a command handler refused without an application code | show the command's message |

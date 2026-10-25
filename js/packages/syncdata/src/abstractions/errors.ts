@@ -31,7 +31,12 @@ export const G9SyncErrorCodes = {
 
   RejectValidation: 'G9S-REJ-VALIDATION',
   RejectConstraint: 'G9S-REJ-CONSTRAINT',
+  /** No subscription of the caller authorises uploads to the table: passes once the missing subscription is held. */
   RejectPermission: 'G9S-REJ-PERMISSION',
+  /** The server's row is outside every subscription the caller may write to (no longer theirs). Since 1.5.9. */
+  RejectOutsideScope: 'G9S-REJ-OUTSIDE-SCOPE',
+  /** After the push the row would be outside every subscription the caller may write to. Since 1.5.9. */
+  RejectLeavesScope: 'G9S-REJ-LEAVES-SCOPE',
   RejectDirection: 'G9S-REJ-DIRECTION',
   RejectTooMany: 'G9S-REJ-TOO-MANY',
   /** One row is larger than the server accepts in a push: rejected on the device, every other row still uploads. */

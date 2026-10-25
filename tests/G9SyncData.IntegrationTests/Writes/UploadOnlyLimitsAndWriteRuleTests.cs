@@ -166,7 +166,10 @@ public sealed class UploadOnlyLimitsAndWriteRuleTests(ITestOutputHelper output)
         Assert.Equal(G9ESyncOutcome.CompletedWithRejections, result.Outcome);
         var rejected = (await client.Engine.GetRejectionsAsync()).ToDictionary(r => r.Key, r => r.Code);
         Assert.Equal(new[] { Key(pots[1]), Key(pots[4]), Key(pots[5]), Key(refusedInsert) }.Order(), rejected.Keys.Order());
-        Assert.All(rejected.Values, code => Assert.Equal(G9SyncErrorCodes.RejectPermission, code));
+        Assert.Equal(G9SyncErrorCodes.RejectLeavesScope, rejected[Key(pots[1])]);          // after violates
+        Assert.Equal(G9SyncErrorCodes.RejectOutsideScope, rejected[Key(pots[4])]);         // before violates
+        Assert.Equal(G9SyncErrorCodes.RejectOutsideScope, rejected[Key(pots[5])]);         // before violates (a delete)
+        Assert.Equal(G9SyncErrorCodes.RejectLeavesScope, rejected[Key(refusedInsert)]);
 
         Assert.Equal(3, await harness.ScalarServerAsync<int>("""SELECT "Status" FROM farm."Pot" WHERE "Id" = $1""", pots[0]));
         Assert.NotEqual(12, await harness.ScalarServerAsync<int>("""SELECT "Status" FROM farm."Pot" WHERE "Id" = $1""", pots[1]));

@@ -23,6 +23,14 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.9
+
+- **The three permission refusals have three codes** (LES-0081). `G9S-REJ-PERMISSION` now means only "no subscription you hold
+  authorises uploads to this table" - the one refusal that can pass by itself once the device holds the missing subscription. A row
+  that is no longer the caller's on the server is `G9S-REJ-OUTSIDE-SCOPE`; a row that would end outside every writable scope after
+  the push (an insert or a move into something the caller cannot write) is `G9S-REJ-LEAVES-SCOPE`. A consumer that re-sent every
+  `G9S-REJ-PERMISSION` after each run was looping on rows that could never pass.
+
 ## What's new in 1.5.8
 
 - **Retiring Dotmim cleans the whole device, not only the model's tables** (LES-0079). `G9CDotmimRetirementOptions.RetireTablesOutsideModel`

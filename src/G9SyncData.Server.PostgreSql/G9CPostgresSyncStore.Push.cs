@@ -292,7 +292,7 @@ public sealed partial class G9CPostgresSyncStore
             await using var command = Command(connection, transaction,
                 $"UPDATE {stage} AS s SET g9_action = 0, g9_code = @g9_code, g9_message = @g9_message WHERE s.g9_action = 1 AND s.g9_exists " +
                 $"AND NOT EXISTS (SELECT 1 FROM {table.BaseName} AS t WHERE t.{key} = s.g9_key AND coalesce({authPredicate}, false))");
-            command.Parameters.Add(P("g9_code", NpgsqlDbType.Text, G9SyncErrorCodes.RejectPermission));
+            command.Parameters.Add(P("g9_code", NpgsqlDbType.Text, G9SyncErrorCodes.RejectOutsideScope));
             command.Parameters.Add(P("g9_message", NpgsqlDbType.Text, "The row is outside every subscription the caller may write to."));
             foreach (var (subscription, prefix, scope) in authBindings)
             {
@@ -307,7 +307,7 @@ public sealed partial class G9CPostgresSyncStore
         {
             await ExecuteAsync(connection, transaction,
                 $"UPDATE {stage} SET g9_action = 0, g9_code = @g9_code, g9_message = @g9_message WHERE g9_action = 1 AND g9_seq = ANY(@g9_seqs)", ct,
-                P("g9_code", NpgsqlDbType.Text, G9SyncErrorCodes.RejectPermission),
+                P("g9_code", NpgsqlDbType.Text, G9SyncErrorCodes.RejectLeavesScope),
                 P("g9_message", NpgsqlDbType.Text, "After the push the row would be outside every subscription the caller may write to."),
                 P("g9_seqs", NpgsqlDbType.Array | NpgsqlDbType.Bigint, outside.ToArray())).ConfigureAwait(false);
         }

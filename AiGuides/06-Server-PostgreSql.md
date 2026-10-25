@@ -193,7 +193,7 @@ One `READ COMMITTED` transaction per push:
    A row's scope may run through a row of a later table (a new tree is in the farm through the placement planted with it),
    so a per-table check would refuse it. The table loop runs under a push savepoint; rows that still end outside are
    remembered, the savepoint is rolled back, the result lists are truncated and the tables are applied again with those rows
-   pre-rejected (`G9S-REJ-PERMISSION`) — their dependants then fail as usual (FK → `G9S-REJ-CONSTRAINT`). At most four
+   pre-rejected (`G9S-REJ-LEAVES-SCOPE`; `G9S-REJ-PERMISSION` before 1.5.9) — their dependants then fail as usual (FK → `G9S-REJ-CONSTRAINT`). At most four
    attempts, then `G9S-SERVER-ERROR`.
 7. Store `last_push_batch` and the serialised result; commit.
 

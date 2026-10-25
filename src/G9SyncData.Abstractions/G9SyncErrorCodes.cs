@@ -47,7 +47,26 @@ public static class G9SyncErrorCodes
     // Row rejections (push)
     public const string RejectValidation = "G9S-REJ-VALIDATION";
     public const string RejectConstraint = "G9S-REJ-CONSTRAINT";
+    /// <summary>
+    ///     No subscription the caller holds authorises uploads to the row's table. The one permission refusal a later push can pass
+    ///     without anyone changing data: the device takes out the subscription it was missing, then sends the row again.
+    /// </summary>
     public const string RejectPermission = "G9S-REJ-PERMISSION";
+
+    /// <summary>
+    ///     The row, as it is on the SERVER, is outside every subscription the caller may write to: an update or delete of a row that
+    ///     is no longer the caller's (moved to a site they cannot write, protected by a write rule). Sending it again changes nothing;
+    ///     the user decides between their copy and the server's. Until 1.5.9 this was reported as <see cref="RejectPermission" />.
+    /// </summary>
+    public const string RejectOutsideScope = "G9S-REJ-OUTSIDE-SCOPE";
+
+    /// <summary>
+    ///     After the push the row would be outside every subscription the caller may write to: an insert, or a change that moves the
+    ///     row, into something the caller cannot write (a parent they do not hold, a value the write rule refuses). It can pass later
+    ///     only if the caller's subscriptions change. Until 1.5.9 this was reported as <see cref="RejectPermission" />.
+    /// </summary>
+    public const string RejectLeavesScope = "G9S-REJ-LEAVES-SCOPE";
+
     public const string RejectDirection = "G9S-REJ-DIRECTION";
     public const string RejectTooMany = "G9S-REJ-TOO-MANY";
 

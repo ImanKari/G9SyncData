@@ -57,7 +57,7 @@ public sealed class CrossTableWriteScopeTests(ITestOutputHelper output)
         Assert.Equal(G9ESyncOutcome.CompletedWithRejections, result.Outcome);
         var rejected = (await client.Engine.GetRejectionsAsync()).ToDictionary(r => r.Key, r => r.Code);
         Assert.Equal(new[] { Key(otherSite), Key(otherPot) }.Order(StringComparer.Ordinal), rejected.Keys.Order(StringComparer.Ordinal));
-        Assert.Equal(G9SyncErrorCodes.RejectPermission, rejected[Key(otherSite)]);
+        Assert.Equal(G9SyncErrorCodes.RejectLeavesScope, rejected[Key(otherSite)]);
 
         Assert.Equal(1L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Site" WHERE "Id" = $1""", ownSite));
         Assert.Equal(1L, await harness.ScalarServerAsync<long>("""SELECT count(*) FROM farm."Pot" WHERE "Id" = $1""", ownPot));
