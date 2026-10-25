@@ -128,7 +128,10 @@ Used for 1.5.2 – 1.5.11 (2026-10-22 – 2026-10-25): the Azure DevOps free min
    empty `credential.helper` so a refusal fails at once; prove the header with `git ls-remote github` first.
 5. `dotnet nuget push <each .nupkg> --source https://api.nuget.org/v3/index.json --skip-duplicate` (symbols go with it).
 6. `npm run pack:all` in `js/`, then `npm publish artifacts/npm/<tgz> --access public` with a temporary `--userconfig`.
-7. Consumers pin only once the Nexus group lists the version (or through the app's temporary `nuget-local`, AgriPad guide 19).
+7. Push the signed copies nuget.org serves to the company Nexus with the agriculture repository's
+   `Agriculture.AgriPad/Tools/Publish-NuGetToNexus.ps1` (hosted repository `nuget-hosted`, a member of `nuget-group`), then
+   pin. The group lists a hosted package at once; through the nuget.org proxy it took hours (its version list is cached), and
+   the temporary `nuget-local` feed used for 1.3.0 – 1.5.11 is retired (AgriPad guide 19).
 
 ### Verifying a version locally before publishing
 
