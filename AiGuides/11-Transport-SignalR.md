@@ -122,7 +122,8 @@ pages (ADR-0073). A proxy in front of LongPolling must pass request bodies throu
 `application/x-www-form-urlencoded` (LES-0066). Install the WebSocket feature on every IIS that hosts the hub. The Lynx client has
 only a WebSocket transport and cannot connect to such a host at all.
 
-Concurrent `ConnectAsync` calls share one attempt. SignalR stateful reconnect is **not** relied on — resumption is
+Concurrent `ConnectAsync` calls share one attempt; each caller waits for it under its own token, and the attempt observes
+its own fault, so one that fails after every waiter was canceled is never an unobserved exception (1.5.10, LES-0082). SignalR stateful reconnect is **not** relied on — resumption is
 application-level (batch ids, continuations).
 
 ## In-memory transport for tests

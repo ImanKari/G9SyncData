@@ -60,13 +60,32 @@ public sealed partial class G9CSignalRSyncTransport
 
     public event Action<G9DtChangesAvailable>? ChangesAvailable;
 
+    /// <remarks>
+    ///     ⛔ <b>The shared connect observes its own fault (1.5.10).</b> One connect is shared by every caller that arrives while
+    ///     it runs, and each caller only WAITS for it under its own token (<c>WaitAsync</c>). When every waiter has been canceled
+    ///     — a site switch cancels the sync that was connecting — nobody is left to observe the shared task, and if the connect
+    ///     then fails its exception reaches <c>TaskScheduler.UnobservedTaskException</c> at the next finalizer pass. An app that
+    ///     treats that event as a crash (AgriPad does, and its "only a cancellation" filter does not see through the
+    ///     <see cref="G9CSyncException" /> wrapper) showed its critical-error page for a sync nobody was waiting for any more
+    ///     (AgriPad TR, 2026-10-25). The failure is still logged (<c>ConnectCoreAsync</c>) and still reaches every caller that
+    ///     is waiting; it just can never be orphaned.
+    /// </remarks>
     Task IG9SyncTransport.ConnectAsync(CancellationToken cancellationToken)
     {
         if (IsConnected) return Task.CompletedTask;
         Task connecting;
         lock (_connectGate)
         {
-            if (_connecting is null || _connecting.IsCompleted) _connecting = ConnectCoreAsync();
+            if (_connecting is null || _connecting.IsCompleted)
+            {
+                _connecting = ConnectCoreAsync();
+                _connecting.ContinueWith(
+                    static task => _ = task.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+
             connecting = _connecting;
         }
 

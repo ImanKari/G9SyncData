@@ -23,6 +23,14 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.10
+
+- **A canceled connect can no longer leave an unobserved fault** (LES-0082). `G9CSignalRSyncTransport.ConnectAsync` shares one
+  connect among every caller that arrives while it runs, and each caller waits under its own token. When every waiter was canceled
+  (an app switching what it syncs cancels the run that was connecting) and the connect then failed, nobody observed it and the
+  fault reached `TaskScheduler.UnobservedTaskException` — which an app may treat as a crash. The shared connect now observes its own
+  fault; callers that are still waiting see it exactly as before. The TypeScript twin already attached a handler on every path.
+
 ## What's new in 1.5.9
 
 - **The three permission refusals have three codes** (LES-0081). `G9S-REJ-PERMISSION` now means only "no subscription you hold

@@ -852,6 +852,23 @@ three tests that asserted the old code now assert which case each row is.
 Lesson: a code is how a consumer decides what to do. Two situations that need different actions need two codes, even
 when the server treats them the same.
 
+## LES-0082 — 2026-10-25 · A shared task that every waiter abandoned is nobody's to observe
+
+The SignalR transport shares one connect among every caller that arrives while it runs (`_connecting`), and each caller waits
+for it under its own token (`WaitAsync`). AgriPad switched sites while the sync was connecting: the switch canceled the run,
+its `WaitAsync` ended as a cancellation, and the connect it had been waiting for failed a moment later with no one left to
+await it. When the next connect replaced `_connecting`, the faulted task was collected and its exception surfaced as
+`TaskScheduler.UnobservedTaskException` (a `G9CSyncException` wrapping the cancellation). AgriPad treats that event as a crash
+and its "only a cancellation" filter did not see through the wrapper, so the operator got the critical-error page for a sync
+nobody was waiting for.
+
+Now the shared connect observes its own fault (`ContinueWith(… OnlyOnFaulted)` at the moment it is created). The failure is
+still logged by `ConnectCoreAsync` and still reaches every caller that is waiting. Test: `SignalRConnectFaultTests` — it fails
+without the change.
+
+Lesson: a task handed to several waiters, each with its own cancellation, must observe its own outcome. Cancellation ends the
+WAIT, never the work, and the work's fault then belongs to no one.
+
 ## 1.5.7 review — what was measured (2026-10-22)
 
 The question was whether the library holds under heavy, concurrent use. Coverage was measured first (coverlet, both suites): 87.9 %
