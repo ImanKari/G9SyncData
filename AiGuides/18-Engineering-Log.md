@@ -869,6 +869,23 @@ without the change.
 Lesson: a task handed to several waiters, each with its own cancellation, must observe its own outcome. Cancellation ends the
 WAIT, never the work, and the work's fault then belongs to no one.
 
+## LES-0083 — 2026-10-25 · A restored copy kept the source's xids and hid its newest rows
+
+A dev database was dumped and restored into a local PostgreSQL for a QA run. The store saw the new database OID, rotated the
+epoch and cleared the key sets — and a device's first download of a site still lacked 26 trees and all 216 grafts. The capture
+rows had come over with the SOURCE's xids (678 517) while the copy's counter stood at 365 441: `pg_visible_in_snapshot` called
+every one of them "not committed yet", so the snapshot-file build, the row build, deltas and the change feed all skipped them,
+and would have until the copy's counter passed the source's. A template copy in one cluster shares the counter, which is why the
+existing copy tests never saw it.
+
+Now the identity change also sets every captured xid (and `max_removed_xid`) to the frozen xid `3`, the value the seed already
+uses: everything a dump holds was committed, the order of changes is `ver`, and every device reconciles once on the new epoch.
+Test: `A_copy_whose_xid_counter_is_behind_the_captured_changes_still_serves_every_row` — without the change the device got 0 of
+20 pots.
+
+Lesson: an xid means something only inside the cluster that issued it. Anything that survives a dump must not be compared with
+the restoring cluster's xids.
+
 ## 1.5.7 review — what was measured (2026-10-22)
 
 The question was whether the library holds under heavy, concurrent use. Coverage was measured first (coverlet, both suites): 87.9 %

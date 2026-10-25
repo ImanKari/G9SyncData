@@ -114,6 +114,53 @@ public sealed class EpochAndRestoreTests(ITestOutputHelper output)
         Assert.Equal(harness.Store.Epoch, again.Store.Epoch);
     }
 
+    /// <summary>
+    ///     LES-0083: a dump restored on another cluster keeps the source's captured xids while its own xid counter starts lower. Those
+    ///     rows then look "not committed yet" to every snapshot of the copy, and a device's first download of the site silently lacked
+    ///     them (a dev copy on 2026-10-25: 26 trees and every graft written that day). Simulated here by pushing the captured xids of a
+    ///     template copy far beyond its counter, then making the copy look new to the store again.
+    /// </summary>
+    [PostgresFact]
+    public async Task A_copy_whose_xid_counter_is_behind_the_captured_changes_still_serves_every_row()
+    {
+        await using var harness = await SyncHarness.CreateAsync(output);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await harness.InsertPotsAsync(site, 20);
+        var copy = await harness.BackupAsync();
+
+        var first = await harness.StartServerAsync(copy);
+        await first.StopCaptureAsync();
+        await first.ExecAsync("""
+            DO $$
+            DECLARE t record;
+            BEGIN
+              FOR t IN SELECT schema_name, table_name FROM g9sync.tables LOOP
+                IF to_regclass(format('g9sync.%I', t.schema_name || '__' || t.table_name)) IS NOT NULL THEN
+                  EXECUTE format('UPDATE g9sync.%I SET xid = (pg_current_xact_id()::text::bigint + 1000000)::text::xid8',
+                                 t.schema_name || '__' || t.table_name);
+                END IF;
+              END LOOP;
+            END $$;
+            """);
+        await first.ExecAsync("UPDATE g9sync.install SET database_oid = 1 WHERE id = 1");   // "a dump loaded elsewhere"
+        await first.DisposeAsync();
+
+        var restored = await harness.StartServerAsync(copy);
+
+        await using var device = await harness.CreateClientAsync();
+        device.InMemory.Engine = restored.Engine;
+        await device.Engine.SubscribeAsync("sites");
+        await device.Engine.SubscribeAsync("site-pots", SitePots(site));
+        await device.SyncOkAsync();
+
+        Assert.Equal(20, await device.CountAsync("Pot"));
+        Assert.Equal(1, await device.CountAsync("Site"));
+        Assert.Equal(0L, await restored.ScalarAsync<long>("""
+            SELECT count(*) FROM g9sync."farm__Pot" WHERE xid > pg_current_xact_id()
+            """));
+    }
+
     [PostgresFact]
     public async Task A_cursor_newer_than_the_database_is_never_trusted()
     {

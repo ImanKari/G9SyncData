@@ -38,7 +38,7 @@ Base (`PgCaptureSql.Base`):
 
 | Object | Purpose |
 |---|---|
-| `g9sync.install(epoch, schema_version, library_version, database_oid, epoch_changed_at, epoch_change_reason, …)` | one row; the epoch identifies this installation IN THIS DATABASE: a different `database_oid` at startup (restored backup, template copy) rotates it and deletes key sets (ADR-0036) |
+| `g9sync.install(epoch, schema_version, library_version, database_oid, epoch_changed_at, epoch_change_reason, …)` | one row; the epoch identifies this installation IN THIS DATABASE: a different `database_oid` at startup (restored backup, template copy) rotates it, deletes key sets (ADR-0036) and sets every captured `xid` and `max_removed_xid` to the frozen `3` — a dump restored on another cluster carries the source's xids, which the copy's lower counter would treat as not committed yet and skip (1.5.11, LES-0083) |
 | `g9sync.tables(table_id, schema_name, table_name, columns[], capture_hash, max_removed_xid)` | table ids; captured column list (reset of column versions when it changes); tombstone horizon |
 | `g9sync.clients(client_id, user_id, app_version, last_push_batch, last_push_result, first_seen, last_seen)` | push idempotency and client registry |
 | `g9sync.ver_seq` | global monotonic row version |

@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.11
+
+- **A restored copy serves every row it holds** (LES-0083). A dump restored on another cluster keeps the source's captured xids
+  while its own xid counter starts lower, so every change the source had captured looked "not committed yet" to the copy: builds,
+  snapshot files, deltas and the change feed skipped those rows until the counter caught up. A device's first download of a site
+  from a dev copy lacked every tree and graft written on the day of the dump. When the store detects a copy (the database identity
+  changed, which already rotates the epoch) it now makes every captured xid visible to every snapshot — everything a dump holds was
+  committed, and the order of changes lives in `ver`, never in the xid.
+
 ## What's new in 1.5.10
 
 - **A canceled connect can no longer leave an unobserved fault** (LES-0082). `G9CSignalRSyncTransport.ConnectAsync` shares one

@@ -579,6 +579,17 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
 
         // Key sets were built by the database this data came from: never serve one to a device of this one.
         await ExecuteAsync(connection, transaction, $"DELETE FROM {_schema}.key_sets", cancellationToken).ConfigureAwait(false);
+
+        // ⛔ The captured xids belong to the database this data came from (1.5.10, LES-0083). A dump restored elsewhere, or a copy, starts
+        // its own xid counter: when that counter is BEHIND the source's, every change the source captured carries an xid this database
+        // has not reached, `pg_visible_in_snapshot` calls it "not committed yet", and builds, deltas and the change feed skip it until the
+        // counter catches up — on a dev copy restored on 2026-10-25 that was every tree and graft written that day (a device's first
+        // download of the site lacked 26 trees and all 216 grafts). Everything a dump holds was committed, so each captured row is made
+        // visible to every snapshot ('3', the frozen xid the seed already uses); the order of changes lives in `ver`, never in the xid.
+        // `max_removed_xid` is the same kind of value. Every device reconciles once on the new epoch anyway, which is exact.
+        await ExecuteAsync(connection, transaction,
+            $"UPDATE {_schema}.tables SET max_removed_xid = '3'::xid8 WHERE max_removed_xid IS NOT NULL AND max_removed_xid <> '3'::xid8",
+            cancellationToken).ConfigureAwait(false);
         foreach (var table in tables)
         {
             // A table added to the model since the backup has no key table yet (registration creates it right after this).
@@ -586,6 +597,13 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
                     P("g9_name", NpgsqlDbType.Text, table.KeySetName)).ConfigureAwait(false))
             {
                 await ExecuteAsync(connection, transaction, $"DELETE FROM {table.KeySetName}", cancellationToken).ConfigureAwait(false);
+            }
+
+            if (await ScalarAsync<bool>(connection, transaction, "SELECT to_regclass(@g9_name) IS NOT NULL", cancellationToken,
+                    P("g9_name", NpgsqlDbType.Text, table.TrackingName)).ConfigureAwait(false))
+            {
+                await ExecuteAsync(connection, transaction, $"UPDATE {table.TrackingName} SET xid = '3'::xid8 WHERE xid <> '3'::xid8",
+                    cancellationToken).ConfigureAwait(false);
             }
         }
         LogEpochRotated(_logger, recorded.Value, current, epoch, rotated);
