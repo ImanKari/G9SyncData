@@ -115,6 +115,69 @@ public sealed class SqliteDotmimRetirementTests : IAsyncLifetime
         Assert.False(rows.ContainsKey(Pots[6]));   // deleted and uploaded before the last sync
     }
 
+    /// <summary>
+    ///     Pre-release upgrade test 2026-10-26 (5.9.7 → 6.2.20): work the phone had uploaded through its site scope came back as pending
+    ///     because ANOTHER scope - one that does not even hold the table - had synced earlier. Dotmim uploads a table's local changes on the
+    ///     sync of any scope holding it, so only those scopes' newest sync says what is still unsent.
+    /// </summary>
+    [Fact]
+    public async Task What_a_scope_holding_the_table_has_synced_since_is_not_imported_whatever_other_scopes_last_did()
+    {
+        const long SiteSynced = LastSync + 5_000_000;   // the site scope (holds Pot) synced last
+        await PrepareDotmimDeviceAsync(withForeignTable: false, withAppTriggers: false, extra:
+        [
+            DotmimDeviceSql.Scope("FARM_V4", "Pot"),
+            DotmimDeviceSql.Scope("INITIAL_V2", "Site"),
+            // A second scope holding Pot that never synced must not make every Pot change pending again.
+            DotmimDeviceSql.Scope("FARM_V4_OTHER", "Pot"),
+            DotmimDeviceSql.ScopeClient("FARM_V4_OTHER", null),
+            $"UPDATE scope_info_client SET scope_last_sync_timestamp = {LastSync} WHERE sync_scope_name = 'INITIAL_V2'",
+            $"UPDATE scope_info_client SET scope_last_sync_timestamp = {SiteSynced} WHERE sync_scope_name = 'FARM_V4'",
+            // Edited after INITIAL_V2's sync but before the site scope's: the site scope's sync uploaded it.
+            $"UPDATE Pot SET Note = 'uploaded by the site scope' WHERE Id = '{Pots[4]}'",
+            $"UPDATE Pot_tracking SET [timestamp] = {LastSync + 1_000_000} WHERE Id = '{Pots[4]}'"
+        ]);
+        var store = await OpenStoreAsync();
+
+        var result = await store.RetireDotmimCaptureAsync();
+
+        Assert.Equal(2, result.ImportedUpserts["Pot"]);   // still only the offline edit (Pots[0]) and the offline insert (Pots[7])
+        Assert.Equal(1, result.ImportedDeletes["Pot"]);   // and the offline delete (Pots[1])
+        var hello = Hello();
+        await store.SaveHelloAsync(hello, CancellationToken.None);
+        var batch = await store.BuildPushBatchAsync(hello.Tables, 100, long.MaxValue, CancellationToken.None);
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        using (var reader = G9CRowBatchReader.Open(batch!.Frames.Single()))
+        {
+            while (reader.NextSection())
+            {
+                while (reader.ReadRow()) keys.Add(reader.Key);
+            }
+        }
+
+        Assert.DoesNotContain(Pots[4], keys);   // 1.5.11 sent it again: the oldest scope stamp (INITIAL_V2) predates it
+        Assert.Equal(new[] { Pots[0], Pots[1], Pots[7] }.Order(StringComparer.Ordinal), keys.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task When_every_scope_holding_the_table_never_synced_all_of_its_local_work_is_pending()
+    {
+        await PrepareDotmimDeviceAsync(withForeignTable: false, withAppTriggers: false, extra:
+        [
+            DotmimDeviceSql.Scope("FARM_V4", "Pot"),
+            DotmimDeviceSql.Scope("INITIAL_V2", "Site"),
+            "UPDATE scope_info_client SET scope_last_sync_timestamp = NULL WHERE sync_scope_name = 'FARM_V4'"
+        ]);
+        var store = await OpenStoreAsync();
+
+        var result = await store.RetireDotmimCaptureAsync();
+
+        // Pot's only scope never synced, so even the changes stamped before INITIAL_V2's sync are unsent: Pots[3] (edited) joins the
+        // offline edit and insert, Pots[6] (deleted) the offline delete.
+        Assert.Equal(3, result.ImportedUpserts["Pot"]);
+        Assert.Equal(2, result.ImportedDeletes["Pot"]);
+    }
+
     [Fact]
     public async Task Imported_work_on_a_table_the_server_makes_download_only_stops_being_pending_and_takes_the_servers_copy()
     {
@@ -286,7 +349,7 @@ public sealed class SqliteDotmimRetirementTests : IAsyncLifetime
     ///     A device Dotmim has synced: Pot (in the store's model) and optionally Weather (not in it) with Dotmim's capture; rows downloaded;
     ///     older changes already uploaded; then offline work after the last sync - an edit, an insert, a delete.
     /// </summary>
-    private async Task PrepareDotmimDeviceAsync(bool withForeignTable, bool withAppTriggers)
+    private async Task PrepareDotmimDeviceAsync(bool withForeignTable, bool withAppTriggers, IReadOnlyList<string>? extra = null)
     {
         var sql = new List<string>
         {
@@ -325,6 +388,7 @@ public sealed class SqliteDotmimRetirementTests : IAsyncLifetime
         sql.Add($"UPDATE Pot SET Note = 'edited offline' WHERE Id = '{Pots[0]}'");
         sql.Add($"DELETE FROM Pot WHERE Id = '{Pots[1]}'");
         sql.Add($"INSERT INTO Pot (Id, Code, Status, Note) VALUES ('{Pots[7]}', 'P7', 0, 'created offline')");
+        if (extra is not null) sql.AddRange(extra);
 
         foreach (var statement in sql) await ExecAsync(statement);
     }

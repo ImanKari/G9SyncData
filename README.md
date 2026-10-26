@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.12
+
+- **Retiring Dotmim re-sends only what Dotmim had not uploaded** (LES-0084). The import used the OLDEST last sync of all of
+  Dotmim's scope clients, so one stale scope (a site opened weeks ago) made every change since then pending again — work the phone
+  had long uploaded, re-sent with every column and no base version. On a server whose capture is installed after the old server
+  stops, that resend overwrote office edits the phone had not downloaded yet; with capture already in place it came back as
+  conflicts. Each table now takes the newest last sync of the scopes whose setup lists it (`"tn":"<table>"`); a table no scope can
+  be matched to keeps the old rule. Found by the AgriPad 5.9.7 → 6.2.20 upgrade test on real phones.
+
 ## What's new in 1.5.11
 
 - **A restored copy serves every row it holds** (LES-0083). A dump restored on another cluster keeps the source's captured xids

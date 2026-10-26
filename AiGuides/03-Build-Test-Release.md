@@ -38,7 +38,7 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 ## Versioning and packing
 
-- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.5.11`). `<Version>` only
+- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.5.12`). `<Version>` only
   consumes it. The indirection exists so a consuming repository can pin the family from one property — in an
   application project `$(Version)` means "the app's version", not "the version of the packages it references".
 - ⛔ **The family releases TOGETHER and must never be mixed.** The protocol frame layout is negotiated across
@@ -111,7 +111,7 @@ public.
 
 ### Releasing by hand (when the pipeline cannot run)
 
-Used for 1.5.2 – 1.5.11 (2026-10-22 – 2026-10-25): the Azure DevOps free minutes were used up. The same steps as the pipeline, in its order:
+Used for 1.5.2 – 1.5.12 (2026-10-22 – 2026-10-26): the Azure DevOps free minutes were used up. The same steps as the pipeline, in its order:
 
 1. Bump `G9SyncDataVersion` **and** the npm packages (`js/packages/*/package.json`, their `@g9tm/syncdata` dependency, the
    lockfile, the Lynx module's version constants: `src/index.ts`, `lynxtron/index.ts`, `G9SyncDataLynxModule.kt` / `.m`,

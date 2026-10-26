@@ -37,6 +37,15 @@ public static class DotmimDeviceSql
         $"INSERT INTO [scope_info_client] (sync_scope_id, sync_scope_name, sync_scope_hash, scope_last_sync_timestamp) " +
         $"VALUES ('9AF3754A-8F82-4DD5-A881-3952343EA23D', '{scope}', 'hash-{scope}', {(lastSyncStamp?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "NULL")});";
 
+    /// <summary>
+    ///     A scope's <c>scope_info</c> row listing <paramref name="tables" />, its setup serialised as Dotmim 1.3.17 does it
+    ///     (<c>SerializersFactory.JsonSerializerFactory</c>, checked 2026-10-26): <c>{"tbls":[{"tn":"Tree","sn":"Operation",…}]}</c>.
+    /// </summary>
+    public static string Scope(string scope, params string[] tables) =>
+        "INSERT INTO [scope_info] (sync_scope_name, sync_scope_setup) VALUES ('" + scope + "', '{\"tbls\":[" +
+        string.Join(",", tables.Select(t => "{\"tn\":\"" + t + "\",\"sn\":\"Operation\",\"cols\":[],\"ecols\":[],\"icols\":[],\"shadtblcols\":[]}")) +
+        "],\"fils\":[],\"secols\":[]}');";
+
     /// <summary>The tracking table, its index and the three triggers Dotmim provisions for <paramref name="table" /> keyed by <c>[Id]</c>.</summary>
     public static string Capture(string table) => $$"""
         CREATE TABLE [{{table}}_tracking] (

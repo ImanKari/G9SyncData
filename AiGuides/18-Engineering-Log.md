@@ -886,6 +886,25 @@ Test: `A_copy_whose_xid_counter_is_behind_the_captured_changes_still_serves_ever
 Lesson: an xid means something only inside the cluster that issued it. Anything that survives a dump must not be compared with
 the restoring cluster's xids.
 
+## LES-0084 — 2026-10-26 · The Dotmim import re-sent work that had long been uploaded
+
+The pre-release upgrade test (real DOOGEE + iPhone, 5.9.7 → 6.2.20, old server stopped, migration, new server, in-place update)
+pushed «4 accepted, 0 rejected, 8 conflicts» and «6 accepted, 0 rejected, 4 conflicts». Every conflict was a row the phone had
+already uploaded through Dotmim minutes before the cut-over — a planting and an observation sent with the «تغییر ارسال‌نشده» pill.
+The import called a local change unsent when it was newer than the OLDEST `scope_last_sync_timestamp` of all scope clients, and
+another scope had synced earlier than the site scope that uploaded those rows. In the field the oldest scope is a site opened weeks
+ago, so a month of uploaded work comes back, each row with every column marked changed and no base version. Where capture already
+existed (the test's copy) it became conflicts the user had to settle; where capture is installed after the old server stops — every
+first Production deploy — the resend wins without a word, and an office edit the phone had not downloaded yet is overwritten.
+
+Now each table takes the newest last sync of the scopes whose setup lists it (`"tn":"<table>"` in `scope_info.sync_scope_setup`):
+Dotmim uploads a table's changes on the sync of any scope holding it. Unmatched tables keep the old rule. Tests:
+`What_a_scope_holding_the_table_has_synced_since_is_not_imported_whatever_other_scopes_last_did` (fails without the change: Pots[4]
+is re-sent) and `When_every_scope_holding_the_table_never_synced_all_of_its_local_work_is_pending`.
+
+Lesson: a watermark is a fact about the scope that advanced it. Taking one device-wide minimum turns "safe" into "re-send
+everything since the stalest thing on the phone".
+
 ## 1.5.7 review — what was measured (2026-10-22)
 
 The question was whether the library holds under heavy, concurrent use. Coverage was measured first (coverlet, both suites): 87.9 %

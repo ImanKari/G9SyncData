@@ -202,8 +202,13 @@ row-metadata statement per table are cached in the `ApplyContext`; the dirty-row
 `RetireDotmimCaptureAsync(options?)` removes Dotmim's capture from the tables this store syncs, in one transaction:
 
 1. **Unsent work is imported first** (`ImportPendingChanges`, default on): tracking rows with `update_scope_id IS NULL` (local changes)
-   whose `timestamp` is newer than the oldest `scope_info_client.scope_last_sync_timestamp` become pending upserts (row exists) or
-   deletes (tombstone, row gone). A scope that never synced makes every local change pending.
+   whose `timestamp` is newer than **the newest last sync of the scopes that hold that table** become pending upserts (row exists) or
+   deletes (tombstone, row gone). A scope holds a table when its `scope_info.sync_scope_setup` lists it (`"tn":"<table>"`, Dotmim
+   1.3's serialised setup); Dotmim uploads a table's local changes on the sync of ANY scope holding it, so only those scopes count.
+   Holding scopes that never synced are ignored; if none of them ever synced, every local change of the table is pending. A table no
+   scope can be matched to keeps the old, conservative rule — newer than the oldest scope's last sync, or everything when any scope
+   never synced. ⛔ 1.5.11 and earlier used that device-wide oldest stamp for every table (LES-0084): one stale scope (a site opened a
+   month ago) made a month of uploaded work pending again, re-sent with every column and no base version.
 2. **Dotmim's triggers are dropped** — only a trigger named `{TriggersPrefix}{table}…_{insert|update|delete}_trigger` whose body writes
    the table's tracking table (`update_scope_id`, `sync_row_is_tombstone`). An app trigger with a similar name survives.
 3. **Tracking tables** with Dotmim's column shape are dropped (`DropTrackingTables`), and **`scope_info` / `scope_info_client`** once no
