@@ -135,6 +135,18 @@ describe('keepLostConflicts', () => {
     expect((await store.getRejections())[0]?.code).toBe(G9SyncErrorCodes.ConflictDeleted);
   });
 
+  it('a lost column the server already holds with the same value lost nothing: no rejection, the row in sync (LES-0085)', async () => {
+    const { store, one } = await deviceWithEdit(true);
+    const report = await store.applyPushResult(batch, mergedResult('device'));
+
+    expect(report.conflictsKept).toBe(0);
+    expect(report.conflictsSameValue).toBe(1);
+    expect(await one('SELECT Text FROM Note WHERE Id = ?1', [KEY])).toEqual(['device']);
+    const meta = await one('SELECT dirty, rejected, server_ver FROM g9_rows WHERE pk = ?1', [KEY]);
+    expect(meta?.map(Number)).toEqual([0, 0, 9]);
+    expect(await store.getRejections()).toEqual([]);
+  });
+
   it('off, the canonical row replaces the device change as before', async () => {
     const { store, one } = await deviceWithEdit(false);
     const report = await store.applyPushResult(batch, mergedResult('server'));

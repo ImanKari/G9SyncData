@@ -262,6 +262,8 @@ export class G9ApplyReport {
   conflicts = 0;
   /** Conflicts the device lost that were kept on it as rejections (LES-0072). */
   conflictsKept = 0;
+  /** Conflicts the device lost on paper only: the server already held its values for every lost column (LES-0085). */
+  conflictsSameValue = 0;
   commandsCompleted = 0;
   revokedDeleted = 0;
   revokedQuarantined = 0;
@@ -288,6 +290,7 @@ export class G9ApplyReport {
     this.rejected += other.rejected;
     this.conflicts += other.conflicts;
     this.conflictsKept += other.conflictsKept;
+    this.conflictsSameValue += other.conflictsSameValue;
     this.commandsCompleted += other.commandsCompleted;
     this.revokedDeleted += other.revokedDeleted;
     this.revokedQuarantined += other.revokedQuarantined;

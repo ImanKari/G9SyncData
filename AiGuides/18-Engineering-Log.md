@@ -922,5 +922,5 @@ Whether the values were identical that night is not on record (the server logs o
 compared nothing. Now `KeepLostConflicts` drops every lost column whose value the canonical row already holds; a conflict with none
 left is not kept (the canonical apply has already set the row clean at the server's version) and is counted in
 `G9CApplyReport.ConflictsSameValue`. A column merge keeps only the differing overlap. `KeptConflictTests`
-(`A_conflict_on_values_the_server_already_holds_is_not_kept`, `A_column_merge_keeps_only_the_overlapping_column_whose_value_differs`).
+(`A_conflict_on_values_the_server_already_holds_is_not_kept`, `A_column_merge_keeps_only_the_overlapping_column_whose_value_differs`). The TS twin (`js/packages/syncdata/src/sqlite/push.ts`, `conflictsSameValue`) does the same; `keepLostConflicts.test.ts`. Released in 1.5.13.
 Lesson: "nothing lost silently" also means nothing reported lost that was not.

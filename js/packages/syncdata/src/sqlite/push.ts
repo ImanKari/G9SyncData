@@ -366,6 +366,13 @@ async function readLostConflicts(store: StoreInternals, batch: G9PushBatch, resu
   return lost;
 }
 
+/** Two SQLite values are the same value (a blob by its bytes); a different type counts as different. Twin of .NET SameValue. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a instanceof Uint8Array && b instanceof Uint8Array) return a.length === b.length && a.every((x, i) => x === b[i]);
+  if (typeof a === 'bigint' || typeof b === 'bigint') return typeof a === typeof b && a === b;
+  return a === b || (a == null && b == null);
+}
+
 /** Twin of .NET KeepLostConflicts: the device's lost values back over the canonical rows, parked as rejections (LES-0072). */
 async function keepLostConflicts(store: StoreInternals, context: Awaited<ReturnType<typeof beginApply>>, lost: LostConflict[]): Promise<void> {
   const connection = context.connection;
@@ -375,6 +382,7 @@ async function keepLostConflicts(store: StoreInternals, context: Awaited<ReturnT
     const now = await readLocalValues(connection, table, item.key);
     let columnNames: string | null = null;
     let serverValues: string | null = null;
+    let lostMask = item.lostMask;
     if (item.dirty === 2) {
       if (Object.keys(now).length > 0) await connection.exec(`DELETE FROM ${table.quoted} WHERE ${table.keyQuoted} = $k`, { $k: key });
     } else if (Object.keys(now).length === 0) {
@@ -385,7 +393,15 @@ async function keepLostConflicts(store: StoreInternals, context: Awaited<ReturnT
       all.forEach((column, i) => (params['$v' + i] = item.values[column] as G9SqlValue));
       await connection.exec(`INSERT INTO ${table.quoted} (${all.map(quote).join(', ')}) VALUES (${all.map((_, i) => '$v' + i).join(', ')})`, params);
     } else {
-      const columns = table.model.columns.map((c, i) => ({ name: c.name, i })).filter((c) => item.lostMask.testBit(c.i) && c.name in item.values).map((c) => c.name);
+      const lostColumns = table.model.columns.map((c, i) => ({ name: c.name, i })).filter((c) => item.lostMask.testBit(c.i) && c.name in item.values);
+      // LES-0085: a column the server already holds with the device's own value lost nothing; when none differs, the row is in sync.
+      const differing = lostColumns.filter((c) => !sameValue(item.values[c.name], now[c.name]));
+      if (lostColumns.length > 0 && differing.length === 0) {
+        context.report.conflictsSameValue++;
+        continue;
+      }
+      if (differing.length > 0) lostMask = differing.reduce((m, c) => m.or(G9Long.ONE.shiftLeft(c.i)), G9Long.ZERO);
+      const columns = differing.map((c) => c.name);
       if (columns.length > 0) {
         columnNames = columns.join(',');
         const server: { [column: string]: unknown } = {};
@@ -397,7 +413,7 @@ async function keepLostConflicts(store: StoreInternals, context: Awaited<ReturnT
       }
     }
 
-    const mask = item.dirty === 2 ? G9Long.ZERO : item.lostMask;
+    const mask = item.dirty === 2 ? G9Long.ZERO : lostMask;
     await connection.exec(
       'INSERT INTO g9_rows (tid, pk, server_ver, local_seq, subs, dirty, dirty_mask, rejected, deleted) ' +
         'VALUES ($t, $pk, $v, (SELECT seq FROM g9_clock WHERE id = 1) + 1, $subs, $d, $m, 1, 0) ' +

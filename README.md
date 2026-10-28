@@ -23,6 +23,14 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.13
+
+- **A conflict on a value the server already holds is not a refused change** (LES-0085). With `KeepLostConflicts`, a conflict the
+  device lost was parked as a rejection even when the server's canonical row held exactly the device's values — nothing was lost, but
+  the app showed «2 changes refused». Only the lost columns whose values differ are kept now; when none does, the row stays in sync
+  at the server's version with no rejection, counted in `G9CApplyReport.ConflictsSameValue` (TS: `conflictsSameValue`). Found when
+  two devices of one user saved the same observations in the same second (AgriPad night lab).
+
 ## What's new in 1.5.12
 
 - **Retiring Dotmim re-sends only what Dotmim had not uploaded** (LES-0084). The import used the OLDEST last sync of all of
