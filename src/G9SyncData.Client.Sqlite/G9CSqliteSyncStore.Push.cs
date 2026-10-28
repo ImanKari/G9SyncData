@@ -343,6 +343,7 @@ public sealed partial class G9CSqliteSyncStore
             var now = ReadLocalValues(connection, transaction, table, item.Key);
             string? columnNames = null;
             string? serverValues = null;
+            var lostMask = item.LostMask;
             if (item.Dirty == 2)
             {
                 if (now.Count > 0) Exec(connection, transaction, $"DELETE FROM {table.Quoted} WHERE {table.KeyQuoted} = $k", ("$k", key));
@@ -359,8 +360,20 @@ public sealed partial class G9CSqliteSyncStore
             }
             else
             {
-                var columns = table.Model.Columns.Select((c, i) => (c.Name, Index: i))
-                    .Where(c => (item.LostMask & (1L << c.Index)) != 0 && item.Values.ContainsKey(c.Name)).Select(c => c.Name).ToArray();
+                var lostColumns = table.Model.Columns.Select((c, i) => (c.Name, Index: i))
+                    .Where(c => (item.LostMask & (1L << c.Index)) != 0 && item.Values.ContainsKey(c.Name)).ToArray();
+                // A column the server already holds with the device's own value lost nothing (AgriPad night 2026-10-27: two devices
+                // of one user saved the same two observations in the same second; the second got «2 changes refused» for values the
+                // server already had). Only the columns whose values differ are kept; when none does, the row is simply in sync.
+                var differing = lostColumns.Where(c => !SameValue(item.Values[c.Name], now.GetValueOrDefault(c.Name))).ToArray();
+                if (lostColumns.Length > 0 && differing.Length == 0)
+                {
+                    context.Report.ConflictsSameValue++;
+                    continue;
+                }
+
+                lostMask = differing.Length == 0 ? item.LostMask : differing.Aggregate(0L, (m, c) => m | (1L << c.Index));
+                var columns = differing.Select(c => c.Name).ToArray();
                 if (columns.Length > 0)
                 {
                     columnNames = string.Join(',', columns);
@@ -373,7 +386,7 @@ public sealed partial class G9CSqliteSyncStore
             }
 
             context.Clock++;
-            var mask = item.Dirty == 2 ? 0L : item.LostMask;
+            var mask = item.Dirty == 2 ? 0L : lostMask;
             var kept = Exec(connection, transaction,
                 "UPDATE g9_rows SET dirty = $d, dirty_mask = $m, rejected = 1, deleted = 0, subs = CASE WHEN subs = 0 THEN $subs ELSE subs END, local_seq = $s " +
                 "WHERE tid = $t AND pk = $pk",
@@ -397,6 +410,9 @@ public sealed partial class G9CSqliteSyncStore
             if (context.WantsChangedKey(table.Model.LocalName)) context.AddChanged(table.Model.LocalName, item.Key);
         }
     }
+
+    /// <summary>Two SQLite values are the same value (a blob by its bytes). A different storage class counts as different.</summary>
+    private static bool SameValue(object? a, object? b) => a is byte[] x && b is byte[] y ? x.AsSpan().SequenceEqual(y) : Equals(a, b);
 
     /// <summary>A conflict the device lost, with its row as it was sent.</summary>
     private sealed record LostConflict(LocalTable Table, string Key, string Code, long Dirty, long LostMask, long Subs, long Version, Dictionary<string, object?> Values);

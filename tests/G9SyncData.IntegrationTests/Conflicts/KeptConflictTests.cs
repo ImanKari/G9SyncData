@@ -141,6 +141,43 @@ public sealed class KeptConflictTests(ITestOutputHelper output)
         Assert.Equal("RENAMED", await harness.ScalarServerAsync<string>("""SELECT "Code" FROM farm."Pot" WHERE "Id" = $1""", pot));
     }
 
+    [PostgresFact]
+    public async Task A_conflict_on_values_the_server_already_holds_is_not_kept()
+    {
+        // Two devices of one user saved the same value in the same second (AgriPad night 2026-10-27): the second one lost nothing.
+        await using var harness = await SyncHarness.CreateAsync(output, model: m => ConfigureServer(m, new ServerModelOptions(G9EConflictPolicy.ServerWins)));
+        var (client, pot) = await OnePotAsync(harness);
+        await using var _ = client;
+
+        await harness.ExecServerAsync("""UPDATE farm."Pot" SET "Note" = 'seen' WHERE "Id" = $1""", pot);
+        await client.ExecAsync("UPDATE Pot SET Note = 'seen' WHERE Id = $p0", Key(pot));
+        var result = await client.SyncAsync();
+
+        Assert.True(result.Outcome == G9ESyncOutcome.Succeeded, SyncClient.Describe(result));
+        Assert.Empty(await client.Engine.GetRejectionsAsync());
+        Assert.Equal(0L, await client.ScalarAsync("SELECT dirty FROM g9_rows WHERE pk = $p0", Key(pot)));
+        Assert.Equal(0, (await client.Engine.GetPendingSummaryAsync()).TotalRows);
+        Assert.Equal("seen", await client.ScalarAsync("SELECT Note FROM Pot WHERE Id = $p0", Key(pot)));
+    }
+
+    [PostgresFact]
+    public async Task A_column_merge_keeps_only_the_overlapping_column_whose_value_differs()
+    {
+        await using var harness = await SyncHarness.CreateAsync(output, model: m => ConfigureServer(m, new ServerModelOptions(G9EConflictPolicy.ColumnMerge)));
+        var (client, pot) = await OnePotAsync(harness);
+        await using var _ = client;
+
+        await harness.ExecServerAsync("""UPDATE farm."Pot" SET "Status" = 2, "Note" = 'office' WHERE "Id" = $1""", pot);
+        await client.ExecAsync("UPDATE Pot SET Status = 2, Note = 'field' WHERE Id = $p0", Key(pot));
+        var result = await client.SyncAsync();
+
+        Assert.True(result.Outcome == G9ESyncOutcome.CompletedWithRejections, SyncClient.Describe(result));
+        var rejection = Assert.Single(await client.Engine.GetRejectionsAsync());
+        Assert.Equal("Note", rejection.Column);   // Status was the same on both sides: not lost, not listed
+        Assert.Equal("field", await client.ScalarAsync("SELECT Note FROM Pot WHERE Id = $p0", Key(pot)));
+        Assert.Equal(2L, await client.ScalarAsync("SELECT Status FROM Pot WHERE Id = $p0", Key(pot)));
+    }
+
     private static async Task<(SyncClient Client, Guid Pot)> OnePotAsync(SyncHarness harness)
     {
         var site = Guid.NewGuid();

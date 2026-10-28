@@ -912,3 +912,15 @@ lines and 71 % branches overall; the SignalR transport (53 % client, 66 % hub) a
 New load and concurrency tests then found LES-0073, LES-0074, LES-0076 and LES-0077, and the resolver tests LES-0078; each fix is
 pinned by a test that fails without it (checked by removing the fix). The fleet test passes at 1000 devices in memory and 500 over
 real SignalR on one machine; numbers in [19](19-Performance.md).
+
+## LES-0085 — 2026-10-28 · A conflict on a value the server already held was shown as a refused change
+
+The AgriPad night lab runs Android and an iPhone side by side as one test user on one copy. On 2026-10-27 both opened the observation
+browser in the same second and saved the same two observations; the second push came back `2 conflicts` (server wins), and
+`KeepLostConflicts` parked both rows as rejections — «۲ تغییر رد شد» on the iPhone, and its device-health check failed until morning.
+Whether the values were identical that night is not on record (the server logs only counts), but the rule was wrong either way: it
+compared nothing. Now `KeepLostConflicts` drops every lost column whose value the canonical row already holds; a conflict with none
+left is not kept (the canonical apply has already set the row clean at the server's version) and is counted in
+`G9CApplyReport.ConflictsSameValue`. A column merge keeps only the differing overlap. `KeptConflictTests`
+(`A_conflict_on_values_the_server_already_holds_is_not_kept`, `A_column_merge_keeps_only_the_overlapping_column_whose_value_differs`).
+Lesson: "nothing lost silently" also means nothing reported lost that was not.

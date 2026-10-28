@@ -146,7 +146,7 @@ transport's error paths (client 53.8 %, hub 67.5 %), the change listener's recov
 | `Resilience/ChangeListenerTests` | pokes resume after the listener's connection is killed, and after it goes half-open (`FreezingTcpProxy`, LES-0076) |
 | `Resilience/SignalRErrorPathTests` | a missing server is a retryable network failure, a refused credential is unauthorized and asked once, an internal failure is retryable and carries none of its internals, a throwing change handler does not break the connection |
 | `Conflicts/ClockTests` | Hello reports the store's (database's) clock; the device's offset matches it (LES-0075) |
-| `Conflicts/KeptConflictTests` | `KeepLostConflicts` (LES-0072) |
+| `Conflicts/KeptConflictTests` | `KeepLostConflicts` (LES-0072); same values are not kept (LES-0085) |
 | `G9SyncData.Tests/Server/SubscriptionResolverTests` | every way a device's subscription reference can be wrong, and server parameters of every shape (LES-0078) |
 
 ```powershell

@@ -187,6 +187,10 @@ row-metadata statement per table are cached in the `ApplyContext`; the dirty-row
   re-inserted whole), sets `dirty` (1, or 2 for a delete), `dirty_mask` = the lost columns, `rejected = 1`, `local_seq` = a new tick, and
   writes `g9_rejections` with the conflict code, `column_name` = the lost columns (comma-separated) and `details` = the server's values
   for them (JSON, the quarantine format). `server_ver` stays the canonical version, so a retry is no longer a conflict.
+  A lost column whose value the canonical row already holds lost nothing (LES-0085): only the columns whose values differ are
+  kept, and when none does the row stays as the apply left it — clean, at the server's version, no rejection — and the run counts
+  it in `G9CApplyReport.ConflictsSameValue`, not as rejected. Values compare as SQLite returns them (a blob by its bytes); a
+  different storage class counts as different, so the doubt still ends on the operator's list.
 - ⛔ `GetPendingSummaryAsync().TotalRows` does NOT count refused rows (a push does not resend them). An app that shows only that
   count makes a refusal invisible — read `GetRejectionsAsync()` too and show it.
 - `RevertRejectedAsync(localTable?, key?)` (LES-0070), one transaction with `g9_ctx.applying = 1` (nothing is captured): a refused row

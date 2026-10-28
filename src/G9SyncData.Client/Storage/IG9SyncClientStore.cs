@@ -407,6 +407,12 @@ public sealed class G9CApplyReport
     /// </summary>
     public long ConflictsKept { get; set; }
 
+    /// <summary>
+    ///     Conflicts the device lost on paper only: the server already held the device's own values for every column it lost, so nothing was
+    ///     lost and nothing is kept as a rejection — the row is simply in sync (AgriPad, 2026-10-28).
+    /// </summary>
+    public long ConflictsSameValue { get; set; }
+
     /// <summary>Commands whose server result was applied.</summary>
     public long CommandsCompleted { get; set; }
 
@@ -448,6 +454,7 @@ public sealed class G9CApplyReport
         Rejected += other.Rejected;
         Conflicts += other.Conflicts;
         ConflictsKept += other.ConflictsKept;
+        ConflictsSameValue += other.ConflictsSameValue;
         CommandsCompleted += other.CommandsCompleted;
         RevokedDeleted += other.RevokedDeleted;
         RevokedQuarantined += other.RevokedQuarantined;
