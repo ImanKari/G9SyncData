@@ -81,6 +81,7 @@ public sealed partial class G9CSqliteSyncStore
             var budgetUsed = 0L;
             var truncated = false;
             var tooLarge = new List<(long Tid, string Key, long Bytes)>();
+            var malformed = new List<(long Tid, string Key, string Column, string Problem)>();
             try
             {
                 foreach (var row in rows)
@@ -127,6 +128,14 @@ public sealed partial class G9CSqliteSyncStore
                         continue;
                     }
 
+                    // A value its column type cannot carry (an empty GUID text, a date sqlite-net never wrote) would throw while the frame
+                    // is written and fail EVERY push of the device, for ever (LES-0088): that row alone is refused here, the rest goes.
+                    if (FindUnencodable(reader, columns) is { } bad)
+                    {
+                        malformed.Add((row.Tid, row.Key, bad.Column, bad.Problem));
+                        continue;
+                    }
+
                     var rowBytes = RowOverhead + Encoding.UTF8.GetByteCount(row.Key);
                     for (var j = 0; j < columns.Count; j++) rowBytes += EstimateEncodedBytes(reader, j, columns[j].Type);
                     if (rowBytes > maxBytes)
@@ -165,11 +174,22 @@ public sealed partial class G9CSqliteSyncStore
                         ("$message", $"The row needs about {bytes} bytes; the server accepts at most {maxBytes} bytes per push."), ("$at", NowMs()));
                 }
 
+                foreach (var (tid, key, column, problem) in malformed)
+                {
+                    Exec(connection, transaction, "UPDATE g9_rows SET rejected = 1 WHERE tid = $t AND pk = $pk", ("$t", tid), ("$pk", key));
+                    Exec(connection, transaction,
+                        "INSERT OR REPLACE INTO g9_rejections (tid, pk, code, message, sql_state, constraint_name, column_name, details, at_utc) " +
+                        "VALUES ($t, $pk, $code, $message, NULL, NULL, $column, NULL, $at)",
+                        ("$t", tid), ("$pk", key), ("$code", G9SyncErrorCodes.RejectMalformed),
+                        ("$message", $"The device holds a value in {column} that its type cannot carry: {problem}"), ("$column", column), ("$at", NowMs()));
+                }
+
+                var refusedHere = tooLarge.Count + malformed.Count;
                 if (included == 0 && commands.Count == 0)
                 {
-                    if (tooLarge.Count == 0) return null;
+                    if (refusedHere == 0) return null;
                     transaction.Commit();
-                    return new G9CPushBatch { BatchId = 0, MaxSequence = 0, Frames = [], Tables = [], RowCount = 0, RejectedLocally = tooLarge.Count };
+                    return new G9CPushBatch { BatchId = 0, MaxSequence = 0, Frames = [], Tables = [], RowCount = 0, RejectedLocally = refusedHere };
                 }
 
                 var frames = new List<byte[]>();
@@ -211,7 +231,7 @@ public sealed partial class G9CSqliteSyncStore
                     Tables = usedTables,
                     RowCount = included,
                     Truncated = truncated,
-                    RejectedLocally = tooLarge.Count,
+                    RejectedLocally = refusedHere,
                     Commands = commands
                 };
             }
@@ -325,6 +345,52 @@ public sealed partial class G9CSqliteSyncStore
         }
 
         return lost;
+    }
+
+    /// <summary>
+    ///     The first pushed column of the current row whose stored value cannot be read as its type, with what is wrong; null when every
+    ///     value encodes. The same conversions <c>WriteLocalValue</c> makes, so a row that passes cannot throw while it is written.
+    /// </summary>
+    private (string Column, string Problem)? FindUnencodable(SqliteDataReader reader, List<(string Name, G9ESyncColumnType Type, int Local)> columns)
+    {
+        for (var j = 0; j < columns.Count; j++)
+        {
+            if (reader.IsDBNull(j)) continue;
+            try
+            {
+                switch (columns[j].Type)
+                {
+                    case G9ESyncColumnType.Boolean or G9ESyncColumnType.Int64 or G9ESyncColumnType.TimeSpan:
+                        _ = reader.GetInt64(j);
+                        break;
+                    case G9ESyncColumnType.Double:
+                        _ = reader.GetDouble(j);
+                        break;
+                    case G9ESyncColumnType.Int32:
+                        _ = checked((int)reader.GetInt64(j));
+                        break;
+                    case G9ESyncColumnType.Decimal:
+                        _ = reader.GetDecimal(j);
+                        break;
+                    case G9ESyncColumnType.Guid:
+                        _ = reader.GetGuid(j);
+                        break;
+                    case G9ESyncColumnType.DateTime when !(_options.DateTimeStorage == G9ESqliteDateTimeStorage.Ticks || reader.GetFieldType(j) == typeof(long)):
+                        _ = DateTime.Parse(reader.GetString(j), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+                        break;
+                    case G9ESyncColumnType.DateTimeOffset:
+                        _ = DateTimeOffset.Parse(reader.GetString(j), CultureInfo.InvariantCulture);
+                        break;
+                }
+            }
+            catch (Exception exception) when (exception is FormatException or InvalidCastException or OverflowException or ArgumentException)
+            {
+                var text = reader.GetValue(j)?.ToString() ?? "";
+                return (columns[j].Name, $"'{(text.Length > 40 ? text[..40] + "…" : text)}' is not a valid {columns[j].Type}");
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The device's column bits of the columns a push sent for this table (push column order → model order).</summary>

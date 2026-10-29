@@ -100,6 +100,7 @@ export async function buildPushBatch(store: StoreInternals, tables: readonly G9D
       let budgetUsed = 0;
       let truncated = false;
       const tooLarge: { tid: number; key: string; bytes: number }[] = [];
+      const malformed: { tid: number; key: string; column: string; problem: string }[] = [];
       for (const row of rows) {
         const entry = uploadable.get(row.tid);
         if (!entry) continue;
@@ -149,6 +150,14 @@ export async function buildPushBatch(store: StoreInternals, tables: readonly G9D
           continue;
         }
 
+        // A value its column type cannot carry would throw while the frame is written and fail EVERY push of the device (LES-0088):
+        // that row alone is refused here. Twin of .NET FindUnencodable.
+        const bad = findUnencodable(values as readonly G9SqlValue[], section.columns, store.options);
+        if (bad) {
+          malformed.push({ tid: row.tid, key: row.key, column: bad.column, problem: bad.problem });
+          continue;
+        }
+
         let rowBytes = ROW_OVERHEAD + keyBytes;
         for (let j = 0; j < section.columns.length; j++) rowBytes += estimateEncodedBytes(values[j] as G9SqlValue, (section.columns[j] as PushColumn).type);
         if (rowBytes > maxBytes) {
@@ -189,9 +198,26 @@ export async function buildPushBatch(store: StoreInternals, tables: readonly G9D
         );
       }
 
+      for (const { tid, key, column, problem } of malformed) {
+        await connection.exec('UPDATE g9_rows SET rejected = 1 WHERE tid = $t AND pk = $pk', { $t: tid, $pk: key });
+        await connection.exec(
+          'INSERT OR REPLACE INTO g9_rejections (tid, pk, code, message, sql_state, constraint_name, column_name, details, at_utc) ' +
+            'VALUES ($t, $pk, $code, $message, NULL, NULL, $column, NULL, $at)',
+          {
+            $t: tid,
+            $pk: key,
+            $code: G9SyncErrorCodes.RejectMalformed,
+            $message: `The device holds a value in ${column} that its type cannot carry: ${problem}`,
+            $column: column,
+            $at: nowMs(),
+          },
+        );
+      }
+
+      const refusedHere = tooLarge.length + malformed.length;
       if (included === 0 && commands.length === 0) {
-        if (tooLarge.length === 0) return null;
-        return { batchId: 0, maxSequence: 0, frames: [], tables: [], rowCount: 0, truncated: false, rejectedLocally: tooLarge.length, commands: [] };
+        if (refusedHere === 0) return null;
+        return { batchId: 0, maxSequence: 0, frames: [], tables: [], rowCount: 0, truncated: false, rejectedLocally: refusedHere, commands: [] };
       }
 
       const frames: Uint8Array[] = [];
@@ -218,7 +244,7 @@ export async function buildPushBatch(store: StoreInternals, tables: readonly G9D
       for (const item of commands) {
         await connection.exec('UPDATE g9_commands SET batch_id = $b WHERE command_id = $id', { $b: batchId, $id: item.commandId });
       }
-      return { batchId, maxSequence, frames, tables: usedTables, rowCount: included, truncated, rejectedLocally: tooLarge.length, commands };
+      return { batchId, maxSequence, frames, tables: usedTables, rowCount: included, truncated, rejectedLocally: refusedHere, commands };
     }),
   );
 }
@@ -367,6 +393,31 @@ async function readLostConflicts(store: StoreInternals, batch: G9PushBatch, resu
     lost.push({ table, key: conflict.key, code: conflict.code, dirty, lostMask, subs: asLong(row[2]), version: asLong(row[3]), values: await readLocalValues(connection, table, conflict.key) });
   }
   return lost;
+}
+
+/** The first column whose stored value cannot be written as its type, and why; null when every value encodes. Twin of .NET FindUnencodable. */
+function findUnencodable(
+  values: readonly G9SqlValue[],
+  columns: readonly PushColumn[],
+  options: Parameters<typeof writeLocalValue>[3],
+): { column: string; problem: string } | null {
+  // A throwaway row of the same shape: the real writer is left untouched by a value that fails half-way.
+  const scratch = new G9RowBatchWriter();
+  scratch.beginSection(G9ERowBatchOp.Push, 0, G9ESyncColumnType.Guid, columns.map((c) => c.type));
+  scratch.beginPushRow('00000000-0000-0000-0000-000000000000', G9EPushRowOp.Upsert, 0, 0, G9Long.ZERO, 0);
+  for (let j = 0; j < columns.length; j++) {
+    const value = values[j] as G9SqlValue;
+    const column = columns[j] as PushColumn;
+    // A null is written too: the writer checks each value against the column at its own cursor, and a skipped column
+    // would hold the next value up against the wrong type.
+    try {
+      writeLocalValue(scratch, value, column.type, options);
+    } catch {
+      const text = value instanceof ArrayBuffer ? '<blob>' : String(value);
+      return { column: column.name, problem: `'${text.length > 40 ? text.slice(0, 40) + '…' : text}' is not a valid value of type ${column.type}` };
+    }
+  }
+  return null;
 }
 
 /** The device's column bits of the columns a push sent for this table (push column order → model order). Twin of .NET PushedMask. */

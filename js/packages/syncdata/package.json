@@ -1,6 +1,6 @@
 {
   "name": "@g9tm/syncdata",
-  "version": "1.5.14",
+  "version": "1.5.15",
   "description": "TypeScript twin of the G9SyncData .NET client for Lynx, Node and browsers: the sync engine, the G9RowBatch protocol, the SQLite client store (same schema as the .NET store) and the SignalR transport.",
   "license": "MIT",
   "author": "Iman Kari (G9TM)",

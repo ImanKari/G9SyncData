@@ -943,6 +943,19 @@ column conflict and was kept as «تغییر رد شد» - on 1.5.13 as well, be
 `HeldValueTests` (four theories), `heldValues.test.ts`. Lesson: decide "is this a change" where the truth is - on the server - and
 compare values at the precision the server keeps, not as the text one side happened to write.
 
+## LES-0088 — 2026-10-29 · One value the device could not encode failed every push of the device
+
+The app's own write paths (inventory of 2026-10-29) put `VarietyId = ''` into a GUID column when no variety was chosen. The store
+read pending rows straight into the push frame, `GetGuid` threw on the empty text, and the whole run failed - every run, for ever,
+so a single bad row silently stopped all of the device's uploads (Agriculture.Server.Mobile.Tests, `AppPatternTests`). The push
+builder now checks each row's values with the writer's own conversions first (`FindUnencodable` / `findUnencodable`) and refuses only
+that row on the device, `G9S-REJ-MALFORMED` with the column and the value, the way an oversize row was already refused.
+`MalformedLocalValueTests`, `malformedLocalValue.test.ts`. Lesson: a failure that depends on ONE row's data must end at that row;
+anything that can fail a whole batch for a row-level reason turns one bad value into a device that never uploads again.
+Trap met on the way: the TypeScript check first SKIPPED null columns on its scratch writer; the writer checks each value against the
+column at its own cursor, so every row with a null before a typed column was refused (the interop and lynxsim scenarios caught it,
+the unit test now has such a row). A check that mirrors a writer must feed it exactly what the writer gets.
+
 ## LES-0087 — 2026-10-29 · After an automatic reconnect no poke arrived until the next run
 
 The hub adds a connection to its tables' groups in Hello, and a connection that reconnects by itself (a dropped link; the server closing

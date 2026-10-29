@@ -48,7 +48,7 @@ classify failures by code, never by message (plan P-19).
 | `G9S-CMD-REJECTED` | a command handler refused without an application code | show the command's message |
 | `G9S-REJ-TOO-LARGE` | one row is larger than the server's announced `MaxPushBytes`; rejected on the device, every other row uploads | shrink the row (attachments belong in files) |
 | `G9S-REJ-TOO-MANY` | more rejections than `MaxRejectionsPerPush`: whole push failed | systematic bug; investigate |
-| `G9S-REJ-MALFORMED` | frame could not be decoded | library bug |
+| `G9S-REJ-MALFORMED` | frame could not be decoded (server); since 1.5.15 also a row the DEVICE refused because a stored value cannot be encoded as its column type - `column_name` names it (LES-0088) | library bug (server); app data defect (device): fix the value, then send again |
 | `G9S-CON-SERVER-WINS` | client change dropped by ServerWins | canonical row applied |
 | `G9S-CON-COLUMNS` | ColumnMerge kept some server columns | canonical row applied |
 | `G9S-CON-DELETED` | row was deleted on the server | local row removed |

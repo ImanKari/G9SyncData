@@ -23,6 +23,14 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.15
+
+- **One unreadable value no longer stops every upload of a device** (LES-0088). A value stored in a form its column type cannot
+  carry - AgriPad wrote an EMPTY text into a GUID column when no variety was chosen - threw while the push frame was written, so the
+  device's every push failed and nothing it recorded after that reached the server. Before a row is written into a batch its values
+  are checked with the same conversions the writer makes; a row that fails is refused ON THE DEVICE (`G9S-REJ-MALFORMED`, the column
+  named, listed with the other refusals) and the batch goes on with the rest. .NET and TypeScript.
+
 ## What's new in 1.5.14
 
 - **A value the server already holds is no change - judged on the server** (LES-0086). A row that arrives a second time with its own

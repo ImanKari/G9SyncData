@@ -45,6 +45,7 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
 | `ExportPendingChangesAsync(path)` | `exportPendingChanges(writeLine)` | the caller writes the lines where it wants |
 | `CheckIntegrityAsync` | `checkIntegrity()` | |
 | `KeepLostConflicts` (LES-0072) | `keepLostConflicts` | same SQL, same rejection row (code, lost columns, server values as JSON); `G9ApplyReport.conflictsKept`; `test/keepLostConflicts.test.ts` |
+| A value its type cannot carry refuses only its row, on the device (LES-0088) | `findUnencodable` | `FindUnencodable`: the writer's conversions run before a row enters the batch; a failure is `G9S-REJ-MALFORMED` with the column, counted in `rejectedLocally`; `MalformedLocalValueTests` / `test/malformedLocalValue.test.ts` |
 | Lost = pushed columns only; timestamps as instants (LES-0086) | `pushedMask`, `sameValue(…, type)` / `instant` | `PushedMask` / `SameValue(type, …)` / `Instant`: the dirty mask restricted to the batch's columns; DateTime/DateTimeOffset text in either form equal within one microsecond (TS: no BigInt - milliseconds plus 100 ns units); `HeldValueTests` / `test/heldValues.test.ts` |
 | `SaveHelloAsync(hello, localMidpointUtc, ct)` (LES-0075) | `saveHello(hello, signal, localMidpointMs)` | the engine measures the Hello round trip in both clients and stores `serverTime - midpoint` |
 | `G9CSqliteException` (`IG9SyncLocalStoreFailure`) | `G9SqliteStoreError` (`localStoreFailure`) | classified from the driver's code |
