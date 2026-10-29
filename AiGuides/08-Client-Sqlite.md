@@ -190,7 +190,12 @@ row-metadata statement per table are cached in the `ApplyContext`; the dirty-row
   A lost column whose value the canonical row already holds lost nothing (LES-0085): only the columns whose values differ are
   kept, and when none does the row stays as the apply left it — clean, at the server's version, no rejection — and the run counts
   it in `G9CApplyReport.ConflictsSameValue`, not as rejected. Values compare as SQLite returns them (a blob by its bytes); a
-  different storage class counts as different, so the doubt still ends on the operator's list.
+  different storage class counts as different, so the doubt still ends on the operator's list - except a DateTime/DateTimeOffset
+  column, which compares as an INSTANT to the microsecond, in either text form or as ticks (1.5.14, LES-0086: the device keeps
+  100 ns, PostgreSQL microseconds, so the device's own value came back one digit shorter and was listed as changed).
+- Only what the push CARRIED can be lost (1.5.14, LES-0086): the lost mask is the device's dirty mask restricted to the batch's
+  pushed columns (`PushedMask`). A column the device changed but never sends - read-only on the server, not negotiated - is simply
+  replaced by the canonical row; it used to be listed as lost on every whole-row conflict.
 - ⛔ `GetPendingSummaryAsync().TotalRows` does NOT count refused rows (a push does not resend them). An app that shows only that
   count makes a refusal invisible — read `GetRejectionsAsync()` too and show it.
 - `RevertRejectedAsync(localTable?, key?)` (LES-0070), one transaction with `g9_ctx.applying = 1` (nothing is captured): a refused row

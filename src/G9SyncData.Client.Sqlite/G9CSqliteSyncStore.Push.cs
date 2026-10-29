@@ -302,10 +302,12 @@ public sealed partial class G9CSqliteSyncStore
             var serverDeleted = string.Equals(conflict.Code, G9SyncErrorCodes.ConflictDeleted, StringComparison.Ordinal);
             if (dirty == 2 && serverDeleted) continue;   // both sides deleted it: nothing was lost
 
-            var lostMask = mask;
+            // Only what this push CARRIED can have been lost (LES-0086): a column the device changed but never sends - read-only on the
+            // server, or not negotiated - was not part of the conflict, and the canonical row simply replaces it.
+            var lostMask = pushOrder.TryGetValue(conflict.TableId, out var names) ? mask & PushedMask(table, names) : mask;
+            if (dirty == 1 && lostMask == 0) continue;
             if (dirty == 1 && conflict.PartiallyApplied && conflict.ServerChangedMask >= 0 &&
-                string.Equals(conflict.Code, G9SyncErrorCodes.ConflictColumns, StringComparison.Ordinal) &&
-                pushOrder.TryGetValue(conflict.TableId, out var names))
+                string.Equals(conflict.Code, G9SyncErrorCodes.ConflictColumns, StringComparison.Ordinal) && names is not null)
             {
                 // The server's bits are in push column order; the device's are model columns.
                 lostMask = 0;
@@ -323,6 +325,19 @@ public sealed partial class G9CSqliteSyncStore
         }
 
         return lost;
+    }
+
+    /// <summary>The device's column bits of the columns a push sent for this table (push column order → model order).</summary>
+    private static long PushedMask(LocalTable table, IReadOnlyList<string> pushed)
+    {
+        var mask = 0L;
+        foreach (var name in pushed)
+        {
+            var local = table.Model.IndexOf(name);
+            if (local is >= 0 and < 63) mask |= 1L << local;
+        }
+
+        return mask;
     }
 
     /// <summary>
@@ -365,7 +380,7 @@ public sealed partial class G9CSqliteSyncStore
                 // A column the server already holds with the device's own value lost nothing (AgriPad night 2026-10-27: two devices
                 // of one user saved the same two observations in the same second; the second got «2 changes refused» for values the
                 // server already had). Only the columns whose values differ are kept; when none does, the row is simply in sync.
-                var differing = lostColumns.Where(c => !SameValue(item.Values[c.Name], now.GetValueOrDefault(c.Name))).ToArray();
+                var differing = lostColumns.Where(c => !SameValue(table.Model.Columns[c.Index].Type, item.Values[c.Name], now.GetValueOrDefault(c.Name))).ToArray();
                 if (lostColumns.Length > 0 && differing.Length == 0)
                 {
                     context.Report.ConflictsSameValue++;
@@ -411,8 +426,29 @@ public sealed partial class G9CSqliteSyncStore
         }
     }
 
-    /// <summary>Two SQLite values are the same value (a blob by its bytes). A different storage class counts as different.</summary>
-    private static bool SameValue(object? a, object? b) => a is byte[] x && b is byte[] y ? x.AsSpan().SequenceEqual(y) : Equals(a, b);
+    /// <summary>
+    ///     Two SQLite values are the same value (a blob by its bytes). A different storage class counts as different - except a
+    ///     timestamp, which is the same INSTANT to the microsecond (LES-0086).
+    /// </summary>
+    /// <remarks>
+    ///     A device clock has 100 ns ticks and the server keeps microseconds (PostgreSQL rounds on the way in), so the device's own
+    ///     value comes back as the canonical row one digit shorter - and was reported as a value the server had changed. Text in either
+    ///     form the store or the app writes (<c>T</c> or space, 0-7 fraction digits) and integer ticks are all read as instants.
+    /// </remarks>
+    private static bool SameValue(G9ESyncColumnType type, object? a, object? b)
+    {
+        if (a is byte[] x && b is byte[] y) return x.AsSpan().SequenceEqual(y);
+        if (Equals(a, b)) return true;
+        if (type is not (G9ESyncColumnType.DateTime or G9ESyncColumnType.DateTimeOffset) || a is null || b is null) return false;
+        return Instant(a) is { } first && Instant(b) is { } second && Math.Abs(first - second) < 10;   // within one microsecond (10 ticks)
+    }
+
+    private static long? Instant(object value) => value switch
+    {
+        long ticks => ticks,
+        string text when DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) => parsed.UtcTicks,
+        _ => null
+    };
 
     /// <summary>A conflict the device lost, with its row as it was sent.</summary>
     private sealed record LostConflict(LocalTable Table, string Key, string Code, long Dirty, long LostMask, long Subs, long Version, Dictionary<string, object?> Values);

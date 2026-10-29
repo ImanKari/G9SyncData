@@ -80,6 +80,13 @@ capture everything they need before the hub instance is released.
 table for `PokeCoalescence`, and sends `OnChangesAvailable([table])` to group `G9SyncProtocol.TableGroup(table)`. Each
 server instance listens to the database itself, so no backplane is needed.
 
+⛔ **A connection joins its groups in Hello and nowhere else** - and a connection that reconnected by itself is a NEW connection id.
+Since 1.5.14 the client transport sends its last accepted Hello again on `Reconnected` (.NET `G9CSignalRSyncTransport.OnReconnectedAsync`,
+events 20205/20206; TS `G9SignalRSyncTransport._rejoin`), fire and forget under the call timeout; the answer is not used. Until then
+every poke between an automatic reconnect and the next run went to nobody (AgriPad QA: 55 s without a hint after the hourly
+token-expiry reconnect, LES-0087). A server-side rejoin was not chosen: it would need the device's table list at connect, which only
+Hello carries, and a client-only fix works against every server in the field.
+
 ## Client
 
 ```csharp

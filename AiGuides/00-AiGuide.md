@@ -61,7 +61,7 @@ the agriculture repository root.
 | 07 | [07-Client-Engine.md](07-Client-Engine.md) | Engine API, queue and priorities, run steps, retry and resume, reconcile, pokes |
 | 08 | [08-Client-Sqlite.md](08-Client-Sqlite.md) | `g9_*` objects, triggers, apply rules, push batching, schema evolution, storage types |
 | 09 | [09-Progress-Model.md](09-Progress-Model.md) | Phases, planned spans, learned weights, throttling, ordering |
-| 10 | [10-Decisions.md](10-Decisions.md) | ADR-0001 … ADR-0045 |
+| 10 | [10-Decisions.md](10-Decisions.md) | ADR-0001 … ADR-0077 |
 | 11 | [11-Transport-SignalR.md](11-Transport-SignalR.md) | Hub protocols (MessagePack, JSON), hub, auth, error envelope, pokes, client transport |
 | 12 | [12-Testing.md](12-Testing.md) | Suites, **Android device tests (opt-in)**, harness, PostgreSQL fixture, fault injection, requirement map |
 | 13 | [13-Source-Generator.md](13-Source-Generator.md) | Attributes, inference, sqlite-net support, diagnostics |

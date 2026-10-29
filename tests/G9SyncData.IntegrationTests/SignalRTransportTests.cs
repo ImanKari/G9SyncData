@@ -109,6 +109,50 @@ public sealed class SignalRTransportTests(ITestOutputHelper output)
         await poked.Task.WaitAsync(TimeSpan.FromSeconds(15));
     }
 
+    /// <summary>
+    ///     S-2 (LES-0087): a connection that reconnects BY ITSELF is a new connection id in no table group - the server joins groups in
+    ///     Hello only - so until 1.5.14 every poke after a dropped link (or an hourly token-expiry close) went to nobody until the next
+    ///     run. The transport now sends the last Hello again on Reconnected.
+    /// </summary>
+    [PostgresTheory]
+    [InlineData(G9ESyncHubProtocol.Json)]
+    [InlineData(G9ESyncHubProtocol.MessagePack)]
+    public async Task After_the_connection_reconnects_by_itself_a_committed_server_change_still_pokes_the_device(G9ESyncHubProtocol protocol)
+    {
+        await using var harness = await SyncHarness.CreateAsync(output, transport: SyncTransportKind.SignalR);
+        var site = Guid.NewGuid();
+        await harness.InsertSiteAsync(site, "North");
+        await using var client = await harness.CreateClientAsync(protocol: protocol);
+        await client.Engine.SubscribeAsync("sites");
+        await client.Engine.SubscribeAsync("site-pots", SitePots(site));
+        await client.SyncOkAsync();
+
+        var signalR = (G9CSignalRSyncTransport)client.Transport;
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        signalR.Connection.Reconnected += _ =>
+        {
+            reconnected.TrySetResult();
+            return Task.CompletedTask;
+        };
+        Assert.True(harness.Wire!.AbortAll() > 0);
+        await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(60));
+
+        var poked = new TaskCompletionSource<G9DtChangesAvailable>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.Transport.ChangesAvailable += changes =>
+        {
+            if (changes.Tables.Contains("farm.Pot", StringComparer.OrdinalIgnoreCase)) poked.TrySetResult(changes);
+        };
+
+        // The rejoin is asynchronous: keep committing until one poke arrives, as an office keeps editing (bounded).
+        for (var attempt = 0; attempt < 15 && !poked.Task.IsCompleted; attempt++)
+        {
+            await harness.InsertPotAsync(Guid.NewGuid(), site, "AFTER-" + attempt);
+            await Task.WhenAny(poked.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+        }
+
+        Assert.True(poked.Task.IsCompleted, "no poke after the automatic reconnect: the new connection is in no table group");
+    }
+
     [PostgresFact]
     public async Task Json_and_MessagePack_clients_of_one_server_hold_the_same_rows_and_the_binary_one_uses_fewer_bytes()
     {

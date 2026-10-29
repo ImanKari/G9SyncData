@@ -23,6 +23,22 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.14
+
+- **A value the server already holds is no change - judged on the server** (LES-0086). A row that arrives a second time with its own
+  values (a backup restored on a second tablet, which uploaded it; the original tablet sending it again; two devices saving the same
+  record) used to "conflict" with the server's copy of itself, and the device was told its change was refused. The push now drops
+  every changed column whose value the server already holds BEFORE the conflict policy runs (`IS NOT DISTINCT FROM` of the value as
+  the apply would write it, so at the server's own precision), and a row with nothing left is accepted at the server's version with
+  its canonical row, not rewritten and recorded in no effect. Server-only: it helps every client version already in the field.
+- **Only what a push carried can be lost** (LES-0086). `KeepLostConflicts` counted every locally changed column of a conflicted row
+  as lost, including columns the device never sends (read-only on the server, or not negotiated). A timestamp that differs only
+  below the microsecond (the device keeps 100 ns, PostgreSQL microseconds) is now the same instant, in either text form.
+- **Pokes resume after the connection reconnects by itself** (LES-0087). The server joins a connection to its tables' poke groups in
+  Hello only, and a reconnected connection is a new id, so every poke between an automatic reconnect - a dropped link, the hourly
+  token-expiry close - and the next run went to nobody. The SignalR transports (.NET and TypeScript) send the last accepted Hello
+  again on `Reconnected`. Client-only: it works against every server already deployed.
+
 ## What's new in 1.5.13
 
 - **A conflict on a value the server already holds is not a refused change** (LES-0085). With `KeepLostConflicts`, a conflict the

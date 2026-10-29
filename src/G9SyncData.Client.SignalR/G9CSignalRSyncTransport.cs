@@ -25,6 +25,7 @@ public sealed partial class G9CSignalRSyncTransport
     private readonly ServerProxy _server;
     private readonly Lock _connectGate = new();
     private Task? _connecting;
+    private G9DtHelloRequest? _lastHello;
 
     public G9CSignalRSyncTransport(G9CSignalRSyncTransportOptions options, ILogger<G9CSignalRSyncTransport>? logger = null)
     {
@@ -50,6 +51,7 @@ public sealed partial class G9CSignalRSyncTransport
         Connection.ServerTimeout = options.ServerTimeout;
         Connection.KeepAliveInterval = options.KeepAliveInterval;
         Connection.On<G9DtChangesAvailable>(G9SyncProtocol.Listeners.OnChangesAvailable, OnChangesAvailableAsync);
+        Connection.Reconnected += OnReconnectedAsync;
         _server = new ServerProxy(this);
     }
 
@@ -92,8 +94,50 @@ public sealed partial class G9CSignalRSyncTransport
         return connecting.WaitAsync(cancellationToken);
     }
 
-    public Task<G9DtHelloResult> HelloAsync(G9DtHelloRequest request, CancellationToken cancellationToken) =>
-        CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(request, token), cancellationToken);
+    public async Task<G9DtHelloResult> HelloAsync(G9DtHelloRequest request, CancellationToken cancellationToken)
+    {
+        var result = await CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(request, token), cancellationToken)
+            .ConfigureAwait(false);
+        if (result.Error is null) Volatile.Write(ref _lastHello, request);
+        return result;
+    }
+
+    /// <summary>
+    ///     After the connection reconnects BY ITSELF, the last accepted Hello is sent again, so the new connection joins the table groups
+    ///     pokes are sent to (S-2, LES-0087).
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         The server adds a connection to its tables' groups in Hello and nowhere else, and a reconnected connection is a NEW
+    ///         connection id. Until 1.5.14 nothing sent Hello on it until the next run, so every poke in between - an office edit the map
+    ///         should show within seconds - went to a group the device was no longer in (AgriPad QA, 2026-10-28: 55 s without a hint
+    ///         after an hourly token-expiry reconnect). The answer is not used: the engine's own Hello at the start of the next run is
+    ///         still the one that negotiates. Fire and forget, bounded by the call timeout, and a failure is only logged - a missed
+    ///         rejoin delays a hint; it never fails a sync.
+    ///     </para>
+    ///     <para>
+    ///         Client-only on purpose: Hello is an existing method, so it works against every server version already deployed.
+    ///     </para>
+    /// </remarks>
+    private Task OnReconnectedAsync(string? connectionId)
+    {
+        if (Volatile.Read(ref _lastHello) is { } hello) _ = RejoinAsync(hello);
+        return Task.CompletedTask;
+    }
+
+    private async Task RejoinAsync(G9DtHelloRequest hello)
+    {
+        try
+        {
+            await CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(hello, token), CancellationToken.None)
+                .ConfigureAwait(false);
+            LogRejoined(_logger, Connection.ConnectionId);
+        }
+        catch (Exception exception)
+        {
+            LogRejoinFailed(_logger, exception.Message);
+        }
+    }
 
     public Task<G9DtPushResult> PushAsync(G9DtPushRequest request, IAsyncEnumerable<G9DtSyncChunk> chunks, CancellationToken cancellationToken) =>
         CallAsync(G9SyncProtocol.Methods.Push, _options.PushTimeout, token => _server.PushAsync(request, chunks, token), cancellationToken);
@@ -273,6 +317,12 @@ public sealed partial class G9CSignalRSyncTransport
 
     [LoggerMessage(EventId = 20201, Level = LogLevel.Warning, Message = "G9Sync connect to {Url} failed ({Code}): {Reason}")]
     private static partial void LogConnectFailed(ILogger logger, string code, string url, string reason);
+
+    [LoggerMessage(EventId = 20205, Level = LogLevel.Information, Message = "G9Sync reconnected as {ConnectionId}; Hello sent again so pokes reach it")]
+    private static partial void LogRejoined(ILogger logger, string? connectionId);
+
+    [LoggerMessage(EventId = 20206, Level = LogLevel.Warning, Message = "G9Sync reconnected but sending Hello again failed ({Reason}); pokes resume at the next run")]
+    private static partial void LogRejoinFailed(ILogger logger, string reason);
 
     [LoggerMessage(EventId = 20202, Level = LogLevel.Warning, Message = "A ChangesAvailable handler threw")]
     private static partial void LogPokeHandlerFailed(ILogger logger, Exception exception);

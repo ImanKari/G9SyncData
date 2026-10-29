@@ -924,3 +924,30 @@ left is not kept (the canonical apply has already set the row clean at the serve
 `G9CApplyReport.ConflictsSameValue`. A column merge keeps only the differing overlap. `KeptConflictTests`
 (`A_conflict_on_values_the_server_already_holds_is_not_kept`, `A_column_merge_keeps_only_the_overlapping_column_whose_value_differs`). The TS twin (`js/packages/syncdata/src/sqlite/push.ts`, `conflictsSameValue`) does the same; `keepLostConflicts.test.ts`. Released in 1.5.13.
 Lesson: "nothing lost silently" also means nothing reported lost that was not.
+
+## LES-0086 — 2026-10-29 · A row the server already held, sent again, was still a refused change - on every client below 1.5.13, and on 1.5.13 too
+
+AgriPad Production, 2026-10-28: a tablet's 8 picks were refused (a table-order bug, fixed in the app's server), its backup was restored on
+a support tablet which uploaded them, and the question was what happens when the ORIGINAL tablet sends them again. An end-to-end suite
+in the app's repository (`Agriculture.Server.Mobile.Tests`, real server, the app's own mirror model) answered: every row came back as a
+column conflict and was kept as «تغییر رد شد» - on 1.5.13 as well, because three things were wrong at once:
+- **The server judged nothing.** An insert of a row that exists has base version 0, so every column "changed since the device saw
+  it"; ColumnMerge refused the whole row although every value was identical. LES-0085 had moved the comparison to the CLIENT, which
+  helps only 1.5.13 devices - Production ran 1.5.12. The push now drops held columns itself (`DropHeldValuesAsync`, 06): a row with
+  nothing left is accepted unchanged at the server's version, not rewritten, in no effect. Server-only, so every client benefits.
+- **The client counted columns it never sent.** On a whole-row conflict the lost mask was the device's dirty mask, including
+  read-only columns (the app's audit stamps, server-owned counts) that the push leaves out. Now the dirty mask restricted to the pushed
+  columns.
+- **A timestamp was compared as text.** The device keeps 100 ns ticks, PostgreSQL microseconds: the device's own CapturedTime came back
+  one digit shorter and was "different". Timestamps now compare as instants to the microsecond (.NET and TS).
+`HeldValueTests` (four theories), `heldValues.test.ts`. Lesson: decide "is this a change" where the truth is - on the server - and
+compare values at the precision the server keeps, not as the text one side happened to write.
+
+## LES-0087 — 2026-10-29 · After an automatic reconnect no poke arrived until the next run
+
+The hub adds a connection to its tables' groups in Hello, and a connection that reconnects by itself (a dropped link; the server closing
+it hourly when the token expires) is a new connection id in no group. Nothing sent Hello on it until the next run, so an office edit
+did not reach the map for as long as the app happened not to sync - AgriPad QA saw 55 s, a quiet tablet could wait minutes. The
+SignalR transports now resend the last accepted Hello on `Reconnected` (11). Found by cutting every socket of the server in a test
+(`WireCounter.AbortAll`): `SignalRTransportTests.After_the_connection_reconnects_by_itself_…`, `transportRejoin.test.ts`. Lesson: state
+a server keeps per CONNECTION (groups) must be rebuilt by whatever re-creates the connection, not by the next unrelated call.

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using Microsoft.AspNetCore.Connections;
 
@@ -10,6 +11,7 @@ namespace G9SyncData.IntegrationTests.Infrastructure;
 /// </summary>
 public sealed class WireCounter
 {
+    private readonly ConcurrentDictionary<string, ConnectionContext> _open = new(StringComparer.Ordinal);
     private long _received;
     private long _sent;
 
@@ -23,8 +25,17 @@ public sealed class WireCounter
         Interlocked.Exchange(ref _sent, 0);
     }
 
+    /// <summary>Cuts every open socket of the harness server, as a dropped radio link does: clients then reconnect by themselves.</summary>
+    public int AbortAll()
+    {
+        var open = _open.Values.ToArray();
+        foreach (var connection in open) connection.Abort(new ConnectionAbortedException("cut by the test"));
+        return open.Length;
+    }
+
     internal Func<ConnectionDelegate, ConnectionDelegate> Middleware => next => async context =>
     {
+        _open[context.ConnectionId] = context;
         var original = context.Transport;
         context.Transport = new CountingPipe(original, this);
         try
@@ -34,6 +45,7 @@ public sealed class WireCounter
         finally
         {
             context.Transport = original;
+            _open.TryRemove(context.ConnectionId, out _);
         }
     };
 

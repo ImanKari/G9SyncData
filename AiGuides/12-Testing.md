@@ -147,6 +147,8 @@ transport's error paths (client 53.8 %, hub 67.5 %), the change listener's recov
 | `Resilience/SignalRErrorPathTests` | a missing server is a retryable network failure, a refused credential is unauthorized and asked once, an internal failure is retryable and carries none of its internals, a throwing change handler does not break the connection |
 | `Conflicts/ClockTests` | Hello reports the store's (database's) clock; the device's offset matches it (LES-0075) |
 | `Conflicts/KeptConflictTests` | `KeepLostConflicts` (LES-0072); same values are not kept (LES-0085) |
+| `Conflicts/HeldValueTests` | a row inserted again with the server's values is accepted with no conflict and not rewritten (xmin unchanged), on a client that keeps nothing too; a column merge reports only the differing overlap; a read-only column is never lost; a timestamp equal to the microsecond is not lost (LES-0086) |
+| `SignalRTransportTests.After_the_connection_reconnects_by_itself_…` | pokes resume after every socket of the server is cut (`WireCounter.AbortAll`) and the client reconnects by itself (LES-0087) |
 | `G9SyncData.Tests/Server/SubscriptionResolverTests` | every way a device's subscription reference can be wrong, and server parameters of every shape (LES-0078) |
 
 ```powershell

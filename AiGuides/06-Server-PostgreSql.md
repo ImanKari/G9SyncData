@@ -199,6 +199,15 @@ One `READ COMMITTED` transaction per push:
 
 More than `MaxRejectionsPerPush` rejections fail the whole push with `G9S-REJ-TOO-MANY`.
 
+**Held values (1.5.14, LES-0086, `DropHeldValuesAsync`).** Between the conflict masks and the conflict policy, every staged upsert that
+is in conflict (an existing row, not deleted on the server) has its changed columns compared with the stored row - `(write
+expression of the staged value) IS NOT DISTINCT FROM t.col`, `json` via `jsonb`, geometric types via text - in one join by key. A
+held column leaves the row's dirty and conflict masks: ColumnMerge per column (unless the mask is -1, no column versions), every
+other policy only when ALL changed columns are held. A conflict left with no overlap is no conflict; a row left with nothing to write
+is `g9_noop`: accepted at its current version, sent back as a canonical row, never applied or handed to a writer, and in no effect.
+The statement runs under savepoint `g9_held`; a row-level failure (a malformed literal the apply would refuse) skips the step with
+event 22012 and the rows are judged as before - it can never fail a push. Event 22011 counts the rows accepted unchanged.
+
 **Row locks before the conflict check (ADR-0075, 1.5.7).** After every table is staged and write-authorised, the push locks the
 existing rows of all of them - tables in model order, each table's deletes and upserts together in key order - with
 `FOR NO KEY UPDATE`, in BOTH capture modes, and only then checks conflicts and applies. Until 1.5.7 trigger mode read tracking first

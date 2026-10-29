@@ -89,6 +89,7 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
   private readonly _options: G9SignalRSyncTransportOptions;
   private readonly _handlers: ((changes: G9DtChangesAvailable) => void)[] = [];
   private _connecting: Promise<void> | null = null;
+  private _lastHello: G9DtHelloRequest | null = null;
 
   constructor(options: G9SignalRSyncTransportOptions) {
     if (!options || typeof options.url !== 'string' || options.url.trim() === '') throw new TypeError('A hub URL is required.');
@@ -107,6 +108,9 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
     if (options.accessTokenFactory) clientOptions.accessTokenFactory = options.accessTokenFactory;
     this.client = options.createClient ? options.createClient(clientOptions) : new G9Client(clientOptions);
     this.client.on(G9SyncProtocol.Listeners.OnChangesAvailable, (payload: unknown) => this._onChanges(payload));
+    // Twin of .NET OnReconnectedAsync (S-2, LES-0087): a connection that reconnected by itself is a new connection id in no table group.
+    const connection = this.client.connection as { onreconnected?: (callback: (connectionId?: string) => void) => void };
+    if (typeof connection.onreconnected === 'function') connection.onreconnected(() => this._rejoin());
   }
 
   get isConnected(): boolean {
@@ -165,8 +169,20 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
     }
   }
 
-  hello(request: G9DtHelloRequest, signal?: AbortSignal): Promise<G9DtHelloResult> {
-    return this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(request)], readHelloResult, this._callTimeoutMs(), signal);
+  async hello(request: G9DtHelloRequest, signal?: AbortSignal): Promise<G9DtHelloResult> {
+    const result = await this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(request)], readHelloResult, this._callTimeoutMs(), signal);
+    if (!result.error) this._lastHello = request;
+    return result;
+  }
+
+  /**
+   * After an automatic reconnect the last accepted Hello is sent again, so the new connection joins the table groups pokes go to
+   * (S-2, LES-0087). Fire and forget, bounded by the call timeout; the answer is not used and a failure only delays a hint.
+   */
+  private _rejoin(): void {
+    const hello = this._lastHello;
+    if (!hello) return;
+    this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(hello)], readHelloResult, this._callTimeoutMs()).catch(() => undefined);
   }
 
   push(request: G9DtPushRequest, chunks: AsyncIterable<G9DtSyncChunk>, signal?: AbortSignal): Promise<G9DtPushResult> {

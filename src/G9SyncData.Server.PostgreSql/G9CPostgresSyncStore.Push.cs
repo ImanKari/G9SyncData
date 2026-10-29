@@ -263,7 +263,8 @@ public sealed partial class G9CPostgresSyncStore
             .Append(" NOT NULL, g9_base_ver bigint NOT NULL, g9_dirty_mask bigint NOT NULL, g9_hlc bigint NOT NULL, g9_exists boolean NOT NULL DEFAULT false,")
             .Append(" g9_action smallint NOT NULL DEFAULT 1, g9_apply_mask bigint NULL, g9_conflict_mask bigint NULL, g9_server_ver bigint NULL,")
             .Append(" g9_server_deleted boolean NOT NULL DEFAULT false, g9_server_changed_ms bigint NULL, g9_partial boolean NOT NULL DEFAULT false,")
-            .Append(" g9_code text NULL, g9_message text NULL, g9_sqlstate text NULL, g9_constraint text NULL, g9_column text NULL, g9_details text NULL");
+            .Append(" g9_code text NULL, g9_message text NULL, g9_sqlstate text NULL, g9_constraint text NULL, g9_column text NULL, g9_details text NULL,")
+            .Append(" g9_noop boolean NOT NULL DEFAULT false");
         foreach (var column in columns) ddl.Append(", ").Append(column.Db!.Quoted).Append(' ').Append(column.StagingType);
         ddl.Append(") ON COMMIT DROP");
         await ExecuteAsync(connection, transaction, ddl.ToString(), ct).ConfigureAwait(false);
@@ -374,6 +375,7 @@ public sealed partial class G9CPostgresSyncStore
             FROM {table.TrackingName} AS k
             WHERE k.{key} = s.g9_key AND s.g9_action = 1 AND k.ver <> s.g9_base_ver AND NOT (k.deleted AND s.g9_op = 2)
             """, ct, P("g9_idx", NpgsqlDbType.Array | NpgsqlDbType.Integer, columns.Select(c => c.Model.CaptureIndex + 1).ToArray())).ConfigureAwait(false);
+        await DropHeldValuesAsync(connection, transaction, table, columns, stage, ct).ConfigureAwait(false);
         await ApplyConflictPolicyAsync(connection, transaction, request, table, columns, stage, ct).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, $"UPDATE {stage} SET g9_apply_mask = g9_dirty_mask WHERE g9_action = 1 AND g9_apply_mask IS NULL", ct)
             .ConfigureAwait(false);
@@ -392,7 +394,8 @@ public sealed partial class G9CPostgresSyncStore
 
         // 6. apply with isolation (post-write authorisation follows once every table is applied)
         var rows = new List<ApplyRow>();
-        await using (var command = Command(connection, transaction, $"SELECT g9_seq, g9_op, g9_exists FROM {stage} WHERE g9_action = 1 ORDER BY g9_seq"))
+        // A row whose every value the server already holds is accepted without being written (DropHeldValuesAsync, LES-0086).
+        await using (var command = Command(connection, transaction, $"SELECT g9_seq, g9_op, g9_exists FROM {stage} WHERE g9_action = 1 AND NOT g9_noop ORDER BY g9_seq"))
         await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
         {
             while (await reader.ReadAsync(ct).ConfigureAwait(false)) rows.Add(new ApplyRow(reader.GetInt64(0), reader.GetInt16(1), reader.GetBoolean(2)));
@@ -558,6 +561,92 @@ public sealed partial class G9CPostgresSyncStore
         };
 
     // ================================================================ conflicts
+
+    /// <summary>
+    ///     A changed column whose uploaded value the server ALREADY HOLDS is no change (LES-0086): it is dropped from the row's dirty
+    ///     and conflict masks before the conflict policy runs, so it is neither a conflict nor written again.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         <b>Why on the server.</b> A row arrives a second time with the values it already has: a backup restored on a second
+    ///         tablet that uploaded it, the original tablet sending it again; two devices of one user saving the same record. Every
+    ///         column the device sent then "conflicts" with the server's version of itself (its base is older, or 0 for a row it
+    ///         inserted), and the device was told its change was refused. 1.5.13 stopped KEEPING such conflicts on a 1.5.13 device;
+    ///         judging it here means no device of ANY version is told anything was refused, and the row is not rewritten.
+    ///     </para>
+    ///     <para>
+    ///         <b>Exact, at the server's own precision.</b> The comparison is <c>IS NOT DISTINCT FROM</c> of the value as the apply
+    ///         would write it (<see cref="ValueExpression" />: the model's write expression and cast) against the stored column, so a
+    ///         timestamp is compared after PostgreSQL rounded it to the microsecond, a jsonb document semantically and a geometry by
+    ///         its coordinates. Only rows already in conflict are looked at (one join by key), so an ordinary push pays nothing.
+    ///     </para>
+    ///     <para>
+    ///         <b>ColumnMerge</b> drops each held column; any other policy - and a conflict without column versions (mask -1) - only when
+    ///         EVERY changed column is held (its unit is the row). A row the server deleted is never compared.
+    ///         A row left with nothing to write is marked <c>g9_noop</c>: accepted at the server's current version with its canonical row,
+    ///         never handed to the writer, and recorded in no effect - nothing happened to it.
+    ///     </para>
+    ///     <para>
+    ///         ⛔ <b>Never fails a push.</b> The comparison casts the staged values; a value the apply would refuse (a malformed
+    ///         literal) makes the whole statement fail, so it runs under a savepoint and a failure simply skips the optimisation: the
+    ///         rows are judged as before, and the bad row is isolated by the apply's bisection as it always was.
+    ///     </para>
+    /// </remarks>
+    private async Task DropHeldValuesAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, PgTable table, PgBoundColumn[] columns,
+        string stage, CancellationToken ct)
+    {
+        if (columns.Length == 0) return;
+        var held = new StringBuilder("0");
+        for (var i = 0; i < columns.Length && i < 63; i++)
+        {
+            held.Append(" | CASE WHEN (s.g9_dirty_mask & ").Append(PgNames.Bits(i)).Append(") <> 0 AND ").Append(SameValueSql(columns[i]))
+                .Append(" THEN ").Append(PgNames.Bits(i)).Append(" ELSE 0 END");
+        }
+
+        var key = table.Key.Quoted;
+        var merge = table.Model.ConflictPolicy == G9EConflictPolicy.ColumnMerge;
+        var sql = $"""
+            WITH h AS (
+                SELECT s.g9_seq, ({held}) AS mask
+                  FROM {stage} AS s JOIN {table.BaseName} AS t ON t.{key} = s.g9_key
+                 WHERE s.g9_action = 1 AND s.g9_op = 1 AND s.g9_exists AND s.g9_conflict_mask IS NOT NULL AND NOT s.g9_server_deleted)
+            UPDATE {stage} AS s
+               SET g9_dirty_mask = s.g9_dirty_mask & ~h.mask,
+                   g9_conflict_mask = CASE WHEN s.g9_conflict_mask = -1 THEN -1 ELSE s.g9_conflict_mask & ~h.mask END
+              FROM h
+             WHERE h.g9_seq = s.g9_seq AND h.mask <> 0
+               AND ({(merge ? "s.g9_conflict_mask <> -1 OR " : "")}(s.g9_dirty_mask & ~h.mask) = 0);
+            UPDATE {stage}
+               SET g9_conflict_mask = NULL, g9_noop = (g9_dirty_mask = 0)
+             WHERE g9_action = 1 AND g9_op = 1 AND g9_exists AND g9_conflict_mask IS NOT NULL AND NOT g9_server_deleted
+               AND (g9_dirty_mask = 0 {(merge ? "OR (g9_conflict_mask <> -1 AND (g9_dirty_mask & g9_conflict_mask) = 0)" : "")});
+            """;
+
+        await transaction.SaveAsync("g9_held", ct).ConfigureAwait(false);
+        try
+        {
+            await ExecuteAsync(connection, transaction, sql, ct).ConfigureAwait(false);
+            await transaction.ReleaseAsync("g9_held", ct).ConfigureAwait(false);
+        }
+        catch (PostgresException exception) when (IsRowLevelFailure(exception))
+        {
+            await transaction.RollbackAsync("g9_held", ct).ConfigureAwait(false);
+            LogHeldValuesSkipped(_logger, table.Model.LogicalName, exception.SqlState);
+        }
+    }
+
+    /// <summary>The staged value, as the apply would write it, is the stored one (types without an equality operator compare as text).</summary>
+    private static string SameValueSql(PgBoundColumn column)
+    {
+        var staged = ValueExpression(column, "s");
+        var stored = "t." + column.Db!.Quoted;
+        return column.Db.TypeName switch
+        {
+            "json" => $"({staged})::jsonb IS NOT DISTINCT FROM ({stored})::jsonb",
+            "xml" or "point" or "line" or "lseg" or "box" or "path" or "polygon" or "circle" => $"({staged})::text IS NOT DISTINCT FROM ({stored})::text",
+            _ => $"({staged}) IS NOT DISTINCT FROM {stored}"
+        };
+    }
 
     private async Task ApplyConflictPolicyAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, G9CStorePushRequest request, PgTable table,
         PgBoundColumn[] columns, string stage, CancellationToken ct)
@@ -924,8 +1013,9 @@ public sealed partial class G9CPostgresSyncStore
         var key = table.Key.Quoted;
         var accepted = new G9DtAcceptedRows { TableId = table.TableId };
         var upserted = new List<string>();
+        var alreadyHeld = new List<string>();
         await using (var command = Command(connection, transaction,
-                         $"SELECT s.g9_key::text, s.g9_op, coalesce(k.ver, 0) FROM {stage} AS s LEFT JOIN {table.TrackingName} AS k ON k.{key} = s.g9_key " +
+                         $"SELECT s.g9_key::text, s.g9_op, coalesce(k.ver, 0), s.g9_noop FROM {stage} AS s LEFT JOIN {table.TrackingName} AS k ON k.{key} = s.g9_key " +
                          "WHERE s.g9_action = 1 ORDER BY s.g9_seq"))
         await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
         {
@@ -936,15 +1026,19 @@ public sealed partial class G9CPostgresSyncStore
                 accepted.Keys.Add(rowKey);
                 accepted.Deleted.Add(deleted);
                 accepted.Versions.Add(reader.GetInt64(2));
-                if (!deleted) upserted.Add(rowKey);
+                // A row the server already held (g9_noop) was written by nobody: no effect describes it.
+                if (reader.GetBoolean(3)) alreadyHeld.Add(rowKey);
+                else if (!deleted) upserted.Add(rowKey);
             }
         }
+
+        if (alreadyHeld.Count > 0) LogHeldRowsAccepted(_logger, alreadyHeld.Count, table.Model.LogicalName);
 
         if (accepted.Keys.Count > 0) result.Accepted.Add(accepted);
 
         // In this transaction, not after it: an effect that exists describes rows that committed, and rows that committed owe an effect
         // (ADR-0052). A crash between here and delivery loses nothing, and a replayed push does not need to run anything again.
-        if (accepted.Keys.Count > 0 && request.Pipeline.EffectHandlers.Any(h => h.AppliesTo(table.Model)))
+        if (accepted.Keys.Count > alreadyHeld.Count && request.Pipeline.EffectHandlers.Any(h => h.AppliesTo(table.Model)))
         {
             var deletedKeys = new List<string>();
             for (var i = 0; i < accepted.Keys.Count; i++)
@@ -1002,6 +1096,8 @@ public sealed partial class G9CPostgresSyncStore
         }
 
         if (transformed) canonicalKeys.UnionWith(upserted);
+        // The device's base was older than the server's row (or 0): it takes the server's row and version, in every column it holds.
+        canonicalKeys.UnionWith(alreadyHeld);
         if (canonicalKeys.Count == 0 || table.Model.Direction == G9ESyncDirection.UploadOnly) return;   // upload-only rows never go back
 
         // The device applies a canonical row in the columns it HOLDS, which include read-only and computed columns the push shape
@@ -1069,6 +1165,14 @@ public sealed partial class G9CPostgresSyncStore
 
     [LoggerMessage(EventId = 22010, Level = LogLevel.Warning, Message = "Rejected upload row {Seq} of {Table}: {SqlState} {Constraint}")]
     private static partial void LogRowRejected(ILogger logger, string table, long seq, string sqlState, string? constraint);
+
+    [LoggerMessage(EventId = 22011, Level = LogLevel.Information,
+        Message = "{Count} uploaded row(s) of {Table} already held every value they carried: accepted unchanged, not written (LES-0086)")]
+    private static partial void LogHeldRowsAccepted(ILogger logger, int count, string table);
+
+    [LoggerMessage(EventId = 22012, Level = LogLevel.Warning,
+        Message = "Comparing uploaded values of {Table} with the stored row failed ({SqlState}); its conflicts are judged without it")]
+    private static partial void LogHeldValuesSkipped(ILogger logger, string table, string sqlState);
 
     private sealed class PushWork
     {

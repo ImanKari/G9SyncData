@@ -1,7 +1,7 @@
 // Twin of G9SyncData.Client.Sqlite/G9CSqliteSyncStore.Push.cs: dirty rows in local change order become push frames; the
 // result clears exactly the rows that were sent (rows edited meanwhile stay dirty), flags rejections and applies canonical
 // server rows.
-import { G9ESyncDirection } from '../abstractions/enums.js';
+import { G9ESyncColumnType, G9ESyncDirection } from '../abstractions/enums.js';
 import { G9SyncErrorCodes } from '../abstractions/errors.js';
 import { G9Long } from '../abstractions/long.js';
 import { utf8Encode } from '../internal/utf8.js';
@@ -348,8 +348,11 @@ async function readLostConflicts(store: StoreInternals, batch: G9PushBatch, resu
     const serverDeleted = conflict.code === G9SyncErrorCodes.ConflictDeleted;
     if (dirty === 2 && serverDeleted) continue; // both sides deleted it: nothing was lost
 
-    let lostMask = mask;
+    // Only what this push CARRIED can have been lost (LES-0086): a column the device changed but never sends - read-only on the
+    // server, or not negotiated - was not part of the conflict, and the canonical row simply replaces it.
     const names = pushOrder.get(conflict.tableId);
+    let lostMask = names ? mask.and(pushedMask(table, names)) : mask;
+    if (dirty === 1 && lostMask.isZero()) continue;
     if (dirty === 1 && conflict.partiallyApplied && !conflict.serverChangedMask.isNegative() && conflict.code === G9SyncErrorCodes.ConflictColumns && names) {
       // The server's bits are in push column order; the device's are model columns.
       lostMask = G9Long.ZERO;
@@ -366,11 +369,45 @@ async function readLostConflicts(store: StoreInternals, batch: G9PushBatch, resu
   return lost;
 }
 
+/** The device's column bits of the columns a push sent for this table (push column order → model order). Twin of .NET PushedMask. */
+function pushedMask(table: { model: { indexOf(name: string): number } }, pushed: readonly string[]): G9Long {
+  let mask = G9Long.ZERO;
+  for (const name of pushed) {
+    const local = table.model.indexOf(name);
+    if (local >= 0 && local < 63) mask = mask.or(G9Long.ONE.shiftLeft(local));
+  }
+  return mask;
+}
+
 /** Two SQLite values are the same value (a blob by its bytes); a different type counts as different. Twin of .NET SameValue. */
-function sameValue(a: unknown, b: unknown): boolean {
+function sameValue(a: unknown, b: unknown, type?: G9ESyncColumnType): boolean {
   if (a instanceof Uint8Array && b instanceof Uint8Array) return a.length === b.length && a.every((x, i) => x === b[i]);
   if (typeof a === 'bigint' || typeof b === 'bigint') return typeof a === typeof b && a === b;
-  return a === b || (a == null && b == null);
+  if (a === b || (a == null && b == null)) return true;
+  // A timestamp is the same INSTANT to the microsecond (LES-0086): the device keeps 100 ns, the server microseconds.
+  if ((type === G9ESyncColumnType.DateTime || type === G9ESyncColumnType.DateTimeOffset) && typeof a === 'string' && typeof b === 'string') {
+    const first = instant(a);
+    const second = instant(b);
+    if (first && second) return Math.abs((first[0] - second[0]) * 10000 + (first[1] - second[1])) < 10;
+  }
+  return false;
+}
+
+const instantPattern = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,7}))?(Z|[+-]\d{2}:?\d{2})?$/;
+
+/** A timestamp text as [Unix milliseconds, 100 ns units within that millisecond]; no BigInt (Lynx). Twin of .NET Instant. */
+function instant(text: string): [number, number] | null {
+  const m = instantPattern.exec(text.trim());
+  if (!m) return null;
+  const fraction = ((m[7] ?? '') + '0000000').slice(0, 7);
+  let ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]), Number(fraction.slice(0, 3)));
+  const zone = m[8];
+  if (zone && zone !== 'Z') {
+    const sign = zone[0] === '-' ? -1 : 1;
+    const digits = zone.slice(1).replace(':', '');
+    ms -= sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4))) * 60000;
+  }
+  return [ms, Number(fraction.slice(3))];
 }
 
 /** Twin of .NET KeepLostConflicts: the device's lost values back over the canonical rows, parked as rejections (LES-0072). */
@@ -395,7 +432,7 @@ async function keepLostConflicts(store: StoreInternals, context: Awaited<ReturnT
     } else {
       const lostColumns = table.model.columns.map((c, i) => ({ name: c.name, i })).filter((c) => item.lostMask.testBit(c.i) && c.name in item.values);
       // LES-0085: a column the server already holds with the device's own value lost nothing; when none differs, the row is in sync.
-      const differing = lostColumns.filter((c) => !sameValue(item.values[c.name], now[c.name]));
+      const differing = lostColumns.filter((c) => !sameValue(item.values[c.name], now[c.name], table.model.columns[c.i]?.type));
       if (lostColumns.length > 0 && differing.length === 0) {
         context.report.conflictsSameValue++;
         continue;

@@ -1873,3 +1873,23 @@ trip and store `serverTime - midpoint` as the offset.
 
 **Consequences.** Last-writer-wins compares a device edit and a server change on one clock - the one that stamped the change - whatever
 the app server's clock says. One extra trivial query per Hello.
+
+## ADR-0077 — A value the server already holds is no change, and the server decides it
+
+**Status:** accepted (2026-10-29, 1.5.14). LES-0086.
+
+**Context.** A conflict is "the server changed what the device changed since the device saw it". A row sent a second time - a restored
+copy of a device, the original device after the copy uploaded, two devices of one user - matches that definition column by column while
+nothing differs, and every device was told its change was refused. 1.5.13 (LES-0085) stopped a 1.5.13 device from KEEPING such a
+conflict, but the server still reported it to every client, and the clients in the field were older.
+
+**Decision.** Before the conflict policy, the push compares each changed column of each conflicting staged upsert with the stored row,
+as the apply would write it (`IS NOT DISTINCT FROM` after the model's write expression and cast, so at the server's own precision) and
+drops the held columns from the dirty and conflict masks - per column for ColumnMerge with column versions, for any other policy only
+when every changed column is held. A row left with nothing to write is accepted at its current version with its canonical row, never
+applied, never handed to a row writer, in no effect. The comparison runs under a savepoint and is skipped (logged, 22012) if it fails.
+
+**Consequences.** A resend of identical data is invisible on every client version; an identical row is not rewritten, so no capture,
+no new version and no effect (a state-transition handler does not run twice for the same row). Cost: one join by key over the rows
+already in conflict - nothing for a push without conflicts. Not done: comparing rows that are NOT in conflict (an ordinary update with
+an unchanged value) - those apply as before, which keeps the write path unchanged where nobody was ever misinformed.
