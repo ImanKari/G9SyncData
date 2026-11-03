@@ -1,15 +1,18 @@
-# CocoaPods for the iOS device-test host. Lynx stays at 4.0.3 on iOS (CocoaPods trunk; Android runs 4.1.0 from Maven):
-# the page bundle targets both. The three G9 pods come AS PACKED, from the Android host's npm install
+# CocoaPods for the iOS device-test host. Lynx 4.2.0 on both hosts (iOS from the lynx-family Specs repository, Android
+# from Maven Central). The three G9 pods come AS PACKED, from the Android host's npm install
 # (../lynx-android-host/node_modules), so both hosts test the same tarballs.
+source 'https://cdn.cocoapods.org/'
+# Lynx 4.1+ is published to the lynx-family Specs repository (trunk has only nightlies of 4.1/4.2).
+source 'https://github.com/lynx-family/Specs.git'
 platform :ios, '15.0'
 install! 'cocoapods', :deterministic_uuids => false, :warn_for_unused_master_specs_repo => false
 
-LYNX = '4.0.3'
+LYNX = '4.2.0'
 G9 = File.expand_path('../lynx-android-host/node_modules/@g9tm', __dir__)
 
 target 'G9SyncHost' do
   pod 'Lynx', LYNX, :subspecs => ['Framework']
-  pod 'PrimJS', '4.0.0', :subspecs => ['quickjs', 'napi']  # exactly what Lynx 4.0.3's Framework pins
+  pod 'PrimJS', '4.2.1', :subspecs => ['quickjs', 'napi']  # Lynx 4.2.0's release notes
   pod 'LynxService', LYNX, :subspecs => ['Log']           # console → os_log
   pod 'g9lynx-native', :path => "#{G9}/lynxcontrols-native/ios"        # G9SqliteModule, G9HostModule
   pod 'g9tm-signalr-lynx', :path => "#{G9}/signalr-supernetcore-lynx/ios" # G9SignalRLynxModule (the WebSocket)

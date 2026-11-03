@@ -5,8 +5,8 @@ plugins {
   id("org.jetbrains.kotlin.android")
 }
 
-val lynx = "4.1.0"
-val primjs = "4.1.1"
+val lynx = "4.2.0"
+val primjs = "4.2.1"
 
 android {
   namespace = "com.g9tm.syncdatahost"

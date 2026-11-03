@@ -28,7 +28,7 @@ android {
 
 kotlin { jvmToolchain(17) }
 
-val lynx = "4.1.0"
+val lynx = "4.2.0"
 
 dependencies {
   compileOnly("org.lynxsdk.lynx:lynx:$lynx")

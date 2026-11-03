@@ -5,7 +5,7 @@ plugins {
   kotlin("kapt") version "2.3.20"
 }
 
-val lynx = "4.1.0"
+val lynx = "4.2.0"
 val moduleSrc = "../android/src/main/java"
 
 java {

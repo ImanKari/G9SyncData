@@ -18,5 +18,5 @@ Pod::Spec.new do |s|
   s.frameworks = 'Foundation'
   s.libraries = 'compression'
   s.requires_arc = true
-  s.dependency 'Lynx', '4.0.3'
+  s.dependency 'Lynx', '4.2.0'
 end

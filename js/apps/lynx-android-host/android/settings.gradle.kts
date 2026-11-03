@@ -9,7 +9,7 @@ pluginManagement {
   }
 }
 
-plugins { id("org.lynxsdk.lynx.library-settings") version "4.1.0" }
+plugins { id("org.lynxsdk.lynx.library-settings") version "4.2.0" }
 
 dependencyResolutionManagement {
   repositories {
