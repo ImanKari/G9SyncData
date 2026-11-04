@@ -36,11 +36,11 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function releaseSouth(withForeignTrigger: boolean): Promise<{ dump: unknown; report: G9ApplyReport }> {
+async function releaseSouth(withForeignTrigger: boolean, revocation: G9RevocationPolicy = policy): Promise<{ dump: unknown; report: G9ApplyReport }> {
   const dir = mkdtempSync(join(tmpdir(), 'g9sync-revocation-'));
   const driver = nodeSqliteDriver();
   const path = join(dir, 'device.db');
-  const store = new G9SqliteSyncStore({ driver, databasePath: path, revocation: policy });
+  const store = new G9SqliteSyncStore({ driver, databasePath: path, revocation });
   await store.initialize(model);
   const session = await driver.open({ path, create: true });
   cleanups.push(async () => {
@@ -66,6 +66,8 @@ async function releaseSouth(withForeignTrigger: boolean): Promise<{ dump: unknow
     [1, N(6), null, southBit, 0], // app row already gone → tombstone only
     [2, '9007199254740993', 'beyond 2^53', southBit, 0], // integer key past 2^53 → deleted
     [2, '-5', 'mark', southBit, 0], // table rule → marked revoked
+    [1, N(7), 'was refused', southBit, 0], // clean, but parked as rejected and once revoked → deleted, both records gone
+    [2, '12', null, southBit, 0], // integer key, app row already gone → tombstone only
   ];
   for (const [tid, key, value, subs, dirty] of rows) {
     if (value !== null) {
@@ -74,6 +76,9 @@ async function releaseSouth(withForeignTrigger: boolean): Promise<{ dump: unknow
     }
     await run('INSERT INTO g9_rows (tid, pk, server_ver, local_seq, dirty, dirty_mask, subs) VALUES (?1, ?2, 7, 3, ?3, ?4, ?5)', [tid, key, dirty, dirty ? 1 : 0, subs]);
   }
+  await run('UPDATE g9_rows SET rejected = 1 WHERE tid = 1 AND pk = ?1', [N(7)]);
+  await run("INSERT INTO g9_rejections (tid, pk, code, message, at_utc) VALUES (1, ?1, 'X', 'refused once', 0)", [N(7)]);
+  await run("INSERT INTO g9_revoked (tid, pk, disposition, reason, rule, at_utc) VALUES (1, ?1, 1, 1, NULL, 0)", [N(7)]);
   await run("INSERT INTO g9_commands (command_id, seq, name, version, payload, created_utc, state) VALUES ('c1', 1, 'Touch', 1, '{}', 0, 0)");
   await run("INSERT INTO g9_command_rows (command_id, tid, pk) VALUES ('c1', 1, ?1)", [N(5)]);
   await run('UPDATE g9_clock SET seq = 100 WHERE id = 1');
@@ -107,8 +112,8 @@ describe('releasing a subscription', () => {
 
     // And that database is the intended one (so the comparison is not of two empty results).
     const d = bulk.dump as { [k: string]: unknown[][] };
-    expect(d.clock).toEqual([[107]]); // one step per released row: 7 (the row north holds is not released)
-    expect(bulk.report.revokedDeleted).toBe(2);
+    expect(d.clock).toEqual([[109]]); // one step per released row: 9 (the row north holds is not released)
+    expect(bulk.report.revokedDeleted).toBe(3);
     expect(bulk.report.revokedQuarantined).toBe(1);
     expect(bulk.report.revokedRetained).toBe(2);
     expect(d.notes!.map((r) => r[1])).toEqual(['keep', 'both', 'command']);
@@ -117,8 +122,29 @@ describe('releasing a subscription', () => {
     expect(d.rejections!.map((r) => [r[1], r[2]])).toEqual([[N(3), 'G9S-REJ-REVOKED']]);
     // Tombstones carry distinct local sequences from the clock's range, in the order the release walked them.
     const tombstones = d.rows!.filter((r) => r[8] === 1).map((r) => r[3] as number);
-    expect(tombstones).toHaveLength(4);
-    expect(new Set(tombstones).size).toBe(4);
+    expect(tombstones).toHaveLength(6);
+    expect(new Set(tombstones).size).toBe(6);
     for (const seq of tombstones) expect(seq).toBeGreaterThan(100);
+  });
+
+  it('under the default policy (clean rows written as sets) leaves the database the walk leaves', async () => {
+    const bySet = await releaseSouth(false, G9RevocationPolicy.default);
+    const rowByRow = await releaseSouth(true, G9RevocationPolicy.default);
+    expect(bySet.dump).toEqual(rowByRow.dump);
+    expect({ ...bySet.report }).toEqual({ ...rowByRow.report });
+
+    const d = bySet.dump as { [k: string]: unknown[][] };
+    expect(d.clock).toEqual([[109]]);
+    // Clean rows deleted (clean, beyond 2^53, mark, was refused); the pending changes quarantined (edited, keep).
+    expect(bySet.report.revokedDeleted).toBe(4);
+    expect(bySet.report.revokedQuarantined).toBe(2);
+    expect(d.notes!.map((r) => r[1])).toEqual(['both', 'command']);
+    expect(d.counters).toEqual([]);
+    expect(d.rejections).toEqual([]);
+    expect(d.revoked).toEqual([]);
+    // Tombstones: the walk's local sequences, one per released row of a known table, the held and commanded rows aside.
+    const tombstones = d.rows!.filter((r) => r[8] === 1).map((r) => [r[1], r[3]]);
+    expect(tombstones).toHaveLength(8);
+    expect(new Set(tombstones.map((t) => t[1])).size).toBe(8);
   });
 });

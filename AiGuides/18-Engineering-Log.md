@@ -964,3 +964,18 @@ did not reach the map for as long as the app happened not to sync - AgriPad QA s
 SignalR transports now resend the last accepted Hello on `Reconnected` (11). Found by cutting every socket of the server in a test
 (`WireCounter.AbortAll`): `SignalRTransportTests.After_the_connection_reconnects_by_itself_…`, `transportRejoin.test.ts`. Lesson: state
 a server keeps per CONNECTION (groups) must be rebuilt by whatever re-creates the connection, not by the next unrelated call.
+
+## LES-0089 — 2026-11-05 · A released site cost four statements per row although its values decided nothing
+
+Releasing a subscription (an unsubscribe, or the server answering `Forbidden` when a person loses access to a site) went through
+`disposeReleasedRows`: one read per kind of fact, then per row the policy's decision and its statements, batched. Measured on the
+Android emulator for a 38,632-row site: 15.2 s — 2.7 s reading every app row's values, 1.3 s deciding, ~9.5 s running four
+statements per row (delete the app row, the tombstone, two cleanups). A 449,856-row site took 150 s there and 466 s on a DOOGEE
+tablet. Under the default policy a row with no pending change and no pending command is deleted whatever its values, so none of
+that work was needed for it: `disposeReleasedRowsBySet` puts the released rows with their place in the walk into
+`temp.g9_dispose`, deletes the clean ones' app rows and writes their tombstones (`local_seq = base + place`) in a few set statements
+per table, and leaves only the other rows to the policy. Same site: 4.1 s. `revocation.test.ts` («under the default policy …»)
+compares the database with the row-by-row walk, including a clean row that had a rejection and a revoked record, and an integer
+key whose app row was already gone. Lesson: when the decision a bulk path makes per row is a constant for most rows, make it once
+for the set — reading values a rule never looks at is the cost, not the rule.
+

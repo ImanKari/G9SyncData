@@ -201,6 +201,12 @@ export async function disposeReleasedRows(
   const released = (await connection.query(releasedSql, releasedParams)).map((r) => ({ tid: asNumber(r[0]), key: asString(r[1]) }));
   if (released.length === 0) return 0;
   const id = (tid: number, key: string): string => tid + '\u001f' + key;
+  // The default policy (no rules) decides a clean row without its values: it is deleted. Such rows - most of a released
+  // site - are written by a few set statements per table instead of four per row (P2-03: 38,632 rows took 15.2 s, of
+  // which ~9.5 s the per-row writes and 2.7 s reading values nobody looked at). A duplicate key keeps the walk.
+  if (store.options.revocation.rules.length === 0 && new Set(released.map((r) => id(r.tid, r.key))).size === released.length) {
+    return disposeReleasedRowsBySet(store, connection, released, releasedSql, releasedParams, reason, subscriptionKey, report, onRemoved);
+  }
 
   const states = new Map<string, ReleasedRowState>();
   const stateRows = await connection.query(
@@ -255,6 +261,126 @@ export async function disposeReleasedRows(
   }
   await batch.flush();
   if (advanced > 0) await connection.exec('UPDATE g9_clock SET seq = seq + $n WHERE id = 1', { $n: advanced });
+  return removed;
+}
+
+/**
+ * disposeReleasedRows under the default policy: the database state of the walk, with the clean rows written as sets.
+ * `temp.g9_dispose` holds every released row of a known table with its place in the walk (`ord`, so its tombstone gets
+ * `base + ord` - the value the walk gives it) and its kind: 1 clean with its app row gone (a tombstone only), 2 clean
+ * with an app row (removed), 0 any other (held, pending change or command: decided from its values, as before).
+ */
+async function disposeReleasedRowsBySet(
+  store: StoreInternals,
+  connection: G9SqliteConnection,
+  released: readonly { tid: number; key: string }[],
+  releasedSql: string,
+  releasedParams: G9Params,
+  reason: G9ERevocationReason,
+  subscriptionKey: string | null,
+  report: G9ApplyReport | null,
+  onRemoved?: (tid: number, key: string) => void,
+): Promise<number> {
+  const id = (tid: number, key: string): string => tid + '\u001f' + key;
+  const states = new Map<string, ReleasedRowState>();
+  const stateRows = await connection.query(
+    'SELECT r.tid, r.pk, r.subs, r.dirty, r.dirty_mask, r.rejected, ' +
+      'EXISTS (SELECT 1 FROM g9_command_rows cr JOIN g9_commands c ON c.command_id = cr.command_id WHERE c.state = 0 AND cr.tid = r.tid AND cr.pk = r.pk) ' +
+      `FROM (${releasedSql}) g JOIN g9_rows r ON r.tid = g.tid AND r.pk = g.pk WHERE r.deleted = 0`,
+    releasedParams,
+  );
+  for (const r of stateRows) {
+    states.set(id(asNumber(r[0]), asString(r[1])), {
+      held: !asLong(r[2]).isZero(),
+      dirty: asNumber(r[3]),
+      dirtyMask: r[4] as G9SqlValue,
+      rejected: asNumber(r[5]),
+      pendingCommand: asNumber(r[6]) !== 0,
+      values: {},
+    });
+  }
+
+  // The walk's order and each row's kind; the clock moves once per released row of a known table.
+  const walk: { table: LocalTable; tid: number; key: string; ord: number; clean: boolean }[] = [];
+  let advanced = 0;
+  for (const row of released) {
+    const table = byTid(store, row.tid);
+    if (!table) continue;
+    const state = states.get(id(row.tid, row.key)) ?? emptyState();
+    walk.push({ table, tid: row.tid, key: row.key, ord: ++advanced, clean: !state.held && state.dirty === 0 && !state.pendingCommand });
+  }
+  if (walk.length === 0) return 0;
+
+  await connection.exec(
+    'DROP TABLE IF EXISTS temp.g9_dispose; ' +
+      'CREATE TEMP TABLE g9_dispose (tid INTEGER NOT NULL, pk TEXT NOT NULL, ord INTEGER NOT NULL, kind INTEGER NOT NULL, PRIMARY KEY (tid, pk)) WITHOUT ROWID',
+  );
+  const CHUNK = 20_000;
+  for (let i = 0; i < walk.length; i += CHUNK) {
+    const part = walk.slice(i, i + CHUNK).map((w) => [w.tid, w.key, w.ord, w.clean ? 1 : 0]);
+    await connection.exec(
+      "INSERT INTO temp.g9_dispose (tid, pk, ord, kind) SELECT json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]'), json_extract(j.value, '$[2]'), json_extract(j.value, '$[3]') FROM json_each($rows) AS j",
+      { $rows: JSON.stringify(part) },
+    );
+  }
+
+  const base = asLong(await connection.scalar('SELECT seq FROM g9_clock WHERE id = 1'));
+  const removedKeys = new Set<string>();
+  const tables = new Map<number, LocalTable>();
+  for (const w of walk) tables.set(w.tid, w.table);
+  for (const [tid, table] of tables) {
+    const integerKey = table.model.keyType === G9ESyncColumnType.Int32 || table.model.keyType === G9ESyncColumnType.Int64;
+    const keyOf = integerKey ? 'CAST(d.pk AS INTEGER)' : 'd.pk';
+    // A clean row whose app row is there is removed (kind 2); one whose app row is gone gets its tombstone only (kind 1).
+    await connection.exec(
+      `UPDATE temp.g9_dispose SET kind = 2 WHERE tid = ${tid} AND kind = 1 AND EXISTS (SELECT 1 FROM ${table.quoted} t WHERE t.${table.keyQuoted} = ${keyOf.replace('d.pk', 'g9_dispose.pk')})`,
+    );
+    for (const r of await connection.query(`SELECT pk FROM temp.g9_dispose WHERE tid = ${tid} AND kind = 2`)) removedKeys.add(id(tid, asString(r[0])));
+    await connection.exec(`DELETE FROM ${table.quoted} WHERE ${table.keyQuoted} IN (SELECT ${keyOf} FROM temp.g9_dispose AS d WHERE d.tid = ${tid} AND d.kind = 2)`);
+
+    // Every other released row of the table: decided from its values, as the walk decides it.
+    const sql = `SELECT d.pk, t.* FROM temp.g9_dispose AS d JOIN ${table.quoted} t ON t.${table.keyQuoted} = ${keyOf} WHERE d.tid = ${tid} AND d.kind = 0`;
+    const result = (await connection.runStatements(statementsOf(sql, {})))[0];
+    const values = new Map<string, { [column: string]: G9SqlValue }>();
+    if (result) {
+      const columns = result.columns.slice(1);
+      for (const row of result.rows) {
+        const v: { [column: string]: G9SqlValue } = {};
+        columns.forEach((name, i) => (v[name] = row[i + 1] as G9SqlValue));
+        values.set(asString(row[0] as G9SqlValue), v);
+      }
+    }
+    const batch = new G9StatementBatch(connection, store.options.statementsPerBatch);
+    for (const w of walk) {
+      if (w.tid !== tid || w.clean) continue;
+      const state = states.get(id(w.tid, w.key)) ?? emptyState();
+      state.values = values.get(w.key) ?? {};
+      const plan = planDisposal(store, table, w.key, state, reason, subscriptionKey, report, '$seq', { $seq: base.add(G9Long.fromNumber(w.ord)) });
+      if (plan.removed) removedKeys.add(id(w.tid, w.key));
+      for (const statement of plan.statements) if (batch.add(statement.script, statement.params)) await batch.flush();
+    }
+    await batch.flush();
+  }
+
+  // The clean rows' metadata, as removeLocalRowStatements and the tombstone-only branch of planDisposal write it.
+  await connection.exec(
+    'UPDATE g9_rows SET deleted = 1, dirty = 0, dirty_mask = 0, rejected = 0, ' +
+      'local_seq = $base + (SELECT d.ord FROM temp.g9_dispose AS d WHERE d.tid = g9_rows.tid AND d.pk = g9_rows.pk) ' +
+      'WHERE (tid, pk) IN (SELECT tid, pk FROM temp.g9_dispose WHERE kind IN (1, 2)); ' +
+      'DELETE FROM g9_rejections WHERE (tid, pk) IN (SELECT tid, pk FROM temp.g9_dispose WHERE kind = 2); ' +
+      'DELETE FROM g9_revoked WHERE (tid, pk) IN (SELECT tid, pk FROM temp.g9_dispose WHERE kind = 2); ' +
+      'DROP TABLE temp.g9_dispose',
+    { $base: base },
+  );
+  await connection.exec('UPDATE g9_clock SET seq = seq + $n WHERE id = 1', { $n: advanced });
+
+  let removed = 0;
+  for (const w of walk) {
+    if (!removedKeys.has(id(w.tid, w.key))) continue;
+    removed++;
+    if (w.clean && report) report.revokedDeleted++;
+    onRemoved?.(w.tid, w.key);
+  }
   return removed;
 }
 
