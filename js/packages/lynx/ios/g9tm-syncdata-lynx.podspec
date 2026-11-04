@@ -18,5 +18,7 @@ Pod::Spec.new do |s|
   s.frameworks = 'Foundation'
   s.libraries = 'compression'
   s.requires_arc = true
-  s.dependency 'Lynx', '4.2.0'
+  # The whole Lynx 4.2 line, its -dev engine included (Trace and Recorder live only there; lynx-family/Specs pins
+  # every Lynx pod to one exact version, so a host that builds on 4.2.0-dev must find this pod willing too).
+  s.dependency 'Lynx', '>= 4.2.0-dev', '< 4.3'
 end
