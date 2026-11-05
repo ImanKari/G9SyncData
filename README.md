@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.16
+
+- **A released subscription's clean rows are disposed as sets (TypeScript store, LES-0089).** Releasing a subscription (an
+  unsubscribe, or `Forbidden` when the user loses access to a site) read every app row's values and ran four statements
+  per row. Under the default revocation policy a row with no pending change and no pending command is deleted whatever its
+  values, so those rows now go in a few set statements per table; only the others are decided one by one. Measured on
+  Android: a 449,856-row site 466 s → 73 s (a DOOGEE tablet) and 150 s → 39 s (an emulator). The database it leaves is the
+  row-by-row one (`revocation.test.ts`). The .NET store is unchanged.
+
 ## What's new in 1.5.15
 
 - **One unreadable value no longer stops every upload of a device** (LES-0088). A value stored in a form its column type cannot
