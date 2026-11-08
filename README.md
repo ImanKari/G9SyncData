@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.17
+
+- **A computed column on an EF Core table** (`G9CEfCoreEntityBuilder.Computed`). `FromEfCore` read only what the EF model maps,
+  so a value that lives in ANOTHER table could not travel with a row - for example the role list of a task type, kept in a
+  junction with a composite key that G9SyncData cannot carry itself (ADR-0006). `ef.Entity<T>(e => e.Computed(name, type, readSql))`
+  adds it, exactly like `G9CSyncTableBuilder.Computed`: read on every pull, never uploaded, folded into the reconciliation hash (a
+  change in the other table reaches devices with the subscription's reconcile). A name the table already has is refused at start.
+  Server only; the clients and the TypeScript packages are unchanged (version bump of the family).
+
 ## What's new in 1.5.16
 
 - **A released subscription's clean rows are disposed as sets (TypeScript store, LES-0089).** Releasing a subscription (an

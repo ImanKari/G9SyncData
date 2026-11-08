@@ -129,6 +129,11 @@ public static class G9CEfCoreModelExtractor
         // a NOT NULL jsonb column, missing from the sync model of every attachable entity.
         AddStructuralColumns(table, entityType, string.Empty, clrName, tableName, entityType.GetSchema() ?? model.GetDefaultSchema());
 
+        foreach (var computed in entity.ComputedColumns)
+        {
+            if (!seen.Add(computed.Name)) errors.Add($"'{clrName}' declares the computed column '{computed.Name}', which is already a column of the table.");
+        }
+
         if (errors.Count > tableErrorsBefore) return;
 
         builder.Table(schema, tableName, table =>
@@ -141,6 +146,7 @@ public static class G9CEfCoreModelExtractor
             if (entity.WriteRuleSql is { } writeRule) table.WriteRule(writeRule);
 
             foreach (var add in columnsToAdd) add(table);
+            foreach (var computed in entity.ComputedColumns) table.Computed(computed.Name, computed.Type, computed.ReadSql, computed.Nullable);
         });
     }
 

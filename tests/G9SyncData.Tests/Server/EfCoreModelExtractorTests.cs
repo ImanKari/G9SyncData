@@ -124,6 +124,28 @@ public sealed class EfCoreModelExtractorTests
     }
 
     [Fact]
+    public void A_computed_column_is_added_to_an_ef_table_and_never_uploaded()
+    {
+        var model = BuildModel(ef => ef.Entity<Ridge>(e => e.Exclude("Sensors").Computed("PotCount", G9ESyncColumnType.Int32,
+            "(SELECT count(*) FROM \"Operation\".\"Pot\" p WHERE p.\"RidgeId\" = {row}.\"Id\")")));
+        var ridge = model.Tables.Single(t => t.LogicalName == "Operation.Ridge");
+
+        var computed = ridge.FindColumn("PotCount");
+        Assert.NotNull(computed);
+        Assert.Equal(G9ESyncColumnKind.Computed, computed!.Kind);
+        Assert.Equal(G9ESyncColumnType.Int32, computed.Type);
+        Assert.False(computed.IsWritable);
+        Assert.NotNull(ridge.FindColumn("Title"));
+    }
+
+    [Fact]
+    public void A_computed_column_named_like_a_model_column_is_refused()
+    {
+        var error = Assert.ThrowsAny<Exception>(() => BuildModel(ef => ef.Entity<Ridge>(e => e.Exclude("Sensors").Computed("Title", G9ESyncColumnType.String, "'x'"))));
+        Assert.Contains("Title", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Per_entity_overrides_are_applied()
     {
         var model = BuildModel();

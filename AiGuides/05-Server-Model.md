@@ -167,8 +167,17 @@ builder.Services.AddG9SyncDataServer((services, model) => model.FromEfCore<Agric
     ef.Entity<EntityAttributeValue>(e => e
         .Exclude("Buid", "SerialNumber")                       // CLR member path or column name
         .Property("AttachmentCount", p => p.ReadOnly()));      // server-owned JSON document
+    ef.Entity<TaskType>(e => e                                 // a column the EF model does not have (2026-11-08)
+        .Computed("AssigneeRoleIds", G9ESyncColumnType.String,
+            "(SELECT array_agg(r.\"RoleId\")::text FROM \"Tasks\".\"TaskTypeAssigneeRole\" r WHERE r.\"TaskTypeId\" = {row}.\"Id\")"));
 }).Subscription(/* … */));
 ```
+
+**A computed column on an EF table** (`G9CEfCoreEntityBuilder.Computed`, 2026-11-08): the EF twin of `G9CSyncTableBuilder.Computed`
+— read on every pull, never uploaded, folded into the reconciliation hash. The way to carry what lives in ANOTHER table, e.g. a
+junction with a composite key that cannot be synced itself (ADR-0006): a change there is not a change of this row, so it reaches
+devices with the subscription's reconcile. A name already in the table is refused at start. Tests:
+`EfCoreModelExtractorTests.A_computed_column_*`.
 
 Everything the EF model knows is READ, not restated: schema, table, key, column names, provider types (value converters win over
 CLR types), nullability, store-generated columns (read-only), spatial columns (text on the wire, `::geometry` on write) and indexes.

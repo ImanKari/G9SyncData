@@ -53,6 +53,7 @@ public sealed class G9CEfCoreEntityBuilder
     internal G9EConflictPolicy? ConflictsOverride { get; private set; }
     internal bool? OrderedApplyOverride { get; private set; }
     internal string? WriteRuleSql { get; private set; }
+    internal List<(string Name, G9ESyncColumnType Type, string ReadSql, bool Nullable)> ComputedColumns { get; } = [];
     internal IReadOnlyCollection<string> Excluded => _excluded;
     internal IReadOnlyDictionary<string, G9CEfCorePropertyBuilder> Properties => _properties;
 
@@ -92,6 +93,19 @@ public sealed class G9CEfCoreEntityBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sql);
         WriteRuleSql = sql;
+        return this;
+    }
+
+    /// <summary>
+    ///     A column the EF model does not have, computed on every read from <paramref name="readSql" /> (with <c>{row}</c>) - the
+    ///     EF twin of <c>G9CSyncTableBuilder.Computed</c>. Download-only by nature and folded into the reconciliation hash:
+    ///     a change of what it reads (another table) is not a change of this row, so reconciliation is what re-sends it.
+    /// </summary>
+    public G9CEfCoreEntityBuilder Computed(string name, G9ESyncColumnType type, string readSql, bool nullable = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(readSql);
+        ComputedColumns.Add((name, type, readSql, nullable));
         return this;
     }
 
