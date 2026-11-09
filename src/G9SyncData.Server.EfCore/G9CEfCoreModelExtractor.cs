@@ -144,6 +144,7 @@ public static class G9CEfCoreModelExtractor
 
             if (entity.OrderedApplyOverride is { } ordered) table.OrderedApply(ordered);
             if (entity.WriteRuleSql is { } writeRule) table.WriteRule(writeRule);
+            foreach (var rules in entity.ConflictRules) table.OnConflict(rules);
 
             foreach (var add in columnsToAdd) add(table);
             foreach (var computed in entity.ComputedColumns) table.Computed(computed.Name, computed.Type, computed.ReadSql, computed.Nullable);

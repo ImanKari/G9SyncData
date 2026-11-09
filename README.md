@@ -23,6 +23,15 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.18
+
+- **Conflict rules on an EF Core table** (`G9CEfCoreEntityBuilder.OnConflict`). `FromEfCore` set only the conflict POLICY, so an
+  application could not say "this one column is merged, not reported" for a table it maps through EF. `ef.Entity<T>(e =>
+  e.OnConflict(r => r.When(name, condition).TakeClient()))` adds the same ordered rules as `G9CSyncTableBuilder.OnConflict`
+  (ADR-0031); unmatched conflicts keep the entity's policy. Made for a list both sides append to (a «seen by» column): an upload
+  transformer merges the stored list into the staged one, and the rule takes the merged row when that column is the only overlap.
+  Server only; the clients and the TypeScript packages are unchanged.
+
 ## What's new in 1.5.17
 
 - **A computed column on an EF Core table** (`G9CEfCoreEntityBuilder.Computed`). `FromEfCore` read only what the EF model maps,

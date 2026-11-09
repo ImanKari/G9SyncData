@@ -155,6 +155,19 @@ public sealed class EfCoreModelExtractorTests
         Assert.True(placement.TracksColumnVersions);
     }
 
+    /// <summary>Conflict rules declared on an EF entity reach its table, in order, and make it track column versions.</summary>
+    [Fact]
+    public void Conflict_rules_of_an_ef_entity_reach_its_table()
+    {
+        var model = BuildModel(ef => ef.Entity<Ridge>(e => e.Exclude("Sensors")
+            .OnConflict(r => r.When("title only", c => c.ChangedOnly("Title")).TakeClient())
+            .OnConflict(r => r.Otherwise().MergeColumns())));
+        var ridge = model.Tables.Single(t => t.LogicalName.EndsWith(".Ridge", StringComparison.Ordinal));
+
+        Assert.Equal(["title only", "otherwise"], ridge.ConflictRules!.Rules.Select(r => r.Name));
+        Assert.True(ridge.TracksColumnVersions);
+    }
+
     [Fact]
     public void Indexes_including_the_partial_unique_claim_key_come_from_the_model()
     {

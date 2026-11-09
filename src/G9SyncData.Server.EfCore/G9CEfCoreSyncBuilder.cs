@@ -1,3 +1,5 @@
+using G9SyncData.Server.Model;
+
 namespace G9SyncData.Server.EfCore;
 
 /// <summary>
@@ -53,6 +55,7 @@ public sealed class G9CEfCoreEntityBuilder
     internal G9EConflictPolicy? ConflictsOverride { get; private set; }
     internal bool? OrderedApplyOverride { get; private set; }
     internal string? WriteRuleSql { get; private set; }
+    internal List<Action<G9CConflictRulesBuilder>> ConflictRules { get; } = [];
     internal List<(string Name, G9ESyncColumnType Type, string ReadSql, bool Nullable)> ComputedColumns { get; } = [];
     internal IReadOnlyCollection<string> Excluded => _excluded;
     internal IReadOnlyDictionary<string, G9CEfCorePropertyBuilder> Properties => _properties;
@@ -79,6 +82,22 @@ public sealed class G9CEfCoreEntityBuilder
     public G9CEfCoreEntityBuilder Conflicts(G9EConflictPolicy policy)
     {
         ConflictsOverride = policy;
+        return this;
+    }
+
+    /// <summary>
+    ///     Ordered conflict rules (A-05) - the EF twin of <c>G9CSyncTableBuilder.OnConflict</c>: the first rule whose condition holds
+    ///     decides a conflicting upload, the rest fall back to <see cref="Conflicts" />. A table with rules tracks per-column versions.
+    /// </summary>
+    /// <remarks>
+    ///     The typical use is a column both sides append to (a "seen by" list): an <c>IG9UploadTransformer</c> merges the stored value
+    ///     into the staged one (transformers run before conflicts), and a rule takes the device's row when that column is the only
+    ///     overlap - nothing is lost and nothing is reported.
+    /// </remarks>
+    public G9CEfCoreEntityBuilder OnConflict(Action<G9CConflictRulesBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        ConflictRules.Add(configure);
         return this;
     }
 

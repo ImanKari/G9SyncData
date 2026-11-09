@@ -179,6 +179,15 @@ junction with a composite key that cannot be synced itself (ADR-0006): a change 
 devices with the subscription's reconcile. A name already in the table is refused at start. Tests:
 `EfCoreModelExtractorTests.A_computed_column_*`.
 
+**Conflict rules on an EF table** (`G9CEfCoreEntityBuilder.OnConflict`, 1.5.18, 2026-11-09): the EF twin of
+`G9CSyncTableBuilder.OnConflict` above — the same builder, the same facts and actions, several calls appended in order. The case it
+was added for: a column BOTH sides append to (AgriPad's «seen by» `Views` list of a task or a note). An `IG9UploadTransformer`
+merges the stored value into the staged one — transformers run BEFORE the conflict check (`ApplyStagedAsync`, step 3 then 4) — and
+`OnConflict(r => r.When("views-only", c => c.Overlapping.All(col => col == "Views")).TakeClient())` takes the merged row whole when
+that column is the only overlap; every other conflict falls back to the entity's `Conflicts(...)`. Without the rule the overlap was
+`G9S-CON-COLUMNS`, kept on the device as a refused change for something nobody edited. Test:
+`EfCoreModelExtractorTests.Conflict_rules_of_an_ef_entity_reach_its_table`.
+
 Everything the EF model knows is READ, not restated: schema, table, key, column names, provider types (value converters win over
 CLR types), nullability, store-generated columns (read-only), spatial columns (text on the wire, `::geometry` on write) and indexes.
 Problems are collected and reported together at server start (`G9S-MODEL-INVALID`).
