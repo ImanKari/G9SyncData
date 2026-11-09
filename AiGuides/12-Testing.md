@@ -347,12 +347,12 @@ a leaked slot retains WAL on the machine indefinitely.
 | `A_custom_rule_can_redact_the_row_it_keeps` | editor; redaction never uploaded |
 | `Unsubscribing_applies_the_policy_with_the_unsubscribed_reason` | unsubscribe path |
 | **G9SyncData.Tests / Client/RevocationPolicyUnitTests** | defaults, first match, unique names |
-| **Revocation/UnclaimedRowsTests** (1.5.17, LES-0090) | |
+| **Revocation/UnclaimedRowsTests** (1.5.19, LES-0090) | |
 | `Only_adopted_rows_no_subscription_claimed_are_released_and_every_other_state_is_left_alone` | adopted + unclaimed → deleted; uploaded-unclaimed (`server_ver > 0`), pending change, rejected, revoked, ephemeral member, pending command, held rows kept; changed keys; tombstones in the change feed; nothing pending; idempotent |
 | `A_pending_change_is_quarantined_only_when_asked_for_and_never_uploaded` | `includePending` with keys: quarantined with reason `Unclaimed` and its values; only the given keys; nothing reaches the server |
 | `The_set_path_leaves_the_state_the_row_by_row_walk_leaves_and_releases_200000_rows_in_seconds` | set disposal = row-by-row walk on 20,000 rows (every `g9_rows` column, tombstone order); 200,000 rows in seconds (output: timings) |
-| **Revocation/RefetchRowsTests** (1.5.17) | `A_column_the_server_starts_serving_empty_reaches_a_device_only_after_its_rows_are_fetched_again`: a forced reconcile keeps the old values (versions unchanged); `RefetchRowsAsync` marks only clean held rows; the next sync replaces them; a pending edit is kept and uploads |
-| **WhenFilterColumnTests** (1.5.17) | a When filter on an unsynced column is reported at model validation; synced columns and the key are accepted |
+| **Revocation/RefetchRowsTests** (1.5.19) | `A_column_the_server_starts_serving_empty_reaches_a_device_only_after_its_rows_are_fetched_again`: a forced reconcile keeps the old values (versions unchanged); `RefetchRowsAsync` marks only clean held rows; the next sync replaces them; a pending edit is kept and uploads |
+| **WhenFilterColumnTests** (1.5.19) | a When filter on an unsynced column is reported at model validation; synced columns and the key are accepted |
 
 | **Resync/EpochAndRestoreTests** | |
 | `Reinstalling_capture_changes_the_epoch_and_devices_reconcile_to_the_rows_including_changes_made_without_capture` | epoch → `ResyncRequired` → reconcile; WAL rescan |

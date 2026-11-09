@@ -30,6 +30,11 @@ npm run test:android-jvm -w packages/lynx; npm run check:android-module -w packa
 npm run pack:all                           # → js/artifacts/npm
 ```
 
+⛔ `test:lynxsim` (inside `verify`) and `test:interop` start the sample server on `G9SYNC_TEST_PG` AND create/drop their
+databases with `psql`, which reads only `PGPASSWORD`: with `G9SYNC_TEST_PG` alone every test is reported SKIPPED after
+3 minutes and the step fails with «The sample server exited». Set both. An `EPERM … g9-lynx-snapshot-*` in the Lynx
+`test` step is Windows still holding the temp folder after the tests passed — run that step again.
+
 When a build fails, filter the noise:
 
 ```powershell
@@ -38,7 +43,7 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 ## Versioning and packing
 
-- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.5.12`). `<Version>` only
+- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.5.19`). `<Version>` only
   consumes it. The indirection exists so a consuming repository can pin the family from one property — in an
   application project `$(Version)` means "the app's version", not "the version of the packages it references".
 - ⛔ **The family releases TOGETHER and must never be mixed.** The protocol frame layout is negotiated across

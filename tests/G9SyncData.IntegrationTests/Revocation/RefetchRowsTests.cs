@@ -6,7 +6,7 @@ using static G9SyncData.IntegrationTests.Infrastructure.TestSchema;
 namespace G9SyncData.IntegrationTests.Revocation;
 
 /// <summary>
-///     <c>RefetchRowsAsync</c> (1.5.17, LES-0090): a server whose READ of a column changes - it starts serving a column empty because it
+///     <c>RefetchRowsAsync</c> (1.5.19, LES-0090): a server whose READ of a column changes - it starts serving a column empty because it
 ///     held data a device must not keep - changes no row's version, and a reconciliation compares (key, version), never values, so every
 ///     device keeps what it already holds. Asking for the rows again is the one way to replace it.
 /// </summary>

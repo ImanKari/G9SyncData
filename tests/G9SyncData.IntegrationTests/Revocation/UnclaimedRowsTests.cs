@@ -145,11 +145,22 @@ public sealed class UnclaimedRowsTests(ITestOutputHelper output)
         Assert.Equal(0L, only.RevokedDeleted + only.RevokedQuarantined);
         Assert.True(await client.ExistsAsync("Pot", device.ForeignPots[0]));
 
-        var asked = await client.Engine.ReleaseUnclaimedRowsAsync("Pot", [pending], includePending: true);
+        // A change the server REFUSED (a row of a site the user may not open): a pending change it said no to - quarantined too when asked,
+        // and its refusal goes with it (it could never be accepted, and the device would show it as a refused change for ever).
+        var refused = Key(device.ForeignPots[2]);
+        await client.ExecAsync("UPDATE Pot SET Note = 'refused edit' WHERE Id = $p0", refused);
+        await client.ExecAsync("UPDATE g9_rows SET rejected = 1 WHERE tid = $p0 AND pk = $p1; " +
+                               "INSERT INTO g9_rejections (tid, pk, code, message, at_utc) VALUES ($p0, $p1, 'G9S-REJ-OUTSIDE-SCOPE', 'outside', 0)", tid, refused);
+        Assert.Equal(0L, (await client.Engine.ReleaseUnclaimedRowsAsync("Pot", [refused])).RevokedQuarantined);
+        Assert.Single(await client.Engine.GetRejectionsAsync());
 
-        Assert.Equal(1L, asked.RevokedQuarantined);
+        var asked = await client.Engine.ReleaseUnclaimedRowsAsync("Pot", [pending, refused], includePending: true);
+
+        Assert.Equal(2L, asked.RevokedQuarantined);
+        Assert.Empty(await client.Engine.GetRejectionsAsync());
+        Assert.Contains(await client.Engine.GetQuarantinedAsync(), q => q.Key == refused);
         Assert.False(await client.ExistsAsync("Pot", device.ForeignPots[0]));
-        var held = Assert.Single(await client.Engine.GetQuarantinedAsync());
+        var held = Assert.Single(await client.Engine.GetQuarantinedAsync(), q => q.Key == pending);
         Assert.Equal(pending, held.Key);
         Assert.Equal(G9ERevocationReason.Unclaimed, held.Reason);
         Assert.True(held.HadPendingChanges);

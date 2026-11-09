@@ -156,10 +156,12 @@ public sealed partial class G9CSqliteSyncStore
             await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
             using var transaction = connection.BeginTransaction(deferred: false);
             // Never claimed by the server (server_ver = 0: a row the device adopted from its own table, never confirmed by a pull or a push),
-            // held by nothing, not decided before (revoked, quarantined, rejected), and not touched by a pending command.
+            // held by nothing, not decided before (revoked, quarantined), and not touched by a pending command. A pending change - and a
+            // REFUSED one, which is a pending change the server already said no to - only when asked: then the policy decides (the default
+            // quarantines it, and the refusal goes with the row; a row outside every scope can never be accepted anyway).
             var where =
-                "r.tid = $t AND r.subs = 0 AND r.deleted = 0 AND r.server_ver = 0 AND r.rejected = 0" +
-                (includePending ? string.Empty : " AND r.dirty = 0") +
+                "r.tid = $t AND r.subs = 0 AND r.deleted = 0 AND r.server_ver = 0" +
+                (includePending ? string.Empty : " AND r.dirty = 0 AND r.rejected = 0") +
                 " AND NOT EXISTS (SELECT 1 FROM g9_revoked v WHERE v.tid = r.tid AND v.pk = r.pk)" +
                 " AND NOT EXISTS (SELECT 1 FROM g9_quarantine q WHERE q.tid = r.tid AND q.pk = r.pk)" +
                 " AND NOT EXISTS (SELECT 1 FROM g9_ephemeral_rows e WHERE e.tid = r.tid AND e.pk = r.pk)" +

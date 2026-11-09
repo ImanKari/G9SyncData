@@ -76,7 +76,7 @@ model.Subscription("sampling-detail", s => s
   *When* is delivered as a **move-out**, so the device drops it. A row that leaves the *scope* (e.g. moved to another
   site) is invisible to a delta and is repaired by reconciliation — keep volatile predicates in *When*.
 - ⛔ **A When filter reads only SYNCED columns of its row** (`{row}."Col"`; the store refuses the model at startup otherwise,
-  1.5.17). Changes are captured per synced column, so a row whose filter column is not synced never gets a new version when
+  1.5.19). Changes are captured per synced column, so a row whose filter column is not synced never gets a new version when
   that column changes: the delta never re-evaluates it and it never moves out. Sync the column even if the client ignores it.
 - Parameter types: Boolean, Int32, Int64, String, Guid; lists with `isList: true`. Names starting with `g9` are reserved.
 - Declared `@Name` tokens are renamed per subscription when bound, so two subscriptions with the same parameter can
@@ -206,7 +206,7 @@ Problems are collected and reported together at server start (`G9S-MODEL-INVALID
 Nullability comes from the relational table, so an optional owned type's columns are nullable even for non-nullable properties.
 `Exclude`/`Property` accept the member path (`Counts`, `Dimensions.Width`) or the column name.
 
-**An allow-list: `OnlyColumns("Title", "SiteId", …)`** (1.5.17) — only the listed columns (and the key) are synced; a column the
+**An allow-list: `OnlyColumns("Title", "SiteId", …)`** (1.5.19) — only the listed columns (and the key) are synced; a column the
 entity gains later is NOT, which is the point for a download-only table that holds data a device must never receive. Member paths
 or column names; `Exclude` still applies on top. Remember the When rule above: a filter's column must be in the list.
 

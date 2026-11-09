@@ -29,8 +29,8 @@ the .NET client byte for byte.
   A device that synced another way before adopts its own rows on the first sync; the ones no subscription claims (another site's,
   deletes it never heard of) stayed for ever with `subs = 0, server_ver = 0`, and an app that treats "present" as "allowed"
   showed them. The release disposes exactly those rows through the revocation policy (`G9ERevocationReason.Unclaimed`),
-  locally only - capture is off, nothing is uploaded. A row the server confirmed, a pending change (unless asked for: then
-  quarantined), a rejection, a revoked or quarantined row, an ephemeral member and a row a pending command touches are left alone.
+  locally only - capture is off, nothing is uploaded. A row the server confirmed, a pending or refused change (unless asked
+  for: then quarantined, the refusal with it), a revoked or quarantined row, an ephemeral member and a row a pending command touches are left alone.
 - **A released subscription's clean rows are disposed as sets in .NET too** (the 1.5.16 TypeScript change): 20,000 rows 1.3 s →
   0.4 s, 200,000 rows in 6 s; the database it leaves is the row-by-row one (`UnclaimedRowsTests`).
 - **`RefetchRowsAsync(table, keys?)`**: the next sync fetches the rows again and overwrites their values with the server's - for a

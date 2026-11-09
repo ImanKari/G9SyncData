@@ -244,9 +244,9 @@ public interface IG9SyncClientStore : IAsyncDisposable
     ///     Disposes rows of one table (all of them, or the given keys) that NO subscription holds and the server never claimed
     ///     (<c>server_ver = 0</c>: adopted from the app's own table, never confirmed by a pull or a push), through the revocation policy
     ///     with <see cref="G9ERevocationReason.Unclaimed" />. Capture is off: nothing is ever uploaded, least of all a delete. A row
-    ///     already decided (revoked, quarantined, rejected), an ephemeral member and a row a pending command touches are left alone; a
-    ///     row with a pending change too, unless <paramref name="includePending" /> - then the policy decides (the default policy
-    ///     quarantines it: kept, restorable, never uploaded). ⛔ A row the device created and has not uploaded yet looks exactly like an
+    ///     already decided (revoked, quarantined), an ephemeral member and a row a pending command touches are left alone; a row with a
+    ///     pending change or a refused one too, unless <paramref name="includePending" /> - then the policy decides (the default policy
+    ///     quarantines it: kept with its values, restorable, never uploaded; its refusal goes with it). ⛔ A row the device created and has not uploaded yet looks exactly like an
     ///     adopted row with a pending change, so pass <paramref name="includePending" /> only with keys the application chose.
     /// </summary>
     Task<G9CApplyReport> ReleaseUnclaimedRowsAsync(string localTable, IReadOnlyCollection<string>? keys, bool includePending, CancellationToken cancellationToken);
