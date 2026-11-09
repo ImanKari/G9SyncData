@@ -23,6 +23,24 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.19
+
+- **Releasing rows no subscription ever claimed** (`G9CSyncEngine.ReleaseUnclaimedRowsAsync(table, keys?, includePending)`, LES-0090).
+  A device that synced another way before adopts its own rows on the first sync; the ones no subscription claims (another site's,
+  deletes it never heard of) stayed for ever with `subs = 0, server_ver = 0`, and an app that treats "present" as "allowed"
+  showed them. The release disposes exactly those rows through the revocation policy (`G9ERevocationReason.Unclaimed`),
+  locally only - capture is off, nothing is uploaded. A row the server confirmed, a pending change (unless asked for: then
+  quarantined), a rejection, a revoked or quarantined row, an ephemeral member and a row a pending command touches are left alone.
+- **A released subscription's clean rows are disposed as sets in .NET too** (the 1.5.16 TypeScript change): 20,000 rows 1.3 s →
+  0.4 s, 200,000 rows in 6 s; the database it leaves is the row-by-row one (`UnclaimedRowsTests`).
+- **`RefetchRowsAsync(table, keys?)`**: the next sync fetches the rows again and overwrites their values with the server's - for a
+  server whose READ of a column changed while the rows did not (a column now served empty). A reconciliation compares (key,
+  version), never values, so nothing else replaces what a device already holds.
+- **`OnlyColumns(...)` on the EF entity builder**: an allow-list - a column not listed, and any the entity gains later, is not synced.
+- **A When filter may read only synced columns** - the store refuses the model at startup otherwise. Changes are captured per
+  synced column, so a filter on an unsynced column never saw its row change and the row never moved out (an allow-list that
+  dropped the filter's column).
+
 ## What's new in 1.5.18
 
 - **Conflict rules on an EF Core table** (`G9CEfCoreEntityBuilder.OnConflict`). `FromEfCore` set only the conflict POLICY, so an

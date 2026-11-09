@@ -123,6 +123,23 @@ public sealed class EfCoreModelExtractorTests
         Assert.NotNull(ridge.FindColumn("Title"));
     }
 
+    /// <summary>
+    ///     An allow-list syncs the key and the listed members only: a scalar, an owned JSON document - and nothing else, so a column
+    ///     the entity gains later stays on the server (AgriPad, 2026-11-09: every Person column was servable, national id and IBAN
+    ///     included, to any client that declared it).
+    /// </summary>
+    [Fact]
+    public void An_allow_list_syncs_only_the_listed_columns_and_the_key()
+    {
+        // Ridge.Sensors has no sync type at all: left off the list it is simply not synced, not an error.
+        var model = BuildModel(ef => ef.Entity<Ridge>(e => e.OnlyColumns("Title")));
+        var ridge = model.Tables.Single(t => t.LogicalName == "Operation.Ridge");
+
+        Assert.Equal(["Title"], ridge.Columns.Select(c => c.Name).Where(n => n != ridge.KeyColumn));
+        Assert.Null(ridge.FindColumn("InternalNote"));
+        Assert.Null(ridge.FindColumn("Sensors"));
+    }
+
     [Fact]
     public void A_computed_column_is_added_to_an_ef_table_and_never_uploaded()
     {

@@ -366,6 +366,19 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
         };
     }
 
+    /// <summary>The columns a When filter reads from its own row (<c>{row}."Column"</c>) that the table does not track.</summary>
+    internal static IEnumerable<string> UntrackedWhenColumns(string? whenSql, G9CSyncServerTable table)
+    {
+        if (string.IsNullOrEmpty(whenSql)) yield break;
+        var tracked = new HashSet<string>(table.PhysicalColumns.Select(c => c.Name), StringComparer.OrdinalIgnoreCase) { table.KeyColumn };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(whenSql, "\\{row\\}\\.\"([^\"]+)\""))
+        {
+            var column = match.Groups[1].Value;
+            if (!tracked.Contains(column) && seen.Add(column)) yield return column;
+        }
+    }
+
     private async Task<List<string>> ValidateSqlAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
     {
         var errors = new List<string>();
@@ -458,6 +471,16 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
                 var table = Get(include.Table);
                 var when = include.WhenSql is null ? "true" : Bind(include.WhenSql, "t", subscription);
                 var label = $"subscription '{subscription.Name}' / {include.Table.LogicalName}";
+
+                // ⛔ A When filter may read only TRACKED columns. Changes are captured per synced column, so a row whose filter column
+                // is not synced never gets a new version when that column changes: the delta never re-evaluates it, the row never
+                // moves out, and the device keeps it until a reconcile that may never come (a reconcile compares versions, not
+                // values). Found when an allow-list left out the column a "current layout" filter reads.
+                foreach (var column in UntrackedWhenColumns(include.WhenSql, include.Table))
+                {
+                    errors.Add($"{label}: the When filter reads \"{column}\", which is not a synced column, so a change to it is never " +
+                               "captured and a row leaving the filter is never sent as a move-out. Sync the column (it may be ignored by the client).");
+                }
 
                 if (include.ScopeProvider is null || !_options.ValidateScopeProviders)
                 {

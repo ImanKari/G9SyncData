@@ -161,8 +161,13 @@ public static class G9CEfCoreModelExtractor
         /// </summary>
         public bool IsNullable(string columnName, bool fallback) => Table?.FindColumn(columnName)?.IsNullable ?? fallback;
 
-        /// <summary>Excluded by CLR member path (<c>Note</c>, <c>Address.City</c>) or by column name.</summary>
-        public bool IsExcluded(string memberPath, string columnName) => Entity.Excluded.Contains(memberPath) || Entity.Excluded.Contains(columnName);
+        /// <summary>
+        ///     Excluded by CLR member path (<c>Note</c>, <c>Address.City</c>) or by column name - or, when the entity has an allow-list
+        ///     (<see cref="G9CEfCoreEntityBuilder.OnlyColumns" />), because neither its member path nor its column is on it.
+        /// </summary>
+        public bool IsExcluded(string memberPath, string columnName) =>
+            Entity.Excluded.Contains(memberPath) || Entity.Excluded.Contains(columnName)
+            || (Entity.Kept is { } kept && !kept.Contains(memberPath) && !kept.Contains(columnName));
 
         public G9CEfCorePropertyBuilder? Overrides(string memberPath, string columnName) =>
             Entity.Properties.TryGetValue(memberPath, out var byMember) ? byMember : Entity.Properties.GetValueOrDefault(columnName);

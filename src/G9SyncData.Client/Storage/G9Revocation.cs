@@ -16,7 +16,13 @@ public enum G9ERevocationReason : byte
     ///     The server refused the subscription for this caller: not a failure to refresh it, but a statement that these rows are no longer
     ///     theirs to hold (ADR-0048). The application can tell this apart from <see cref="LeftScope" /> without reading error strings.
     /// </summary>
-    AccessRevoked = 3
+    AccessRevoked = 3,
+
+    /// <summary>
+    ///     No subscription ever claimed it: a row the device adopted from its own tables (a database that synced another way before) that
+    ///     the server never confirmed, released by the application (<c>G9CSyncEngine.ReleaseUnclaimedRowsAsync</c>).
+    /// </summary>
+    Unclaimed = 4
 }
 
 /// <summary>What happens to a row no subscription holds any more.</summary>

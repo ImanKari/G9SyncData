@@ -979,3 +979,26 @@ compares the database with the row-by-row walk, including a clean row that had a
 key whose app row was already gone. Lesson: when the decision a bulk path makes per row is a constant for most rows, make it once
 for the set — reading values a rule never looks at is the cost, not the rule.
 
+
+## LES-0090 — 2026-11-09 · Adopted rows no subscription claimed stayed for ever, and a When filter on an unsynced column never moved a row out
+
+Three findings of one review of an application that moved to G9SyncData from another sync system.
+
+1. **Adoption has no end.** `AdoptExistingRows` gives every row already in an app table a `g9_rows` record (`subs = 0, server_ver
+   = 0`); a subscription that claims the row sets its bit. A row NO subscription claims - another site's, a row the office deleted
+   while the old system was in charge - keeps `subs = 0` for ever: no move-out ever names it (it was never sent), no reconcile
+   lists it (the digest covers held rows). An application that reads its own tables showed all of them. `ReleaseUnclaimedRowsAsync`
+   disposes exactly those, through the revocation policy, with capture off. ⛔ A row the device created and has not uploaded looks
+   exactly like an adopted row with a pending change (both `server_ver = 0`, `subs = 0`, `dirty = 1`), so pending rows are left
+   alone unless the application names the keys and asks.
+2. **A reconcile compares versions, not values.** A server that starts serving a column empty (it held personal data) changes no
+   row's version, so every device kept the old values. `RefetchRowsAsync` sets `server_ver = -1` on the clean held rows; the next
+   reconcile sees a version mismatch and fetches them again.
+3. **A When filter on an unsynced column.** An allow-list (`OnlyColumns`) dropped the column a "current layout" filter read
+   (`{row}."DeleteLayoutId" IS NULL`). Changes are captured per SYNCED column, so the office's redraw gave the old rows no new
+   version, the delta never re-evaluated them, and tablets kept the old layout. The store now refuses such a model at startup
+   (`UntrackedWhenColumns`, `WhenFilterColumnTests`).
+
+The .NET store also got the 1.5.16 set disposal (LES-0089): 20,000 rows 1,257 ms → 380 ms, 200,000 rows 6.0 s. Its first version
+put the rows in as two JSON arrays joined on their position - a join without an index, quadratic: 20,000 rows took 9.9 s. One array
+of `"tid,ord,key"` strings fixed it. Lesson: a table-valued function has no index - never join two of them.

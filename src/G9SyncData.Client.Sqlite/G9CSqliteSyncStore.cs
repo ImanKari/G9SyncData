@@ -454,12 +454,8 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
                 }
 
                 var sequence = Convert.ToInt64(Scalar(connection, transaction, "SELECT seq FROM g9_clock WHERE id = 1"), CultureInfo.InvariantCulture);
-                var removed = 0;
-                foreach (var (tid, rowKey) in released)
-                {
-                    var table = _byLocal.Values.FirstOrDefault(t => t.Tid == tid);
-                    if (table is not null && DisposeReleasedRow(connection, transaction, table, rowKey, reason, key, ++sequence, report)) removed++;
-                }
+                // Set-based under the default policy (a released site is often hundreds of thousands of rows), row by row otherwise.
+                var removed = DisposeReleasedRows(connection, transaction, released, reason, key, ref sequence, report);
 
                 Exec(connection, transaction, "UPDATE g9_clock SET seq = $s WHERE id = 1", ("$s", sequence));
                 LogSubscriptionRemoved(_logger, key, removed);

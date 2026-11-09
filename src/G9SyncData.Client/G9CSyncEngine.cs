@@ -323,6 +323,38 @@ public sealed partial class G9CSyncEngine : IAsyncDisposable
         return await _store.RevertRejectedAsync(localTable, key, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    ///     Has the next sync fetch these rows again and overwrite their local values with the server's (all of a table, or the given
+    ///     keys) - for a server whose READ of a column changed while the rows did not, e.g. a column it now serves empty. Only clean
+    ///     rows a subscription holds; a row with a pending change, a rejection or a delete is left alone. Nothing is uploaded. The
+    ///     subscriptions holding the rows are marked <see cref="G9ESubscriptionState.NeedsReconcile" />, so their next sync of any
+    ///     kind does it, offline in between or not.
+    /// </summary>
+    public async Task<int> RefetchRowsAsync(string localTable, IReadOnlyCollection<string>? keys = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localTable);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        return await _store.RefetchRowsAsync(localTable, keys, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    ///     Removes rows of one table (all of them, or <paramref name="keys" />) that no subscription holds and the server never claimed -
+    ///     rows the device adopted from its own tables when it first synced (a database that synced another way before) and that no
+    ///     subscription has confirmed since: the sites a user may no longer open, the office's deletes it never heard of. Locally only:
+    ///     capture is off, nothing is uploaded. Rows with a pending change stay unless <paramref name="includePending" /> (then the
+    ///     revocation policy decides; by default they are quarantined, never lost). Raises <see cref="RowsApplied" /> when anything left.
+    ///     See <see cref="IG9SyncClientStore.ReleaseUnclaimedRowsAsync" />.
+    /// </summary>
+    public async Task<G9CApplyReport> ReleaseUnclaimedRowsAsync(string localTable, IReadOnlyCollection<string>? keys = null, bool includePending = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localTable);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        var report = await _store.ReleaseUnclaimedRowsAsync(localTable, keys, includePending, cancellationToken).ConfigureAwait(false);
+        if (report.RevokedDeleted + report.RevokedQuarantined + report.RevokedRetained > 0) RaiseRowsApplied(report, G9ESyncPhase.PostStep);
+        return report;
+    }
+
     /// <summary>Local change feed for one table (downloaded and local changes), ordered by local sequence.</summary>
     public async Task<IReadOnlyList<G9CChangeFeedEntry>> ReadChangeFeedAsync(string localTable, long afterSequence, int limit = 1000,
         CancellationToken cancellationToken = default)

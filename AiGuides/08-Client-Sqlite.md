@@ -113,6 +113,16 @@ Local names may not start with `g9_`. The app must never write `g9_*` tables.
 - `g9_quarantine (tid, pk, reason, rule, row_json, had_pending, dirty_mask, at_utc)` — values as JSON (blobs as `{"$b64": …}`);
   `g9_revoked (tid, pk, disposition, reason, rule, at_utc)` for marked and retained rows.
 - `MoveOut` (policy `Delete`) and `RemoveSubscriptionAsync` call `DisposeReleasedRow` for rows with `subs = 0` — pending changes included.
+- **Many rows at once: `DisposeReleasedRows`** (`G9CSqliteSyncStore.Release.cs`, 1.5.17 — the TypeScript store's
+  `disposeReleasedRowsBySet`). Under the default policy (no rules) a CLEAN row (no subscription, no pending change, no pending
+  command) is deleted whatever its values, so those rows go through `temp.g9_dispose` (tid, pk, walk position, kind) in a few set
+  statements per table; every other row is decided by `DisposeReleasedRow` at its place in the walk. Each row of a known table
+  takes the next sequence number, so the database is the row-by-row one, tombstones' `local_seq` included. Used by
+  `RemoveSubscriptionAsync` and `ReleaseUnclaimedRowsAsync`. ⛔ The rows go in as ONE JSON array of `"tid,ord,key"` strings (key
+  last): two arrays joined on their position is a join without an index — 20,000 rows took 10 s.
+- **`ReleaseUnclaimedRowsAsync`** selects `subs = 0 AND deleted = 0 AND server_ver = 0 AND rejected = 0` (and `dirty = 0` unless
+  `includePending`), not in `g9_revoked`, `g9_quarantine` or `g9_ephemeral_rows`, no pending command; `applying = 1` for the
+  whole transaction (a release is never captured as a delete). Idempotent.
 - Upserts clear a row's revoked mark only when `g9_revoked` is non-empty (checked once per apply), so large pulls pay nothing.
 - `ReevaluateRetainedAsync` (end of every run): clears marks of rows held again, deletes `Retain` rows whose condition released them.
 

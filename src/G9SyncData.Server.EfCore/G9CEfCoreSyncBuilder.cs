@@ -60,6 +60,33 @@ public sealed class G9CEfCoreEntityBuilder
     internal IReadOnlyCollection<string> Excluded => _excluded;
     internal IReadOnlyDictionary<string, G9CEfCorePropertyBuilder> Properties => _properties;
 
+    /// <summary>The allow-list set by <see cref="OnlyColumns" />, or null when every property not excluded is synced.</summary>
+    internal IReadOnlyCollection<string>? Kept => _kept;
+
+    private HashSet<string>? _kept;
+
+    /// <summary>
+    ///     Syncs ONLY these properties (by CLR property name, member path or column name) besides the key; every other property -
+    ///     including one the entity gains later - stays on the server. For a table that holds personal or business data the device
+    ///     does not show: an exclusion list leaks every column added after it was written, an allow-list cannot.
+    /// </summary>
+    /// <remarks>
+    ///     The server serves whatever columns a device DECLARES out of the table's sync model, so a column in the model is a column any
+    ///     signed-in client can read, whatever the app's own mirror holds. Calling this again adds to the list.
+    /// </remarks>
+    public G9CEfCoreEntityBuilder OnlyColumns(params string[] propertyNames)
+    {
+        ArgumentNullException.ThrowIfNull(propertyNames);
+        _kept ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in propertyNames)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+            _kept.Add(name);
+        }
+
+        return this;
+    }
+
     /// <summary>Keeps these properties (by CLR property name or column name) out of the sync model entirely.</summary>
     public G9CEfCoreEntityBuilder Exclude(params string[] propertyNames)
     {

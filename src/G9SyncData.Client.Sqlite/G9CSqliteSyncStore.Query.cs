@@ -615,6 +615,51 @@ public sealed partial class G9CSqliteSyncStore
         }
     }
 
+    public async Task<int> RefetchRowsAsync(string localTable, IReadOnlyCollection<string>? keys, CancellationToken cancellationToken)
+    {
+        EnsureInitialized();
+        var table = GetLocal(localTable);
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+            using var transaction = connection.BeginTransaction(deferred: false);
+            const string clean = "tid = $t AND dirty = 0 AND rejected = 0 AND deleted = 0 AND subs <> 0";
+            var marked = 0;
+            long holders = 0;
+            IEnumerable<string[]?> chunks = keys is null
+                ? new string[]?[] { null }
+                : keys.Select(k => G9CSyncKey.TryNormalize(table.Model.KeyType, k, out var canonical) ? canonical : k).Chunk(5000).Select(c => (string[]?)c);
+            foreach (var chunk in chunks)
+            {
+                var where = clean + (chunk is null ? string.Empty : " AND pk IN (SELECT value FROM json_each($keys))");
+                var json = chunk is null ? null : JsonSerializer.Serialize(chunk.ToList(), G9SyncClientJsonContext.Default.ListString);
+                (string, object?)[] parameters = json is null ? [("$t", table.Tid)] : [("$t", table.Tid), ("$keys", json)];
+                using (var command = Command(connection, transaction, "SELECT DISTINCT subs FROM g9_rows WHERE " + where))
+                {
+                    foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value);
+                    using var reader = command.ExecuteReader();
+                    while (reader.Read()) holders |= reader.GetInt64(0);
+                }
+
+                marked += Exec(connection, transaction, "UPDATE g9_rows SET server_ver = -1 WHERE " + where, parameters);
+            }
+
+            if (holders != 0)
+            {
+                Exec(connection, transaction, "UPDATE g9_subscriptions SET state = $needs WHERE ((($subs >> slot) & 1) = 1)",
+                    ("$subs", holders), ("$needs", (int)G9ESubscriptionState.NeedsReconcile));
+            }
+
+            transaction.Commit();
+            return marked;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
     public async Task<int> MarkDirtyAsync(string localTable, IReadOnlyCollection<string> keys, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(keys);

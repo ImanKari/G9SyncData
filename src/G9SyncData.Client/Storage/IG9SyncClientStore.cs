@@ -230,6 +230,27 @@ public interface IG9SyncClientStore : IAsyncDisposable
     /// </summary>
     Task<int> RevertRejectedAsync(string? localTable, string? key, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Has the next sync fetch these rows again (all of a table, or the given keys) and overwrite their local values with the
+    ///     server's: every CLEAN row a subscription holds gets <c>server_ver = -1</c> (a version no server issues, LES-0070) and its
+    ///     subscriptions become <see cref="G9ESubscriptionState.NeedsReconcile" />. For a server whose READ of a column changed
+    ///     while the rows did not (a column now served empty): the digest hashes (key, version), not the values, so nothing else
+    ///     would ever replace what a device already holds. A row with a pending change, a rejection or a delete is left alone.
+    ///     Nothing is uploaded.
+    /// </summary>
+    Task<int> RefetchRowsAsync(string localTable, IReadOnlyCollection<string>? keys, CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     Disposes rows of one table (all of them, or the given keys) that NO subscription holds and the server never claimed
+    ///     (<c>server_ver = 0</c>: adopted from the app's own table, never confirmed by a pull or a push), through the revocation policy
+    ///     with <see cref="G9ERevocationReason.Unclaimed" />. Capture is off: nothing is ever uploaded, least of all a delete. A row
+    ///     already decided (revoked, quarantined, rejected), an ephemeral member and a row a pending command touches are left alone; a
+    ///     row with a pending change too, unless <paramref name="includePending" /> - then the policy decides (the default policy
+    ///     quarantines it: kept, restorable, never uploaded). ⛔ A row the device created and has not uploaded yet looks exactly like an
+    ///     adopted row with a pending change, so pass <paramref name="includePending" /> only with keys the application chose.
+    /// </summary>
+    Task<G9CApplyReport> ReleaseUnclaimedRowsAsync(string localTable, IReadOnlyCollection<string>? keys, bool includePending, CancellationToken cancellationToken);
+
     /// <summary>Flags existing local rows as changed (full column mask), e.g. to import pending edits from another sync system.</summary>
     Task<int> MarkDirtyAsync(string localTable, IReadOnlyCollection<string> keys, CancellationToken cancellationToken);
 
