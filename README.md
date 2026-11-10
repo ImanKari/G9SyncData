@@ -23,6 +23,13 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.20
+
+- **The TypeScript engine has `refetchRows` and `releaseUnclaimedRows`** (LES-0091): the twins of the two 1.5.19 methods below,
+  which shipped in .NET only. Same rows, same SQL, the same report and RowsApplied event; `G9ERevocationReason.Unclaimed` (4).
+  A Lynx app can now fetch again the rows a server started serving with empty columns. No .NET change: the NuGet packages move to
+  1.5.20 only because the family releases together.
+
 ## What's new in 1.5.19
 
 - **Releasing rows no subscription ever claimed** (`G9CSyncEngine.ReleaseUnclaimedRowsAsync(table, keys?, includePending)`, LES-0090).
