@@ -116,7 +116,7 @@ public.
 
 ### Releasing by hand (when the pipeline cannot run)
 
-Used for 1.5.2 – 1.5.12 (2026-10-22 – 2026-10-26) and again from 1.5.16 (1.5.19 on 2026-11-09: builds 711–720 all failed on
+Used for 1.5.2 – 1.5.12 (2026-10-22 – 2026-10-26) and again from 1.5.16 (1.5.20 on 2026-11-10: build 725 failed the same way; 1.5.19 on 2026-11-09: builds 711–720 all failed on
 the Azure limit — `GET _apis/build/builds` with the Azure PAT shows it at once): the Azure DevOps free minutes were used up. The
 same steps as the pipeline, in its order. ⛔ Before the bump, `git fetch`: a commit that waited locally for a release found
 1.5.17 and 1.5.18 already published from another line of work — rebase and take the next FREE number. The clone folder of an
