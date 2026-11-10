@@ -453,6 +453,11 @@ export const G9ERevocationReason = {
   Unsubscribed: 1,
   Expired: 2,
   AccessRevoked: 3,
+  /**
+   * A row the device adopted from its own table that no subscription holds and the server never confirmed, released by the
+   * application (`G9SyncEngine.releaseUnclaimedRows`, 1.5.19).
+   */
+  Unclaimed: 4,
 } as const;
 export type G9ERevocationReason = (typeof G9ERevocationReason)[keyof typeof G9ERevocationReason];
 
@@ -712,6 +717,10 @@ export interface G9SyncClientStore {
   /** Gives up the local change of rejected rows and takes the server's copy (LES-0070); run a forced reconcile after it. */
   revertRejected(localTable: string | null, key: string | null, signal?: AbortSignal): Promise<number>;
   markDirty(localTable: string, keys: readonly string[], signal?: AbortSignal): Promise<number>;
+  /** `RefetchRowsAsync` (1.5.19): clean held rows get `server_ver = -1` and their subscriptions NeedsReconcile. Returns the rows marked. */
+  refetchRows(localTable: string, keys: readonly string[] | null, signal?: AbortSignal): Promise<number>;
+  /** `ReleaseUnclaimedRowsAsync` (1.5.19): disposes adopted rows nothing holds and the server never claimed, capture off. */
+  releaseUnclaimedRows(localTable: string, keys: readonly string[] | null, includePending: boolean, signal?: AbortSignal): Promise<G9ApplyReport>;
   adoptExistingRows(signal?: AbortSignal): Promise<number>;
   saveRunReport(report: G9SyncRunReport, keep: number, signal?: AbortSignal): Promise<void>;
   getRecentRunReports(count: number, signal?: AbortSignal): Promise<G9SyncRunReport[]>;

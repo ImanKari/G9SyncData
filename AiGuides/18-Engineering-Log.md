@@ -1002,3 +1002,14 @@ Three findings of one review of an application that moved to G9SyncData from ano
 The .NET store also got the 1.5.16 set disposal (LES-0089): 20,000 rows 1,257 ms → 380 ms, 200,000 rows 6.0 s. Its first version
 put the rows in as two JSON arrays joined on their position - a join without an index, quadratic: 20,000 rows took 9.9 s. One array
 of `"tid,ord,key"` strings fixed it. Lesson: a table-valued function has no index - never join two of them.
+
+## LES-0091 — 2026-11-10 · 1.5.19 shipped two engine methods without their TypeScript twins
+
+`RefetchRowsAsync` and `ReleaseUnclaimedRowsAsync` (LES-0090) went out in .NET only; `PARITY.md` did not list them and nothing
+failed, because no test compares the two engines' public surface. The Lynx app (which consumes `@g9tm/syncdata`) holds `User`,
+`Company` and `Person` rows downloaded before the server started serving login names and legal ids empty, and had no way to fetch
+them again. 1.5.20 adds `refetchRows` / `releaseUnclaimedRows` (`src/sqlite/revocation.ts`, `test/refetchAndRelease.test.ts`,
+`test/engine.test.ts`), same SQL, same selection, same report and event, and `G9ERevocationReason.Unclaimed` (4). The .NET holder
+bitmask is one `UPDATE … WHERE EXISTS (… (subs >> slot) & 1)` in TypeScript (one statement instead of a read and an OR across a
+bridge). Lesson: an engine method added in .NET is not released until its twin is — step 3 of chapter 21 «Adding something» is
+not optional, and a release checks `PARITY.md` for the methods it adds.

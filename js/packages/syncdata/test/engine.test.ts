@@ -232,3 +232,29 @@ describe('G9SyncEngine (scripted transport)', () => {
     expect([result.pushed, result.accepted, result.rejected]).toEqual([2, 1, 1]);
   });
 });
+
+describe('G9SyncEngine refetchRows / releaseUnclaimedRows (1.5.19)', () => {
+  const key = '6f1c2a7e-3b4d-4e5f-8a9b-0c1d2e3f4a51';
+
+  it('refuses a blank table name and passes the rest to the store', async () => {
+    const { engine } = await setup();
+    await expect(engine.refetchRows('')).rejects.toThrow('localTable');
+    await expect(engine.refetchRows('  ')).rejects.toThrow('localTable');
+    await expect(engine.releaseUnclaimedRows('')).rejects.toThrow('localTable');
+    expect(await engine.refetchRows('Note')).toBe(0);
+  });
+
+  it('a release that removed something raises RowsApplied (PostStep); one that removed nothing does not', async () => {
+    const { engine, exec } = await setup();
+    const events: { deleted: number; phase: number }[] = [];
+    engine.onRowsApplied((e) => events.push({ deleted: e.report.revokedDeleted, phase: e.source }));
+    expect((await engine.releaseUnclaimedRows('Note')).revokedDeleted).toBe(0);
+    expect(events).toEqual([]);
+    await exec('UPDATE g9_ctx SET applying = 1 WHERE id = 1');
+    await exec("INSERT INTO Note (Id, Text) VALUES (?1, 'adopted')", [key]);
+    await exec('INSERT INTO g9_rows (tid, pk, server_ver, local_seq, dirty, dirty_mask, subs) VALUES (1, ?1, 0, 1, 0, 0, 0)', [key]);
+    await exec('UPDATE g9_ctx SET applying = 0 WHERE id = 1');
+    expect((await engine.releaseUnclaimedRows('Note', [key])).revokedDeleted).toBe(1);
+    expect(events).toEqual([{ deleted: 1, phase: 7 }]);
+  });
+});

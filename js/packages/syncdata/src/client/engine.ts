@@ -380,6 +380,33 @@ export class G9SyncEngine {
     return this._store.markDirty(localTable, keys, signal);
   }
 
+  /**
+   * `RefetchRowsAsync` (1.5.19): has the next sync fetch these rows again and overwrite their local values with the server's
+   * (all of a table, or `keys`) - for a server whose READ of a column changed while the rows did not, e.g. a column it now
+   * serves empty (a reconcile compares key + version, never values). Only clean rows a subscription holds; a row with a pending
+   * change, a rejection or a delete is left alone. Nothing is uploaded. Their subscriptions become NeedsReconcile, so the next
+   * sync of any kind does it, offline in between or not. Returns the rows marked.
+   */
+  async refetchRows(localTable: string, keys: readonly string[] | null = null, signal?: AbortSignal): Promise<number> {
+    if (!localTable || !localTable.trim()) throw new Error('localTable is required');
+    await this.initialize(signal);
+    return this._store.refetchRows(localTable, keys, signal);
+  }
+
+  /**
+   * `ReleaseUnclaimedRowsAsync` (1.5.19): removes rows of one table (all, or `keys`) that no subscription holds and the server
+   * never claimed (`server_ver = 0`: adopted from the device's own table, never confirmed since). Locally only: capture is off,
+   * nothing is uploaded. A row with a pending (or refused) change stays unless `includePending` - then the revocation policy
+   * decides (by default quarantined, the refusal with it). Raises RowsApplied (PostStep) when anything left.
+   */
+  async releaseUnclaimedRows(localTable: string, keys: readonly string[] | null = null, includePending = false, signal?: AbortSignal): Promise<G9ApplyReport> {
+    if (!localTable || !localTable.trim()) throw new Error('localTable is required');
+    await this.initialize(signal);
+    const report = await this._store.releaseUnclaimedRows(localTable, keys, includePending, signal);
+    if (report.revokedDeleted + report.revokedQuarantined + report.revokedRetained > 0) this._raiseRowsApplied(report, G9ESyncPhase.PostStep);
+    return report;
+  }
+
   async getHealth(signal?: AbortSignal): Promise<G9SyncHealth> {
     await this.initialize(signal);
     const state = await this._store.getServerState(signal);

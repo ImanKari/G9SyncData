@@ -6,6 +6,7 @@
 // clock afterwards (unconditionally, like the .NET store's `++sequence`).
 import { G9ESyncColumnType } from '../abstractions/enums.js';
 import { G9Long } from '../abstractions/long.js';
+import { G9SyncKey } from '../abstractions/key.js';
 import {
   G9ApplyReport,
   G9ERevocationDisposition,
@@ -445,6 +446,91 @@ export async function revertRejected(store: StoreInternals, localTable: string |
       return rows.length;
     }),
   );
+}
+
+/** Canonical keys of `keys` (a GUID key in any spelling finds its row), distinct, as JSON pages of 5000; `[null]` = the whole table. */
+function keyPages(table: LocalTable, keys: readonly string[] | null): (string | null)[] {
+  if (keys === null) return [null];
+  const canonical = [...new Set(keys.map((k) => G9SyncKey.tryNormalize(table.model.keyType, k) ?? k))];
+  const pages: string[] = [];
+  for (let i = 0; i < canonical.length; i += 5000) pages.push(JSON.stringify(canonical.slice(i, i + 5000)));
+  return pages;
+}
+
+/**
+ * `RefetchRowsAsync` (1.5.19): the next sync fetches these rows again and overwrites their values. Every CLEAN row a subscription
+ * holds (no pending change, no rejection, not deleted) gets `server_ver = -1` - a version no server issues, so the reconcile's
+ * digest differs and the apply writes the server's values and real version - and the subscriptions holding them become
+ * NeedsReconcile. Metadata only: the app's table and the change feed are untouched, nothing uploads.
+ */
+export async function refetchRows(store: StoreInternals, localTable: string, keys: readonly string[] | null): Promise<number> {
+  store.ensureInitialized();
+  const table = getLocal(store, localTable);
+  const pages = keyPages(table, keys);
+  return store.writeLock.run(() =>
+    store.writer().transaction('immediate', async () => {
+      const connection = store.writer();
+      const clean = 'tid = $t AND dirty = 0 AND rejected = 0 AND deleted = 0 AND subs <> 0';
+      let marked = 0;
+      for (const page of pages) {
+        const where = clean + (page === null ? '' : ' AND pk IN (SELECT value FROM json_each($keys))');
+        const params: G9Params = page === null ? { $t: table.tid } : { $t: table.tid, $keys: page };
+        // The holders first: every subscription with its bit in one of these rows.
+        await connection.exec(
+          `UPDATE g9_subscriptions SET state = $needs WHERE EXISTS (SELECT 1 FROM g9_rows WHERE ${where} AND ((subs >> g9_subscriptions.slot) & 1) = 1)`,
+          { ...params, $needs: G9ESubscriptionState.NeedsReconcile },
+        );
+        marked += await connection.exec('UPDATE g9_rows SET server_ver = -1 WHERE ' + where, params);
+      }
+      return marked;
+    }),
+  );
+}
+
+/**
+ * `ReleaseUnclaimedRowsAsync` (1.5.19): disposes rows of one table that no subscription holds and the server never claimed
+ * (`server_ver = 0`), not decided before (revoked, quarantined), not an ephemeral member and not in a pending command - reason
+ * Unclaimed, capture off, nothing uploads. A pending change (and a refused one) only with `includePending`: then the revocation
+ * policy decides it like any released row (the default quarantines it, the refusal with it).
+ */
+export async function releaseUnclaimedRows(store: StoreInternals, localTable: string, keys: readonly string[] | null, includePending: boolean): Promise<G9ApplyReport> {
+  store.ensureInitialized();
+  const table = getLocal(store, localTable);
+  const pages = keyPages(table, keys);
+  const report = new G9ApplyReport();
+  const where =
+    'r.tid = $t AND r.subs = 0 AND r.deleted = 0 AND r.server_ver = 0' +
+    (includePending ? '' : ' AND r.dirty = 0 AND r.rejected = 0') +
+    ' AND NOT EXISTS (SELECT 1 FROM g9_revoked v WHERE v.tid = r.tid AND v.pk = r.pk)' +
+    ' AND NOT EXISTS (SELECT 1 FROM g9_quarantine q WHERE q.tid = r.tid AND q.pk = r.pk)' +
+    ' AND NOT EXISTS (SELECT 1 FROM g9_ephemeral_rows e WHERE e.tid = r.tid AND e.pk = r.pk)' +
+    ' AND NOT EXISTS (SELECT 1 FROM g9_command_rows cr JOIN g9_commands c ON c.command_id = cr.command_id WHERE c.state = 0 AND cr.tid = r.tid AND cr.pk = r.pk)';
+  await store.writeLock.run(() =>
+    store.writer().transaction('immediate', async () => {
+      const connection = store.writer();
+      // Every page is read BEFORE anything is disposed (.NET collects the whole list first), each in key order.
+      await connection.exec('DROP TABLE IF EXISTS temp.g9_unclaimed; CREATE TEMP TABLE g9_unclaimed (n INTEGER PRIMARY KEY, tid INTEGER NOT NULL, pk TEXT NOT NULL)');
+      for (const page of pages) {
+        const byKeys = page === null ? '' : ' AND r.pk IN (SELECT value FROM json_each($keys))';
+        await connection.exec(
+          `INSERT INTO temp.g9_unclaimed (tid, pk) SELECT r.tid, r.pk FROM g9_rows r WHERE ${where}${byKeys} ORDER BY r.pk`,
+          page === null ? { $t: table.tid } : { $t: table.tid, $keys: page },
+        );
+      }
+      if (asNumber(await connection.scalar('SELECT count(*) FROM temp.g9_unclaimed')) > 0) {
+        // Capture OFF: a release is local housekeeping and must never reach the server as a delete.
+        await connection.exec('UPDATE g9_ctx SET applying = 1 WHERE id = 1');
+        const max = store.options.maxChangedKeysPerTable;
+        await disposeReleasedRows(store, connection, 'SELECT tid, pk FROM temp.g9_unclaimed ORDER BY n', {}, G9ERevocationReason.Unclaimed, null, report, (_tid, key) => {
+          const changed = report.changedKeys[table.model.localName] ?? (report.changedKeys[table.model.localName] = []);
+          if (changed.length < max) changed.push(key);
+        });
+        await connection.exec('UPDATE g9_ctx SET applying = 0 WHERE id = 1');
+      }
+      await connection.exec('DROP TABLE temp.g9_unclaimed');
+    }),
+  );
+  return report;
 }
 
 /** `RemoveLocalRow`: the row leaves the app's table; its metadata becomes a tombstone at the clock's next value. */

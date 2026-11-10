@@ -753,6 +753,14 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
     return query.markDirty(this, localTable, keys);
   }
 
+  refetchRows(localTable: string, keys: readonly string[] | null): Promise<number> {
+    return revocation.refetchRows(this, localTable, keys);
+  }
+
+  releaseUnclaimedRows(localTable: string, keys: readonly string[] | null, includePending: boolean): Promise<G9ApplyReport> {
+    return revocation.releaseUnclaimedRows(this, localTable, keys, includePending);
+  }
+
   adoptExistingRows(): Promise<number> {
     return query.adoptExistingRows(this);
   }

@@ -43,7 +43,7 @@ dotnet build G9SyncData.slnx -nologo -clp:NoSummary 2>&1 | Select-String "error|
 
 ## Versioning and packing
 
-- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.5.19`). `<Version>` only
+- One version for the family: **`<G9SyncDataVersion>` in `Directory.Build.props`** (currently `1.5.20`). `<Version>` only
   consumes it. The indirection exists so a consuming repository can pin the family from one property — in an
   application project `$(Version)` means "the app's version", not "the version of the packages it references".
 - ⛔ **The family releases TOGETHER and must never be mixed.** The protocol frame layout is negotiated across
