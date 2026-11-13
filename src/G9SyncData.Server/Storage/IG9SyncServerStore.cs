@@ -34,6 +34,41 @@ public interface IG9SyncServerStore
     /// </summary>
     Task<bool> IsSnapshotAheadAsync(string snapshot, CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Both cursor checks - <see cref="IsSnapshotAheadAsync" /> first, then <see cref="IsBeyondTombstoneHorizonAsync" /> - for every
+    ///     cursor of one request at once, answers in the order asked. A Hello or a pull plan checks every subscription the device holds;
+    ///     two round trips each made a no-change sync of a device holding 63 subscriptions take 1.4 s against 0.13 s for 3 (AgriPad
+    ///     TR-0069, 2026-11-13). The default asks the two single checks, so a store that cannot batch stays correct.
+    /// </summary>
+    async Task<IReadOnlyList<G9EStoreCursorVerdict>> CheckCursorsAsync(IReadOnlyList<G9CStoreCursorCheck> checks, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(checks);
+        var verdicts = new G9EStoreCursorVerdict[checks.Count];
+        for (var i = 0; i < checks.Count; i++)
+        {
+            verdicts[i] = await IsSnapshotAheadAsync(checks[i].Snapshot, cancellationToken).ConfigureAwait(false)
+                ? G9EStoreCursorVerdict.Ahead
+                : await IsBeyondTombstoneHorizonAsync(checks[i].Snapshot, checks[i].Tables, cancellationToken).ConfigureAwait(false)
+                    ? G9EStoreCursorVerdict.BeyondHorizon
+                    : G9EStoreCursorVerdict.Valid;
+        }
+
+        return verdicts;
+    }
+
+    /// <summary>
+    ///     For each probe, whether its table recorded ANY change a delta from <see cref="G9CStoreChangeProbe.PreviousSnapshot" /> to
+    ///     <paramref name="newSnapshot" /> would read - the delta's own visibility rule without the subscription's scope, so a false
+    ///     answer means the delta is empty for every scope. A pull plan drops those parts: estimating and reading an empty delta cost a
+    ///     query each, per table and subscription, on every sync (AgriPad TR-0069, 2026-11-13). The default answers true for every
+    ///     probe (plan everything), which is always correct.
+    /// </summary>
+    Task<IReadOnlyList<bool>> HasChangesAsync(IReadOnlyList<G9CStoreChangeProbe> probes, string newSnapshot, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(probes);
+        return Task.FromResult<IReadOnlyList<bool>>(Enumerable.Repeat(true, probes.Count).ToArray());
+    }
+
     Task TouchClientAsync(Guid clientId, string? userId, string? appVersion, CancellationToken cancellationToken);
 
     /// <summary>
@@ -181,6 +216,25 @@ public static class G9CSyncCursor
 }
 
 public sealed record G9CStorePartEstimate(long Rows, long EstimatedBytes);
+
+/// <summary>One delta to probe (<see cref="IG9SyncServerStore.HasChangesAsync" />): the table and the snapshot its cursor holds.</summary>
+public sealed record G9CStoreChangeProbe(G9CSyncServerTable Table, string PreviousSnapshot);
+
+/// <summary>One cursor to check (<see cref="IG9SyncServerStore.CheckCursorsAsync" />): its snapshot and the tables its subscription reads.</summary>
+public sealed record G9CStoreCursorCheck(string Snapshot, IReadOnlyCollection<G9CSyncServerTable> Tables);
+
+/// <summary>What <see cref="IG9SyncServerStore.CheckCursorsAsync" /> found for one cursor.</summary>
+public enum G9EStoreCursorVerdict
+{
+    /// <summary>A delta from it is complete.</summary>
+    Valid,
+
+    /// <summary>The snapshot is newer than the database (<see cref="IG9SyncServerStore.IsSnapshotAheadAsync" />).</summary>
+    Ahead,
+
+    /// <summary>Deletes it has not seen were purged (<see cref="IG9SyncServerStore.IsBeyondTombstoneHorizonAsync" />).</summary>
+    BeyondHorizon
+}
 
 /// <summary>One page of rows as a G9RowBatch frame. <see cref="LastKey" /> is the canonical key of the last row (resume point).</summary>
 public sealed record G9CStorePage(byte[] Frame, int RowCount, string? LastKey, bool IsLast);

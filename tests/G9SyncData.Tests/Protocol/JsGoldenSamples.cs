@@ -70,7 +70,13 @@ internal static class JsGoldenSamples
         ],
         Subscriptions = [new G9DtSubscriptionState { Key = "Site?siteId=0f8fad5b-d9cb-469f-a165-70867728950e", Action = G9ESubscriptionAction.Reconcile, DefinitionHash = "def1", AuthHash = "auth1", Message = "changed" }],
         MaxPushRows = 5000,
-        MaxPushBytes = 4_000_000_000
+        MaxPushBytes = 4_000_000_000,
+        ModelHash = "model1",
+        ModelRequired = false,
+        TablesHash = "tables1",
+        TablesUnchanged = false,
+        DefinitionsHash = "defs1",
+        DefinitionsUnchanged = true
     };
 
     public static G9DtPushResult PushResult() => new()
@@ -163,7 +169,9 @@ internal static class JsGoldenSamples
                 Columns = [new G9DtColumnModel { Name = "Code", Type = G9ESyncColumnType.String, Nullable = false }, new G9DtColumnModel { Name = "Weight", Type = G9ESyncColumnType.Decimal, Nullable = true }]
             }
         ],
-        Subscriptions = [Subscription()]
+        Subscriptions = [Subscription()],
+        KnownTablesHash = "tables0",
+        KnownDefinitionsHash = "defs0"
     };
 
     public static G9DtPushRequest PushRequest() => new()

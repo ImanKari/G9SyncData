@@ -79,6 +79,13 @@ it). This file maps every .NET piece to its twin and lists every deliberate diff
   would hand out, in model order) so its triggers are written in the same batch. Same objects, rows, tids and counter
   (`test/provision.test.ts` compares both paths on fresh, reopened, evolved and repaired databases). AgriPad's 47 tables:
   14 driver calls on every start instead of 296, 17 instead of 534 on the first.
+- **Hello sends the model once per connection (1.5.21).** `G9CSignalRSyncTransport.HelloAsync` / `G9SignalRSyncTransport.hello`
+  strip the tables on a later Hello of the same connection (`_modelOnConnection`, keyed by the connection id and the engine's one
+  model list/array) and resend them inside the call on `ModelRequired`; the engines keep the last answer in memory
+  (`G9CSyncEngine.HelloCache` / `_lastAnswer`), send `KnownTablesHash` / `KnownDefinitionsHash` and put back what an "unchanged"
+  answer left out (`RestoreUnchanged` / `restoreUnchanged`); both stores skip `definitions_json`, `tables_json` and the per-table
+  updates of an unchanged answer. Tests: `HelloModelOnceTests` / `test/transportModelOnce.test.ts`; the golden Hello samples carry
+  the six new fields.
 - **Per-run bookkeeping.** `saveHello` writes the meta rows, the definitions' move-out policies and every negotiated
   table (with its capture triggers) in ONE batch, after one read for the only per-table question (does a table with
   newly negotiated columns hold rows?); the rows an apply protects (`readRowsChangedAfter`) are read with one

@@ -37,6 +37,8 @@ export function helloRequest(): G9DtHelloRequest {
       },
     ],
     subscriptions: [subscription()],
+    knownTablesHash: 'tables0',
+    knownDefinitionsHash: 'defs0',
   };
 }
 

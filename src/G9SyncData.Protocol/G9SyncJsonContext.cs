@@ -30,6 +30,8 @@ namespace G9SyncData.Protocol;
 [JsonSerializable(typeof(G9DtPlannedFile))]
 [JsonSerializable(typeof(List<G9DtSubscriptionDefinition>))]
 [JsonSerializable(typeof(List<G9DtNegotiatedTable>))]
+[JsonSerializable(typeof(List<G9DtClientTableModel>))]
+[JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(List<G9DtSubscriptionCursor>))]
 [JsonSerializable(typeof(List<G9DtPlannedPart>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]

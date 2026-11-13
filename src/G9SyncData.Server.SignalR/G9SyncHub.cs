@@ -34,10 +34,13 @@ public sealed partial class G9SyncHub : G9AHubBase<G9SyncHub, IG9SyncHubListener
 
     public async Task<G9DtHelloResult> Hello(G9DtHelloRequest request)
     {
-        var result = await GuardAsync(G9SyncProtocol.Methods.Hello, ct => _engine.HelloAsync(CreateCaller(), request, ct)).ConfigureAwait(false);
+        // The negotiated tables, not result.Tables: an answer to a client that holds them leaves them out (TablesUnchanged, 1.5.21).
+        IReadOnlyList<G9DtNegotiatedTable> negotiated = [];
+        var result = await GuardAsync(G9SyncProtocol.Methods.Hello, ct => _engine.HelloAsync(CreateCaller(), request, tables => negotiated = tables, ct))
+            .ConfigureAwait(false);
         if (_options.EnablePokes && result.Error is null)
         {
-            foreach (var table in result.Tables.Where(t => t.Direction != G9ESyncDirection.UploadOnly))   // nothing to download, nothing to poke
+            foreach (var table in negotiated.Where(t => t.Direction != G9ESyncDirection.UploadOnly))   // nothing to download, nothing to poke
             {
                 await Groups.AddToGroupAsync(Context.ConnectionId, G9SyncProtocol.TableGroup(table.Name), Context.ConnectionAborted).ConfigureAwait(false);
             }

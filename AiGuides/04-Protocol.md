@@ -21,6 +21,39 @@ omitted); row data travels as binary **G9RowBatch** frames inside `G9DtSyncChunk
 | **FetchRows** | `G9DtFetchRowsRequest { ClientId, Subscription, TableId, Keys, Columns }` → stream of `Upsert` chunks, final chunk | rows filtered by the subscription's scope and When |
 | **OnChangesAvailable** (server → client) | `G9DtChangesAvailable { Tables }` | a hint only |
 
+### Hello sends the model once per connection (1.5.21, AgriPad TR-0069)
+
+A device sent its whole model (AgriPad: 50 tables, 539 columns, ~30 KB) with EVERY Hello, the server negotiated it again, and the
+answer carried every negotiated table and definition back, which the device decoded and saved again — on every sync, on a phone.
+
+| Field | Side | Meaning |
+|---|---|---|
+| `ModelHash` (result) | server → client | the server's id of the client model it negotiated (SHA-256 of its JSON, 32 hex). Null from an older server |
+| `ModelHash` (request) | client → server | sent INSTEAD of `Tables` (empty) on a later Hello of the SAME connection with the same model |
+| `ModelRequired` | server → client | the server does not hold that model (it restarted): nothing else in the answer counts; the transport sends the Hello again WITH the tables, inside the same call |
+| `TablesHash` / `DefinitionsHash` | server → client | ids of the negotiated tables (+ unknown tables) and of the definitions this caller is shown |
+| `KnownTablesHash` / `KnownDefinitionsHash` | client → server | the ids of what the client holds (from the last answer, in memory) |
+| `TablesUnchanged` / `DefinitionsUnchanged` | server → client | the known id is the server's: `Tables` + `UnknownTables` / `Definitions` are sent EMPTY; the engine puts its kept copy back before anything reads the answer, and the store does not write them again |
+
+- **The transport decides**, not the engine (`G9CSignalRSyncTransport.HelloAsync` / `G9SignalRSyncTransport.hello`): it strips the
+  tables only when this connection already sent this very list (the engine builds it once) and got an id back. ⛔ A NEW connection —
+  a reconnect included — always starts with the full model; the rejoin after an automatic reconnect (LES-0087) sends the full Hello.
+- ⛔ **The hub joins the poke groups from the negotiated tables, not from `result.Tables`**: an "unchanged" answer has none
+  (`HelloAsync(caller, request, onNegotiated, ct)`). `HelloModelOnceTests` proves a poke still arrives after a reconnect.
+- The server negotiates a model once per process (`G9CNegotiatedModel`, at most 64 kept); every device of one app build sends the
+  same model. An older client (no ids) is answered exactly as before; an older server never gives an id, so it is never sent one.
+
+### Cursor checks and quiet parts (1.5.21, TR-0069)
+
+- Hello and PlanPull check every cursor of the request in ONE store call (`IG9SyncServerStore.CheckCursorsAsync`): "ahead of the
+  database" then "beyond the tombstone horizon", the same predicates and order as the single checks, answered per cursor. Until
+  1.5.21 that was two database round trips per subscription.
+- PlanPull drops every DELTA part whose table recorded no change since the part's cursor (`HasChangesAsync`: the delta's own
+  visibility predicate on the tracking rows, without the scope — so "no change" means the delta is empty for every scope). The
+  subscription's cursor still advances (it is in `Cursors`, not in `Parts`), exactly as an empty delta advances it. Snapshots and
+  backfills are never dropped. Measured on AgriPad's server: a no-change sync of a device holding 63 subscriptions 1,423 ms → 50 ms,
+  of one holding 3 129 ms → 44 ms (`QuietDeltaTests`, `CursorBatchTests`).
+
 ### Subscription decisions (`G9ESubscriptionAction`)
 
 `Ok` (delta) · `Initial` (no cursor: snapshot) · `Reconcile` (definition or auth hash changed) · `ResyncRequired` (epoch

@@ -256,6 +256,12 @@ export function readHelloResult(value: unknown): G9DtHelloResult {
     maxPushRows: num(v.maxPushRows),
     maxPushBytes: num(v.maxPushBytes),
     error: readSyncError(v.error),
+    modelHash: optStr(v.modelHash),
+    modelRequired: bool(v.modelRequired),
+    tablesHash: optStr(v.tablesHash),
+    tablesUnchanged: bool(v.tablesUnchanged),
+    definitionsHash: optStr(v.definitionsHash),
+    definitionsUnchanged: bool(v.definitionsUnchanged),
   };
 }
 

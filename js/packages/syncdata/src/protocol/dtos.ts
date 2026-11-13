@@ -110,6 +110,12 @@ export interface G9DtHelloRequest {
   protocolVersion: number;
   tables: G9DtClientTableModel[];
   subscriptions: G9DtSubscriptionRef[];
+  /** Instead of `tables` (sent empty): the server's id of the same model, given earlier on THIS connection (1.5.21). */
+  modelHash?: string | null;
+  /** The `tablesHash` of the negotiated tables the client holds: the same on the server → `tablesUnchanged` (1.5.21). */
+  knownTablesHash?: string | null;
+  /** The `definitionsHash` of the definitions the client holds: the same on the server → `definitionsUnchanged` (1.5.21). */
+  knownDefinitionsHash?: string | null;
 }
 
 export interface G9DtColumnTypeMismatch {
@@ -178,6 +184,16 @@ export interface G9DtHelloResult {
   maxPushRows: number;
   maxPushBytes: number;
   error?: G9DtSyncError | null;
+  /** The server's id of the client model this Hello was negotiated from (1.5.21); null from an older server. */
+  modelHash?: string | null;
+  /** The request named a model the server no longer holds: send the Hello again WITH the tables (1.5.21). */
+  modelRequired?: boolean;
+  tablesHash?: string | null;
+  /** `tables` and `unknownTables` were left out: the client holds them (1.5.21). */
+  tablesUnchanged?: boolean;
+  definitionsHash?: string | null;
+  /** `definitions` was left out: the client holds it (1.5.21). */
+  definitionsUnchanged?: boolean;
 }
 
 // ---------------------------------------------------------------- push / pull

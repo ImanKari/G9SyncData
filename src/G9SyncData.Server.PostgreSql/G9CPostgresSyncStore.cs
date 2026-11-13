@@ -683,6 +683,77 @@ public sealed partial class G9CPostgresSyncStore : IG9SyncServerStore
     }
 
     /// <summary>
+    ///     Every cursor of one Hello or pull plan in ONE query (TR-0069): the same two predicates as <see cref="IsSnapshotAheadAsync" />
+    ///     and <see cref="IsBeyondTombstoneHorizonAsync" />, row by row of an <c>unnest</c>. An unreadable snapshot fails the cast for the
+    ///     whole query; then each cursor is asked alone, so only that one is "ahead" (the single check's answer to an unreadable one).
+    /// </summary>
+    public async Task<IReadOnlyList<G9EStoreCursorVerdict>> CheckCursorsAsync(IReadOnlyList<G9CStoreCursorCheck> checks, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(checks);
+        EnsureInitialized();
+        if (checks.Count == 0) return [];
+        var snapshots = new string[checks.Count];
+        var ords = new List<long>();
+        var ids = new List<int>();
+        for (var i = 0; i < checks.Count; i++)
+        {
+            snapshots[i] = checks[i].Snapshot;
+            foreach (var table in checks[i].Tables)
+            {
+                ords.Add(i + 1);
+                ids.Add(Get(table).TableId);
+            }
+        }
+
+        try
+        {
+            await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            await using var command = Command(connection, null,
+                $"""
+                 WITH c AS (SELECT u.ord, u.snap::pg_snapshot AS s FROM unnest(@g9_snaps::text[]) WITH ORDINALITY AS u(snap, ord))
+                 SELECT c.ord,
+                        pg_snapshot_xmax(c.s) > pg_snapshot_xmax(pg_current_snapshot()),
+                        coalesce((SELECT bool_or(t.max_removed_xid IS NOT NULL AND (
+                                     NOT pg_visible_in_snapshot(t.max_removed_xid, c.s)
+                                     OR EXISTS (SELECT 1 FROM pg_snapshot_xip(c.s) AS x(xid)
+                                                WHERE x.xid <= t.max_removed_xid AND coalesce(pg_xact_status(x.xid), 'committed') = 'committed')))
+                                  FROM {_schema}.tables AS t
+                                  JOIN unnest(@g9_ords::bigint[], @g9_ids::int[]) AS p(ord, tid) ON p.tid = t.table_id
+                                  WHERE p.ord = c.ord), false)
+                 FROM c ORDER BY c.ord
+                 """);
+            command.Parameters.Add(P("g9_snaps", NpgsqlDbType.Array | NpgsqlDbType.Text, snapshots));
+            command.Parameters.Add(P("g9_ords", NpgsqlDbType.Array | NpgsqlDbType.Bigint, ords.ToArray()));
+            command.Parameters.Add(P("g9_ids", NpgsqlDbType.Array | NpgsqlDbType.Integer, ids.ToArray()));
+            var verdicts = new G9EStoreCursorVerdict[checks.Count];
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var index = (int)reader.GetInt64(0) - 1;
+                verdicts[index] = reader.GetBoolean(1) ? G9EStoreCursorVerdict.Ahead
+                    : reader.GetBoolean(2) ? G9EStoreCursorVerdict.BeyondHorizon
+                    : G9EStoreCursorVerdict.Valid;
+            }
+
+            return verdicts;
+        }
+        catch (PostgresException exception) when (exception.SqlState is PostgresErrorCodes.InvalidTextRepresentation or PostgresErrorCodes.InvalidParameterValue)
+        {
+            var verdicts = new G9EStoreCursorVerdict[checks.Count];
+            for (var i = 0; i < checks.Count; i++)
+            {
+                verdicts[i] = await IsSnapshotAheadAsync(checks[i].Snapshot, cancellationToken).ConfigureAwait(false)
+                    ? G9EStoreCursorVerdict.Ahead
+                    : await IsBeyondTombstoneHorizonAsync(checks[i].Snapshot, checks[i].Tables, cancellationToken).ConfigureAwait(false)
+                        ? G9EStoreCursorVerdict.BeyondHorizon
+                        : G9EStoreCursorVerdict.Valid;
+            }
+
+            return verdicts;
+        }
+    }
+
+    /// <summary>
     ///     Records the device and binds it to the caller. The first authenticated use claims it; later uses must match, because handing a
     ///     device record to whoever quotes its id would hand over the push receipt stored on it too (ADR-0047).
     /// </summary>

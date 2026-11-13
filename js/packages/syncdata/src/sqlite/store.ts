@@ -356,8 +356,9 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
         batch.add(metaUpsert, { $k: 'epoch', $v: hello.epoch });
         batch.add(metaUpsert, { $k: 'last_hello_utc', $v: String(nowMs()) });
         batch.add(metaUpsert, { $k: 'server_offset_ms', $v: String(Math.trunc(hello.serverTimeUtcMs - midpoint)) });
-        batch.add(metaUpsert, { $k: 'definitions_json', $v: persistedJson(hello.definitions) });
-        batch.add(metaUpsert, { $k: 'tables_json', $v: persistedJson(hello.tables) });
+        // An "unchanged" answer (1.5.21, TR-0069) carries what this store already holds: the engine put it back, nothing to write.
+        if (!hello.definitionsUnchanged) batch.add(metaUpsert, { $k: 'definitions_json', $v: persistedJson(hello.definitions) });
+        if (!hello.tablesUnchanged) batch.add(metaUpsert, { $k: 'tables_json', $v: persistedJson(hello.tables) });
         // Kept per subscription: a caller who loses access stops being told the definition (ADR-0048).
         for (const definition of hello.definitions) {
           batch.add('UPDATE g9_subscriptions SET move_out_policy = $p WHERE name = $n', { $p: definition.moveOutPolicy, $n: definition.name });
@@ -365,7 +366,7 @@ export class G9SqliteSyncStore implements G9SyncClientStore, StoreInternals {
 
         // Which tables get new columns, and which of those already hold rows: one read for all of them.
         const resolved: { local: LocalTable; negotiated: G9DtNegotiatedTable; names: string[]; added: string[] }[] = [];
-        for (const negotiated of hello.tables) {
+        for (const negotiated of hello.tablesUnchanged ? [] : hello.tables) {
           const clientTable = model.findByServerName(negotiated.name);
           const local = clientTable ? this.byLocal.get(clientTable.localName.toLowerCase()) : undefined;
           if (!local) continue;

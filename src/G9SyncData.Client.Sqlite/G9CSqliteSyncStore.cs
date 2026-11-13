@@ -249,8 +249,16 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             SetMeta(connection, transaction, "epoch", hello.Epoch.ToString("D"));
             SetMeta(connection, transaction, "last_hello_utc", NowMs().ToString(CultureInfo.InvariantCulture));
             SetMeta(connection, transaction, "server_offset_ms", ((long)(hello.ServerTimeUtc - localMidpointUtc).TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
-            SetMeta(connection, transaction, "definitions_json", JsonSerializer.Serialize(hello.Definitions, G9SyncJsonContext.Default.ListG9DtSubscriptionDefinition));
-            SetMeta(connection, transaction, "tables_json", JsonSerializer.Serialize(hello.Tables, G9SyncJsonContext.Default.ListG9DtNegotiatedTable));
+            // An "unchanged" answer (1.5.21, TR-0069) carries what this store already holds: the engine put it back, nothing to write.
+            if (!hello.DefinitionsUnchanged)
+            {
+                SetMeta(connection, transaction, "definitions_json", JsonSerializer.Serialize(hello.Definitions, G9SyncJsonContext.Default.ListG9DtSubscriptionDefinition));
+            }
+
+            if (!hello.TablesUnchanged)
+            {
+                SetMeta(connection, transaction, "tables_json", JsonSerializer.Serialize(hello.Tables, G9SyncJsonContext.Default.ListG9DtNegotiatedTable));
+            }
 
             // Kept per subscription, not only in the definition list: a caller who loses access stops being told the definition, and the
             // rows still have to be disposed of the way the server said to dispose of them (ADR-0048).
@@ -261,7 +269,7 @@ public sealed partial class G9CSqliteSyncStore : IG9SyncClientStore
             }
 
             var updates = new List<(LocalTable Table, G9DtNegotiatedTable Negotiated, List<string> Synced)>();
-            foreach (var negotiated in hello.Tables)
+            foreach (var negotiated in hello.TablesUnchanged ? [] : hello.Tables)
             {
                 var clientTable = model.FindByServerName(negotiated.Name);
                 if (clientTable is null || !_byLocal.TryGetValue(clientTable.LocalName, out var local)) continue;

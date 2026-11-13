@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using G9SyncData.Protocol;
 using G9SyncData.Server.Auth;
 using G9SyncData.Server.Diagnostics;
@@ -138,7 +139,15 @@ public sealed partial class G9CSyncServerEngine
 
     // ================================================================ Hello
 
-    public async Task<G9DtHelloResult> HelloAsync(G9CSyncCaller caller, G9DtHelloRequest request, CancellationToken cancellationToken = default)
+    public Task<G9DtHelloResult> HelloAsync(G9CSyncCaller caller, G9DtHelloRequest request, CancellationToken cancellationToken = default) =>
+        HelloAsync(caller, request, null, cancellationToken);
+
+    /// <summary>
+    ///     Hello, telling <paramref name="onNegotiated" /> the tables it negotiated - also when the answer leaves them out because the client
+    ///     holds them (<see cref="G9DtHelloResult.TablesUnchanged" />): the SignalR hub joins the connection to their poke groups from it.
+    /// </summary>
+    public async Task<G9DtHelloResult> HelloAsync(G9CSyncCaller caller, G9DtHelloRequest request, Action<IReadOnlyList<G9DtNegotiatedTable>>? onNegotiated,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(request);
@@ -168,20 +177,34 @@ public sealed partial class G9CSyncServerEngine
             return result;
         }
 
+        // The model: sent on a connection's first Hello, named by its id after that (1.5.21, TR-0069). A server that lost it (restart)
+        // asks for it again before doing anything else - nothing of this answer is used then.
+        G9CNegotiatedModel? model;
+        if (request.Tables.Count == 0 && !string.IsNullOrEmpty(request.ModelHash))
+        {
+            if (!_models.TryGetValue(request.ModelHash, out model))
+            {
+                result.ModelRequired = true;
+                return result;
+            }
+        }
+        else
+        {
+            model = NegotiateModel(request.Tables);
+        }
+
         var auth = await _authProvider.ResolveAsync(caller, cancellationToken).ConfigureAwait(false);
 
-        foreach (var clientTable in request.Tables)
+        result.ModelHash = model.ModelHash;
+        result.TablesHash = model.TablesHash;
+        if (string.Equals(request.KnownTablesHash, model.TablesHash, StringComparison.Ordinal))
         {
-            var table = _model.FindTable(clientTable.Name);
-            if (table is null
-                || !string.Equals(table.KeyColumn, clientTable.KeyColumn, StringComparison.OrdinalIgnoreCase)
-                || table.KeyType != clientTable.KeyType)
-            {
-                result.UnknownTables.Add(clientTable.Name);
-                continue;
-            }
-
-            result.Tables.Add(Negotiate(table, clientTable));
+            result.TablesUnchanged = true;
+        }
+        else
+        {
+            result.Tables.AddRange(model.Tables);
+            result.UnknownTables.AddRange(model.UnknownTables);
         }
 
         if (request.ClientId != Guid.Empty)
@@ -189,18 +212,55 @@ public sealed partial class G9CSyncServerEngine
             await _store.TouchClientAsync(request.ClientId, auth.UserId, request.AppVersion, cancellationToken).ConfigureAwait(false);
         }
 
-        result.Definitions = _model.Subscriptions.Where(s => auth.IsSubscriptionAllowed(s.Name)).Select(ToDto).ToList();
-        foreach (var reference in request.Subscriptions)
-        {
-            result.Subscriptions.Add(await DecideAsync(reference, auth, cancellationToken).ConfigureAwait(false));
-        }
+        var definitions = _model.Subscriptions.Where(s => auth.IsSubscriptionAllowed(s.Name)).Select(ToDto).ToList();
+        result.DefinitionsHash = G9CNegotiatedModel.Hash(JsonSerializer.SerializeToUtf8Bytes(definitions, G9SyncJsonContext.Default.ListG9DtSubscriptionDefinition));
+        if (string.Equals(request.KnownDefinitionsHash, result.DefinitionsHash, StringComparison.Ordinal)) result.DefinitionsUnchanged = true;
+        else result.Definitions = definitions;
+        result.Subscriptions.AddRange(await DecideAllAsync(request.Subscriptions, auth, cancellationToken).ConfigureAwait(false));
 
         // Last, and from the database (LES-0075): the device takes the midpoint of its round trip as the moment of this stamp, and
         // last-writer-wins compares its edit times with change times the DATABASE stamped. The app server's clock used to be sent:
         // with the two on different machines, whatever they disagree by was added to every device edit.
         result.ServerTimeUtc = await _store.GetClockAsync(cancellationToken).ConfigureAwait(false);
+        onNegotiated?.Invoke(model.Tables);
         return result;
     }
+
+    /// <summary>
+    ///     The negotiation of one client model, kept by its id: every device of one app build sends the same model, so it is negotiated
+    ///     once per server process, not once per Hello. Bounded: a server that saw more distinct models than this starts over.
+    /// </summary>
+    private G9CNegotiatedModel NegotiateModel(List<G9DtClientTableModel> clientTables)
+    {
+        var modelHash = G9CNegotiatedModel.Hash(JsonSerializer.SerializeToUtf8Bytes(clientTables, G9SyncJsonContext.Default.ListG9DtClientTableModel));
+        if (_models.TryGetValue(modelHash, out var known)) return known;
+
+        var tables = new List<G9DtNegotiatedTable>();
+        var unknown = new List<string>();
+        foreach (var clientTable in clientTables)
+        {
+            var table = _model.FindTable(clientTable.Name);
+            if (table is null
+                || !string.Equals(table.KeyColumn, clientTable.KeyColumn, StringComparison.OrdinalIgnoreCase)
+                || table.KeyType != clientTable.KeyType)
+            {
+                unknown.Add(clientTable.Name);
+                continue;
+            }
+
+            tables.Add(Negotiate(table, clientTable));
+        }
+
+        var model = new G9CNegotiatedModel(modelHash, tables, unknown);
+        if (_models.Count >= MaxKnownModels) _models.Clear();
+        _models[modelHash] = model;
+        return model;
+    }
+
+    /// <summary>How many distinct client models a server keeps negotiated (an app build is one; tests make many).</summary>
+    private const int MaxKnownModels = 64;
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, G9CNegotiatedModel> _models = new(StringComparer.Ordinal);
 
     // ================================================================ PlanPull / Pull
 
@@ -227,18 +287,21 @@ public sealed partial class G9CSyncServerEngine
         // A part the snapshot-file planner already estimated keeps its estimate here (null = estimate below), aligned with payload.Parts.
         var estimated = new List<G9DtPlannedPart?>();
 
-        foreach (var reference in request.Subscriptions)
+        // Every cursor checked in one store call (TR-0069), then the plan is built in the request's order as before.
+        var decided = await ResolveAndCheckAsync(request.Subscriptions, auth, cancellationToken).ConfigureAwait(false);
+        for (var referenceIndex = 0; referenceIndex < request.Subscriptions.Count; referenceIndex++)
         {
-            if (!G9CSubscriptionResolver.TryResolve(_model, reference, auth, out var resolved, out var failure))
+            var reference = request.Subscriptions[referenceIndex];
+            var (resolved, failure, check) = decided[referenceIndex];
+            if (resolved is null)
             {
-                plan.Skipped.Add(failure);
+                plan.Skipped.Add(failure!);
                 continue;
             }
 
             string? previous = null;
             if (!string.IsNullOrEmpty(reference.Cursor))
             {
-                var check = await CheckCursorAsync(resolved, reference.Cursor, cancellationToken).ConfigureAwait(false);
                 if (check is not null)
                 {
                     plan.Skipped.Add(State(resolved, check.Value.Action, check.Value.Message));
@@ -317,6 +380,8 @@ public sealed partial class G9CSyncServerEngine
                 estimated.Add(null);
             }
         }
+
+        await DropQuietDeltasAsync(payload, estimated, snapshot, cancellationToken).ConfigureAwait(false);
 
         for (var index = 0; index < payload.Parts.Count; index++)
         {
@@ -984,32 +1049,109 @@ public sealed partial class G9CSyncServerEngine
         DefinitionHash = definition.DefinitionHash
     };
 
-    private async Task<G9DtSubscriptionState> DecideAsync(G9DtSubscriptionRef reference, G9CSyncAuthContext auth, CancellationToken cancellationToken)
+    /// <summary>
+    ///     Removes every delta part whose table recorded no change since the part's cursor (<see cref="IG9SyncServerStore.HasChangesAsync" />,
+    ///     TR-0069): it would be estimated as 0 rows and read as 0 rows, a query each, for every table of every subscription of every sync.
+    ///     The subscription's cursor still advances (it is in the plan's cursors, not in its parts), exactly as an empty delta advances it.
+    ///     Backfills and snapshots are never dropped.
+    /// </summary>
+    private async Task DropQuietDeltasAsync(G9DtPullTokenPayload payload, List<G9DtPlannedPart?> estimated, string snapshot, CancellationToken cancellationToken)
     {
-        if (!G9CSubscriptionResolver.TryResolve(_model, reference, auth, out var resolved, out var failure)) return failure;
-
-        var cursorCheck = await CheckCursorAsync(resolved, reference.Cursor, cancellationToken).ConfigureAwait(false);
-        if (cursorCheck is not null) return State(resolved, cursorCheck.Value.Action, cursorCheck.Value.Message);
-
-        return HashesDiffer(reference, resolved)
-            ? State(resolved, G9ESubscriptionAction.Reconcile, "The subscription definition or the caller's authorisation changed.")
-            : State(resolved, G9ESubscriptionAction.Ok, null);
-    }
-
-    private async Task<(G9ESubscriptionAction Action, string Message)?> CheckCursorAsync(G9CResolvedSubscription resolved, string? cursor, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(cursor)) return (G9ESubscriptionAction.Initial, "No cursor: initial snapshot.");
-        if (!G9CSyncCursor.TryParse(cursor, out var epoch, out var snapshot)) return (G9ESubscriptionAction.ResyncRequired, "The cursor is unreadable.");
-        if (epoch != _store.Epoch) return (G9ESubscriptionAction.ResyncRequired, "The server epoch changed (database restored or copied, or capture reinstalled).");
-        if (await _store.IsSnapshotAheadAsync(snapshot, cancellationToken).ConfigureAwait(false))
+        var deltas = new List<int>();
+        var probes = new List<G9CStoreChangeProbe>();
+        for (var i = 0; i < payload.Parts.Count; i++)
         {
-            return (G9ESubscriptionAction.ResyncRequired, "The cursor is newer than the database (point-in-time restore or failover).");
+            var part = payload.Parts[i];
+            if (estimated[i] is not null || part.Kind != G9EPullPartKind.Delta || part.PreviousSnapshot is null) continue;
+            var table = _model.FindTable(part.Table);
+            if (table is null) continue;
+            deltas.Add(i);
+            probes.Add(new G9CStoreChangeProbe(table, part.PreviousSnapshot));
         }
 
-        var tables = resolved.Definition.Tables.Select(t => t.Table).ToArray();
-        return await _store.IsBeyondTombstoneHorizonAsync(snapshot, tables, cancellationToken).ConfigureAwait(false)
-            ? (G9ESubscriptionAction.ResyncRequired, "The cursor is older than the tombstone horizon.")
-            : null;
+        if (probes.Count == 0) return;
+        var changed = await _store.HasChangesAsync(probes, snapshot, cancellationToken).ConfigureAwait(false);
+        var dropped = 0;
+        for (var k = deltas.Count - 1; k >= 0; k--)
+        {
+            if (changed[k]) continue;
+            payload.Parts.RemoveAt(deltas[k]);
+            estimated.RemoveAt(deltas[k]);
+            dropped++;
+        }
+
+        if (dropped > 0) LogQuietDeltasDropped(_logger, dropped, probes.Count);
+    }
+
+    /// <summary>Hello's state of every subscription the device holds, in the order it sent them.</summary>
+    private async Task<List<G9DtSubscriptionState>> DecideAllAsync(IReadOnlyList<G9DtSubscriptionRef> references, G9CSyncAuthContext auth, CancellationToken cancellationToken)
+    {
+        var decided = await ResolveAndCheckAsync(references, auth, cancellationToken).ConfigureAwait(false);
+        var states = new List<G9DtSubscriptionState>(references.Count);
+        for (var i = 0; i < references.Count; i++)
+        {
+            var (resolved, failure, check) = decided[i];
+            if (resolved is null) states.Add(failure!);
+            else if (check is not null) states.Add(State(resolved, check.Value.Action, check.Value.Message));
+            else
+            {
+                states.Add(HashesDiffer(references[i], resolved)
+                    ? State(resolved, G9ESubscriptionAction.Reconcile, "The subscription definition or the caller's authorisation changed.")
+                    : State(resolved, G9ESubscriptionAction.Ok, null));
+            }
+        }
+
+        return states;
+    }
+
+    /// <summary>
+    ///     Resolves every reference and checks every cursor, the database part for ALL of them in one store call
+    ///     (<see cref="IG9SyncServerStore.CheckCursorsAsync" />, TR-0069) - until 1.5.21 two round trips per subscription. For each
+    ///     reference: the resolved subscription or the refusal, and the cursor's problem (null = a valid cursor; a missing cursor is
+    ///     <see cref="G9ESubscriptionAction.Initial" />). The checks and their order are the single path's, unchanged.
+    /// </summary>
+    private async Task<(G9CResolvedSubscription? Resolved, G9DtSubscriptionState? Failure, (G9ESubscriptionAction Action, string Message)? Check)[]> ResolveAndCheckAsync(
+        IReadOnlyList<G9DtSubscriptionRef> references, G9CSyncAuthContext auth, CancellationToken cancellationToken)
+    {
+        var decided = new (G9CResolvedSubscription? Resolved, G9DtSubscriptionState? Failure, (G9ESubscriptionAction Action, string Message)? Check)[references.Count];
+        var asked = new List<int>();
+        var checks = new List<G9CStoreCursorCheck>();
+        for (var i = 0; i < references.Count; i++)
+        {
+            if (!G9CSubscriptionResolver.TryResolve(_model, references[i], auth, out var resolved, out var failure))
+            {
+                decided[i] = (null, failure, null);
+                continue;
+            }
+
+            var cursor = references[i].Cursor;
+            if (string.IsNullOrEmpty(cursor)) decided[i] = (resolved, null, (G9ESubscriptionAction.Initial, "No cursor: initial snapshot."));
+            else if (!G9CSyncCursor.TryParse(cursor, out var epoch, out var snapshot))
+                decided[i] = (resolved, null, (G9ESubscriptionAction.ResyncRequired, "The cursor is unreadable."));
+            else if (epoch != _store.Epoch)
+                decided[i] = (resolved, null, (G9ESubscriptionAction.ResyncRequired, "The server epoch changed (database restored or copied, or capture reinstalled)."));
+            else
+            {
+                decided[i] = (resolved, null, null);
+                asked.Add(i);
+                checks.Add(new G9CStoreCursorCheck(snapshot, resolved.Definition.Tables.Select(t => t.Table).ToArray()));
+            }
+        }
+
+        if (checks.Count == 0) return decided;
+        var verdicts = await _store.CheckCursorsAsync(checks, cancellationToken).ConfigureAwait(false);
+        for (var k = 0; k < asked.Count; k++)
+        {
+            var i = asked[k];
+            decided[i].Check = verdicts[k] switch
+            {
+                G9EStoreCursorVerdict.Ahead => (G9ESubscriptionAction.ResyncRequired, "The cursor is newer than the database (point-in-time restore or failover)."),
+                G9EStoreCursorVerdict.BeyondHorizon => (G9ESubscriptionAction.ResyncRequired, "The cursor is older than the tombstone horizon."),
+                _ => null
+            };
+        }
+
+        return decided;
     }
 
     private static bool HashesDiffer(G9DtSubscriptionRef reference, G9CResolvedSubscription resolved) =>
@@ -1152,6 +1294,9 @@ public sealed partial class G9CSyncServerEngine
 
     [LoggerMessage(EventId = 21028, Level = LogLevel.Information, Message = "Snapshot file {FileId} planned for {Subscription}: about {Rows} row(s)")]
     private static partial void LogSnapshotFilePlanned(ILogger logger, string subscription, string fileId, long rows);
+
+    [LoggerMessage(EventId = 21029, Level = LogLevel.Debug, Message = "Pull plan: {Dropped} of {Probed} delta part(s) had no change since their cursor and were not planned")]
+    private static partial void LogQuietDeltasDropped(ILogger logger, int dropped, int probed);
 
     // Debug here, Warning on the device: every connecting client of a wrong build repeats it, and the device is where the model is fixed.
     [LoggerMessage(EventId = 21006, Level = LogLevel.Debug,

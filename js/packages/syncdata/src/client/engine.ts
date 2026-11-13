@@ -12,6 +12,7 @@ import {
   G9EPullPartKind,
   G9ESubscriptionAction,
   type G9DtChangesAvailable,
+  type G9DtHelloRequest,
   type G9DtHelloResult,
   type G9DtNegotiatedTable,
   type G9DtPullPlan,
@@ -117,6 +118,19 @@ export class G9SyncEngine {
   private _disposed = false;
   /** The model problems last logged, so the warning is said once per distinct set (ADR-0061). */
   private _reportedModelProblems: string | null = null;
+  /**
+   * What Hello does not send again (1.5.21, TR-0069; twin of .NET `G9CSyncEngine.HelloCache`): the last negotiated tables and definitions,
+   * with the server's ids for them. In memory only: the first Hello of a process gets them in full.
+   */
+  private _lastAnswer: {
+    tablesHash: string | null;
+    tables: G9DtHelloResult['tables'];
+    unknownTables: string[];
+    definitionsHash: string | null;
+    definitions: G9DtHelloResult['definitions'];
+  } | null = null;
+  /** The model as Hello sends it, built once: the transport recognises an unchanged model by this very array. */
+  private _wireTables: G9DtHelloRequest['tables'] | null = null;
 
   constructor(store: G9SyncClientStore, transport: G9SyncTransport, model: G9SyncClientModel, options?: G9SyncEngineOptions) {
     if (!store) throw new TypeError('A store is required.');
@@ -601,6 +615,8 @@ export class G9SyncEngine {
         const subscriptions = await this._store.getSubscriptions(ct);
         const connectT3 = Date.now();
         let helloMidpointMs = Date.now();
+        const known = this._lastAnswer;
+        const wireTables = this._wireTables ?? (this._wireTables = this.model.tables.map((t) => t.toWire()));
         const hello = await this._withRetry(async (token) => {
           // The round trip of the attempt that answered: its midpoint is the local time of the server's clock reading (LES-0075).
           const sent = Date.now();
@@ -609,8 +625,10 @@ export class G9SyncEngine {
               clientId: this._clientId,
               appVersion: this._options.appVersion,
               protocolVersion: 1,
-              tables: this.model.tables.map((t) => t.toWire()),
+              tables: wireTables,
               subscriptions: subscriptions.map(toSubscriptionRef),
+              knownTablesHash: known ? known.tablesHash : null,
+              knownDefinitionsHash: known ? known.definitionsHash : null,
             },
             token,
           );
@@ -618,15 +636,27 @@ export class G9SyncEngine {
           return answer;
         }, ct);
         if (hello.error) throw syncErrorToException(hello.error);
+        const unchanged = (hello.tablesUnchanged ? 'tables' : '') + (hello.definitionsUnchanged ? (hello.tablesUnchanged ? '+' : '') + 'definitions' : '');
+        restoreUnchanged(hello, known);
         const connectT4 = Date.now();
         await this._store.saveHello(hello, ct, helloMidpointMs);
+        this._lastAnswer =
+          hello.tablesHash || hello.definitionsHash
+            ? {
+                tablesHash: hello.tablesHash ?? null,
+                tables: hello.tables,
+                unknownTables: hello.unknownTables,
+                definitionsHash: hello.definitionsHash ?? null,
+                definitions: hello.definitions,
+              }
+            : null;
         const connectT5 = Date.now();
         this._log(
           'information',
           20030,
           `Connecting ${connectT5 - connectT0} ms: transport ${connectT1 - connectT0}, ephemeral sweep ${connectT2 - connectT1}, ` +
             `subscriptions ${connectT3 - connectT2} (${subscriptions.length}), hello ${connectT4 - connectT3} ` +
-            `(${this.model.tables.length} tables sent), save ${connectT5 - connectT4}`,
+            `(${this.model.tables.length} tables; unchanged: ${unchanged || 'none'}), save ${connectT5 - connectT4}`,
         );
         if (hello.unknownTables.length > 0) {
           this._log('warning', 20016, 'The server does not know these client tables (they will not sync): ' + hello.unknownTables.join(', '));
@@ -1440,4 +1470,23 @@ function chunked<T>(items: readonly T[], size: number): T[][] {
 async function* toChunks(batch: G9PushBatch): AsyncGenerator<G9DtSyncChunk> {
   let sequence = 0;
   for (const frame of batch.frames) yield { sequence: sequence++, payload: frame, rowCount: 0, isFinal: false };
+}
+
+/**
+ * Puts back what an "unchanged" Hello answer left out (1.5.21; twin of .NET `RestoreUnchanged`), so the rest of a run reads a complete
+ * answer either way. An answer that says unchanged for something this client never held is a server fault.
+ */
+function restoreUnchanged(
+  hello: G9DtHelloResult,
+  known: { tables: G9DtHelloResult['tables']; unknownTables: string[]; definitions: G9DtHelloResult['definitions'] } | null,
+): void {
+  if (hello.tablesUnchanged) {
+    if (!known) throw new G9SyncException(G9SyncErrorCodes.ProtocolMismatch, "The server answered 'tables unchanged' to a client that holds none.");
+    hello.tables = known.tables;
+    hello.unknownTables = known.unknownTables;
+  }
+  if (hello.definitionsUnchanged) {
+    if (!known) throw new G9SyncException(G9SyncErrorCodes.ProtocolMismatch, "The server answered 'definitions unchanged' to a client that holds none.");
+    hello.definitions = known.definitions;
+  }
 }

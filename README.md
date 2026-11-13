@@ -23,6 +23,17 @@ the .NET client byte for byte.
 > across `Client`/`Server`/`Protocol`, so a client from one version against a server from another is exactly the
 > mismatch the version pins.
 
+## What's new in 1.5.21
+
+- **A sync that changes nothing costs almost nothing on the server** (AgriPad TR-0069). A pull plan no longer estimates and reads a
+  delta part of a table that recorded no change since the part's cursor (one query for all of them, `HasChangesAsync`), and Hello
+  and the plan check every cursor in one query (`CheckCursorsAsync`) instead of two per subscription. AgriPad's server, a no-change
+  sync: 63 subscriptions 1,423 ms → 50 ms; 3 subscriptions 129 ms → 44 ms.
+- **Hello sends the model once per connection** and answers "unchanged" for what the device holds: a later Hello names the model by
+  the id the server gave it, and the negotiated tables and definitions are not sent, decoded or saved again when they did not
+  change. A new connection (a reconnect) starts with the full model; a server that lost it asks for it inside the same call. Six
+  optional wire fields; older clients and servers are answered exactly as before. Both clients, both hub protocols.
+
 ## What's new in 1.5.20
 
 - **The TypeScript engine has `refetchRows` and `releaseUnclaimedRows`** (LES-0091): the twins of the two 1.5.19 methods below,

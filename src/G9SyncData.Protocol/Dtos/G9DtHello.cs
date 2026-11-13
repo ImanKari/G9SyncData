@@ -18,6 +18,23 @@ public sealed class G9DtHelloRequest
     public int ProtocolVersion { get; set; } = G9SyncProtocol.Version;
     public List<G9DtClientTableModel> Tables { get; set; } = [];
     public List<G9DtSubscriptionRef> Subscriptions { get; set; } = [];
+
+    /// <summary>
+    ///     Instead of <see cref="Tables" /> (sent empty): the <see cref="G9DtHelloResult.ModelHash" /> a server gave for the same tables
+    ///     earlier ON THIS CONNECTION (1.5.21, TR-0069). The transport sends the full model on a connection's first Hello and this id after
+    ///     it; a server that no longer holds the model answers <see cref="G9DtHelloResult.ModelRequired" /> and the full model goes again.
+    ///     A server older than 1.5.21 never gives an id, so it is never sent one.
+    /// </summary>
+    public string? ModelHash { get; set; }
+
+    /// <summary>
+    ///     The <see cref="G9DtHelloResult.TablesHash" /> of the negotiated tables the client holds (1.5.21): when the server's is the same,
+    ///     it answers <see cref="G9DtHelloResult.TablesUnchanged" /> and does not send them.
+    /// </summary>
+    public string? KnownTablesHash { get; set; }
+
+    /// <summary>The <see cref="G9DtHelloResult.DefinitionsHash" /> of the definitions the client holds (1.5.21); same rule.</summary>
+    public string? KnownDefinitionsHash { get; set; }
 }
 
 /// <summary>The column set both sides agreed on for one table (server model order, filtered to the client's columns).</summary>
@@ -114,6 +131,33 @@ public sealed class G9DtHelloResult
 
     /// <summary>The most frame bytes the server accepts in one push; the client sizes its batches to it (0 = not announced).</summary>
     public long MaxPushBytes { get; set; }
+
+    /// <summary>
+    ///     The server's id of the client model this Hello was negotiated from (1.5.21, TR-0069): a later Hello on the same connection may
+    ///     send it as <see cref="G9DtHelloRequest.ModelHash" /> instead of the tables. Null from an older server.
+    /// </summary>
+    public string? ModelHash { get; set; }
+
+    /// <summary>
+    ///     The Hello sent a <see cref="G9DtHelloRequest.ModelHash" /> this server does not hold (it restarted): nothing else in this answer
+    ///     is meaningful; send the Hello again WITH the tables.
+    /// </summary>
+    public bool ModelRequired { get; set; }
+
+    /// <summary>The id of <see cref="Tables" /> and <see cref="UnknownTables" /> as this server negotiates them for this model (1.5.21).</summary>
+    public string? TablesHash { get; set; }
+
+    /// <summary>
+    ///     The client's <see cref="G9DtHelloRequest.KnownTablesHash" /> is <see cref="TablesHash" />: <see cref="Tables" /> and
+    ///     <see cref="UnknownTables" /> are sent EMPTY and the client uses the ones it holds.
+    /// </summary>
+    public bool TablesUnchanged { get; set; }
+
+    /// <summary>The id of <see cref="Definitions" /> as this caller is shown them (1.5.21).</summary>
+    public string? DefinitionsHash { get; set; }
+
+    /// <summary>The client's <see cref="G9DtHelloRequest.KnownDefinitionsHash" /> is <see cref="DefinitionsHash" />: <see cref="Definitions" /> is sent EMPTY.</summary>
+    public bool DefinitionsUnchanged { get; set; }
 
     public G9DtSyncError? Error { get; set; }
 }

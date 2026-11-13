@@ -90,6 +90,8 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
   private readonly _handlers: ((changes: G9DtChangesAvailable) => void)[] = [];
   private _connecting: Promise<void> | null = null;
   private _lastHello: G9DtHelloRequest | null = null;
+  /** The model this connection already sent in full, and the server's id for it (1.5.21, twin of .NET `_modelOnConnection`). */
+  private _modelOnConnection: { connectionId: string | null; tables: G9DtHelloRequest['tables']; modelHash: string } | null = null;
 
   constructor(options: G9SignalRSyncTransportOptions) {
     if (!options || typeof options.url !== 'string' || options.url.trim() === '') throw new TypeError('A hub URL is required.');
@@ -169,10 +171,36 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
     }
   }
 
+  /**
+   * The model once per connection (1.5.21, TR-0069; twin of .NET `HelloAsync`): the first Hello of a connection sends the whole model, a
+   * later one on the same connection with the same tables (the engine keeps one array) only the server's id for it. A server that lost it
+   * answers `modelRequired` and the full Hello goes at once. A new connection — a reconnect included — always starts with the full model.
+   */
   async hello(request: G9DtHelloRequest, signal?: AbortSignal): Promise<G9DtHelloResult> {
-    const result = await this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(request)], readHelloResult, this._callTimeoutMs(), signal);
-    if (!result.error) this._lastHello = request;
+    const known = this._modelOnConnection;
+    const sent: G9DtHelloRequest =
+      known && known.connectionId === this._connectionId() && known.tables === request.tables && request.tables.length > 0
+        ? { ...request, tables: [], modelHash: known.modelHash }
+        : request;
+    let result = await this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(sent)], readHelloResult, this._callTimeoutMs(), signal);
+    if (result.modelRequired && sent !== request) {
+      this._modelOnConnection = null;
+      result = await this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(request)], readHelloResult, this._callTimeoutMs(), signal);
+    }
+    if (!result.error) {
+      this._lastHello = request;
+      this._rememberModel(request, result);
+    }
     return result;
+  }
+
+  private _rememberModel(full: G9DtHelloRequest, result: G9DtHelloResult): void {
+    if (result.modelHash && full.tables.length > 0) this._modelOnConnection = { connectionId: this._connectionId(), tables: full.tables, modelHash: result.modelHash };
+  }
+
+  private _connectionId(): string | null {
+    const id = (this.client.connection as { connectionId?: string | null }).connectionId;
+    return typeof id === 'string' ? id : null;
   }
 
   /**
@@ -182,7 +210,12 @@ export class G9SignalRSyncTransport implements G9SyncTransport {
   private _rejoin(): void {
     const hello = this._lastHello;
     if (!hello) return;
-    this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(hello)], readHelloResult, this._callTimeoutMs()).catch(() => undefined);
+    // The full Hello (a new connection never holds the model): its answer names the model for the next Hello on it.
+    this._invoke(G9SyncProtocol.Methods.Hello, [this._wire(hello)], readHelloResult, this._callTimeoutMs())
+      .then((result) => {
+        if (!result.error) this._rememberModel(hello, result);
+      })
+      .catch(() => undefined);
   }
 
   push(request: G9DtPushRequest, chunks: AsyncIterable<G9DtSyncChunk>, signal?: AbortSignal): Promise<G9DtPushResult> {

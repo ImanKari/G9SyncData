@@ -1013,3 +1013,23 @@ them again. 1.5.20 adds `refetchRows` / `releaseUnclaimedRows` (`src/sqlite/revo
 bitmask is one `UPDATE … WHERE EXISTS (… (subs >> slot) & 1)` in TypeScript (one statement instead of a read and an OR across a
 bridge). Lesson: an engine method added in .NET is not released until its twin is — step 3 of chapter 21 «Adding something» is
 not optional, and a release checks `PARITY.md` for the methods it adds.
+
+## LES-0092 — 2026-11-13 · A no-change sync cost a database query per table and subscription, and a whole model per Hello
+
+AgriPad Lynx (TR-0069, «Connecting takes long»): every automatic sync on a DOOGEE S99 took 3.2–4.5 s with nothing to download,
+Connecting 1.7–2.7 s of it. Measured against AgriPad's server with the TypeScript client (Node, local PostgreSQL): a no-change sync
+took 129 ms with 3 subscriptions and 1,423 ms with 63 - ~22 ms per held subscription. Not the cursor checks (batching them alone
+moved nothing): the plan estimated and the pull read every delta part, a scoped query each, for tables nobody had touched.
+
+1. `HasChangesAsync`: one `UNION ALL` of `EXISTS` probes on the tracking tables' `xid` index, deduplicated by table and snapshot;
+   a part with no change is not planned. Safe because a delta reads ONLY its own table's tracking rows (`BuildPartSql`): no
+   tracking row in the window means no row for any scope. 1,423 ms → 50 ms, 129 → 44 ms.
+2. `CheckCursorsAsync`: both cursor checks for every subscription in one query (two round trips each before) — small locally,
+   real against a remote database.
+3. Hello: the model (~30 KB) once per connection, "unchanged" answers for the negotiated tables and definitions — the device no
+   longer decodes and saves ~60 KB per sync. Pokes depend on Hello (the hub joins groups there): the hub now takes the groups from
+   the negotiated tables, and a new connection always sends the full model (`HelloModelOnceTests` cuts the socket and waits for a poke).
+
+Lesson: measure a no-change run with many subscriptions before calling the engine cheap — a cost per held subscription hides in a
+test that holds three.
+

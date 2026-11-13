@@ -50,6 +50,9 @@ describe('hub messages from the .NET server (golden)', () => {
     expect(hello.definitions[0]!.dependsOn).toEqual([{ name: 'Sites', required: false }]);
     expect(hello.subscriptions[0]!.action).toBe(2);
     expect(hello.error).toBeNull();
+    // 1.5.21 (TR-0069): the model and answer ids, and the "unchanged" flags.
+    expect([hello.modelHash, hello.modelRequired, hello.tablesHash, hello.tablesUnchanged]).toEqual(['model1', false, 'tables1', false]);
+    expect([hello.definitionsHash, hello.definitionsUnchanged]).toEqual(['defs1', true]);
   });
 
   it('push result keeps int64 masks exact', () => {

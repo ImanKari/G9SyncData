@@ -27,6 +27,11 @@ public sealed partial class G9CSignalRSyncTransport
     private Task? _connecting;
     private G9DtHelloRequest? _lastHello;
 
+    /// <summary>The model this connection already sent in full, and the server's id for it (1.5.21, TR-0069).</summary>
+    private ModelOnConnection? _modelOnConnection;
+
+    private sealed record ModelOnConnection(string? ConnectionId, List<G9DtClientTableModel> Tables, string ModelHash);
+
     public G9CSignalRSyncTransport(G9CSignalRSyncTransportOptions options, ILogger<G9CSignalRSyncTransport>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -94,13 +99,61 @@ public sealed partial class G9CSignalRSyncTransport
         return connecting.WaitAsync(cancellationToken);
     }
 
+    /// <remarks>
+    ///     <b>The model once per connection (1.5.21, TR-0069).</b> A device sent its whole model - every table and column, ~30 KB for AgriPad -
+    ///     with EVERY Hello, and the server negotiated it again each time. The first Hello of a connection still sends it; a later one on
+    ///     the same connection, with the same tables (the engine keeps one list), sends only the id the server gave for it. A server that
+    ///     lost it (restart) answers <see cref="G9DtHelloResult.ModelRequired" /> and the full Hello goes at once, inside this call. A new
+    ///     connection - a reconnect included - has a new id, so it always starts with the full model; an older server never gives an id.
+    /// </remarks>
     public async Task<G9DtHelloResult> HelloAsync(G9DtHelloRequest request, CancellationToken cancellationToken)
     {
-        var result = await CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(request, token), cancellationToken)
+        ArgumentNullException.ThrowIfNull(request);
+        var sent = request;
+        if (Volatile.Read(ref _modelOnConnection) is { } known && known.ConnectionId == Connection.ConnectionId && ReferenceEquals(known.Tables, request.Tables)
+            && request.Tables.Count > 0)
+        {
+            sent = WithModelHash(request, known.ModelHash);
+        }
+
+        var result = await CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(sent, token), cancellationToken)
             .ConfigureAwait(false);
-        if (result.Error is null) Volatile.Write(ref _lastHello, request);
+        if (result.ModelRequired && !ReferenceEquals(sent, request))
+        {
+            Volatile.Write(ref _modelOnConnection, null);
+            result = await CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(request, token), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (result.Error is null)
+        {
+            Volatile.Write(ref _lastHello, request);
+            RememberModel(request, result);
+        }
+
         return result;
     }
+
+    private void RememberModel(G9DtHelloRequest full, G9DtHelloResult result)
+    {
+        if (!string.IsNullOrEmpty(result.ModelHash) && full.Tables.Count > 0)
+        {
+            Volatile.Write(ref _modelOnConnection, new ModelOnConnection(Connection.ConnectionId, full.Tables, result.ModelHash));
+        }
+    }
+
+    /// <summary>The same Hello naming its model by id instead of listing it.</summary>
+    private static G9DtHelloRequest WithModelHash(G9DtHelloRequest request, string modelHash) => new()
+    {
+        ClientId = request.ClientId,
+        AppVersion = request.AppVersion,
+        ProtocolVersion = request.ProtocolVersion,
+        Tables = [],
+        Subscriptions = request.Subscriptions,
+        ModelHash = modelHash,
+        KnownTablesHash = request.KnownTablesHash,
+        KnownDefinitionsHash = request.KnownDefinitionsHash
+    };
 
     /// <summary>
     ///     After the connection reconnects BY ITSELF, the last accepted Hello is sent again, so the new connection joins the table groups
@@ -129,8 +182,10 @@ public sealed partial class G9CSignalRSyncTransport
     {
         try
         {
-            await CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(hello, token), CancellationToken.None)
+            // The full Hello (a new connection never holds the model): its answer names the model for the next Hello on it.
+            var result = await CallAsync(G9SyncProtocol.Methods.Hello, _options.CallTimeout, token => _server.HelloAsync(hello, token), CancellationToken.None)
                 .ConfigureAwait(false);
+            if (result.Error is null) RememberModel(hello, result);
             LogRejoined(_logger, Connection.ConnectionId);
         }
         catch (Exception exception)

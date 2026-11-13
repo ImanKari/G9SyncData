@@ -65,6 +65,7 @@ public sealed partial class G9CSyncEngine
             await _store.CollectExpiredEphemeralAsync(DateTime.UtcNow, ct).ConfigureAwait(false);
             var subscriptions = await _store.GetSubscriptionsAsync(ct).ConfigureAwait(false);
             var helloMidpoint = DateTime.UtcNow;
+            var known = Volatile.Read(ref _lastAnswer);
             var hello = await WithRetryAsync(async token =>
             {
                 // The round trip of the attempt that answered: its midpoint is the local time of the server's clock reading (LES-0075).
@@ -73,15 +74,19 @@ public sealed partial class G9CSyncEngine
                 {
                     ClientId = _clientId,
                     AppVersion = _options.AppVersion,
-                    Tables = _model.Tables.Select(t => t.ToWire()).ToList(),
-                    Subscriptions = subscriptions.Select(s => s.ToReference()).ToList()
+                    Tables = WireTables,
+                    Subscriptions = subscriptions.Select(s => s.ToReference()).ToList(),
+                    KnownTablesHash = known?.TablesHash,
+                    KnownDefinitionsHash = known?.DefinitionsHash
                 }, token).ConfigureAwait(false);
                 var received = DateTime.UtcNow;
                 helloMidpoint = sent + ((received - sent) / 2);
                 return answer;
             }, ct).ConfigureAwait(false);
             if (hello.Error is not null) throw hello.Error.ToException();
+            RestoreUnchanged(hello, known);
             await _store.SaveHelloAsync(hello, helloMidpoint, ct).ConfigureAwait(false);
+            RememberAnswer(hello);
             if (hello.UnknownTables.Count > 0) LogUnknownTables(_logger, string.Join(", ", hello.UnknownTables));
 
             // A column declared with the wrong type is dropped from the negotiation and syncs in NEITHER direction (ADR-0061). That used
