@@ -188,4 +188,5 @@ keep-screen-on, held **only during a run** (plan D-11). `IsNetworkAvailable = fa
   `G9S-LOCAL-DISK-FULL` end the run; `G9S-LOCAL-BUSY` and `G9S-SRV-BUSY` are transient.
 - Event ids: 20019 push failure (was sharing 20013 with transient retry), 20021 stages pruned, 20022 model problems, 20023 push
   split, 20024 reconcile handed over to snapshot, 20025 a pull carries snapshot files, 20026 a snapshot file failed and the pull
-  is replanned as rows (ADR-0072). 20017 is retired.
+  is replanned as rows (ADR-0072), 20030 the split of the Connecting phase (TypeScript engine; transport, ephemeral sweep,
+  subscriptions, hello, save — AgriPad TR-0069). 20017 is retired.

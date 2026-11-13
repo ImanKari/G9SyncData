@@ -590,9 +590,16 @@ export class G9SyncEngine {
 
         // ---------------------------------------------------------------- 1. connect + hello
         tracker.enter(G9ESyncPhase.Connecting);
+        // Where the Connecting phase goes (AgriPad TR-0069, 2026-11-13: «Connecting takes long»): each step is timed and the
+        // split logged once per run (event 20030) — the transport, the ephemeral sweep, reading the subscriptions, the
+        // Hello round trip and the save of its answer are separate costs with separate cures.
+        const connectT0 = Date.now();
         await this._ensureConnected(ct);
+        const connectT1 = Date.now();
         await this._store.collectExpiredEphemeral(Date.now(), ct);
+        const connectT2 = Date.now();
         const subscriptions = await this._store.getSubscriptions(ct);
+        const connectT3 = Date.now();
         let helloMidpointMs = Date.now();
         const hello = await this._withRetry(async (token) => {
           // The round trip of the attempt that answered: its midpoint is the local time of the server's clock reading (LES-0075).
@@ -611,7 +618,16 @@ export class G9SyncEngine {
           return answer;
         }, ct);
         if (hello.error) throw syncErrorToException(hello.error);
+        const connectT4 = Date.now();
         await this._store.saveHello(hello, ct, helloMidpointMs);
+        const connectT5 = Date.now();
+        this._log(
+          'information',
+          20030,
+          `Connecting ${connectT5 - connectT0} ms: transport ${connectT1 - connectT0}, ephemeral sweep ${connectT2 - connectT1}, ` +
+            `subscriptions ${connectT3 - connectT2} (${subscriptions.length}), hello ${connectT4 - connectT3} ` +
+            `(${this.model.tables.length} tables sent), save ${connectT5 - connectT4}`,
+        );
         if (hello.unknownTables.length > 0) {
           this._log('warning', 20016, 'The server does not know these client tables (they will not sync): ' + hello.unknownTables.join(', '));
         }
